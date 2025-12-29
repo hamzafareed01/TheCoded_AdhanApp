@@ -1,0 +1,28 @@
+[
+    {
+        "id": "morning-protection-1",
+        "category": "morning-evening",
+        "title": "Morning protection dua",
+        "textArabic": "بِسْمِ اللَّهِ الَّذِي لا يَضُرُّ ...",
+        "textTransliteration": "Bismillāhilladhī lā yaḍurru maʿa ismihī shay’un ...",
+        "textTranslation": "In the Name of Allah with whose Name nothing on earth or in the heavens can cause harm...",
+        "audioUrl": "/audio/duas/morning-protection-1.mp3",
+        "tags": [
+            "protection",
+            "daily"
+        ]
+    },
+    {
+        "id": "before-sleep-1",
+        "category": "before-sleep",
+        "title": "Before sleeping dua",
+        "textArabic": "اللَّهُمَّ بِاسْمِكَ أَمُوتُ وَأَحْيَا",
+        "textTransliteration": "Allāhumma bismika amūtu wa aḥyā",
+        "textTranslation": "O Allah, in Your Name I die and live.",
+        "audioUrl": "/audio/duas/before-sleep-1.mp3",
+        "tags": [
+            "sleep",
+            "daily"
+        ]
+    }
+]
