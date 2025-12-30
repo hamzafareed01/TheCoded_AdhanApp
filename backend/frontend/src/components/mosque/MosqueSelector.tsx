@@ -1,4 +1,3 @@
-// frontend/src/components/mosque/MosqueSelector.tsx
 import React, { useEffect, useState, ChangeEvent } from 'react';
 import { Logo } from '../shared/Logo';
 import { Navigation } from '../shared/Navigation';
@@ -8,7 +7,8 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Label } from '../ui/label';
 import { MapPin, Search, CheckCircle2 } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:4000';
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE ?? 'http://localhost:4000';
 
 type QuietHours = {
   enabled: boolean;
@@ -29,22 +29,16 @@ type UserSettings = {
   timezone: string;
   mosqueId: string;
   quietHours: QuietHours;
-
-  // Where to calculate prayer times from
   latitude?: number;
   longitude?: number;
-
-  // New: selected mosque meta
-  mosqueName?: string | null;
-  mosqueAddress?: string | null;
 };
 
 /**
  * Shape of mosques returned by /api/mosques/search (Google Places)
  */
 type Mosque = {
-  id?: string; // for potential local/mock mosques
-  placeId?: string;
+  id?: string; // not really used for Places results
+  placeId: string;
   name: string;
   city?: string;
   address?: string;
@@ -78,8 +72,6 @@ export default function MosqueSelector({
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // ----- Helpers -----
-
   const handleSearchInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
   };
@@ -88,38 +80,44 @@ export default function MosqueSelector({
    * Fetch mosques from backend Google Places proxy:
    *   GET /api/mosques/search?q=<query>
    */
-  const fetchMosques = async (query?: string) => {
+  const fetchMosques = async (queryOverride?: string) => {
     try {
       setMosquesLoading(true);
       setMosquesError(null);
 
-      const trimmed = (query || '').trim();
+      const baseQuery =
+        queryOverride?.trim() ||
+        searchQuery.trim() ||
+        settings?.city ||
+        '';
 
-      // If no query passed in, fall back to "city country" from settings
-      const fallbackLocation =
-        settings ? `${settings.city ?? ''} ${settings.country ?? ''}`.trim() : '';
-
-      const term = trimmed || fallbackLocation;
-
-      if (!term) {
+      if (!baseQuery) {
         setMosques([]);
         setMosquesLoading(false);
         return;
       }
 
-      const countryParam =
-        settings?.country ? `&country=${encodeURIComponent(settings.country)}` : '';
-      const url = `${API_BASE}/api/mosques/search?q=${encodeURIComponent(term)}${countryParam}`;
+      const url = `${API_BASE}/api/mosques/search?q=${encodeURIComponent(
+        baseQuery,
+      )}`;
 
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to load mosques');
 
       const json = await res.json();
-      setMosques(json.mosques || []);
+
+      const places: Mosque[] = (json.mosques || []).map((m: any) => ({
+        placeId: m.placeId,
+        name: m.name,
+        address: m.address,
+        city: m.address,
+        location: m.location,
+      }));
+
+      setMosques(places);
     } catch (err) {
       console.error(err);
       setMosquesError('Unable to load mosques from server.');
-      setMosques([]);
     } finally {
       setMosquesLoading(false);
     }
@@ -160,23 +158,15 @@ export default function MosqueSelector({
       setError(null);
       setSaveMessage(null);
 
-      // Find the selected mosque so we can grab its lat/lng + name/address
-      const selectedMosque = mosques.find((m) => {
-        const key = m.placeId ?? m.id ?? m.name;
-        return key === selectedMosqueId;
-      });
+      const selectedMosque = mosques.find(
+        (m) => m.placeId === selectedMosqueId,
+      );
 
-      // Build payload for backend
       const payload: any = { mosqueId: selectedMosqueId };
 
       if (selectedMosque?.location) {
         payload.latitude = selectedMosque.location.lat;
         payload.longitude = selectedMosque.location.lng;
-      }
-
-      if (selectedMosque) {
-        payload.mosqueName = selectedMosque.name;
-        payload.mosqueAddress = selectedMosque.address ?? selectedMosque.city;
       }
 
       const res = await fetch(`${API_BASE}/api/user/settings`, {
@@ -191,16 +181,15 @@ export default function MosqueSelector({
       const updatedSettings: UserSettings = json.settings;
       setSettings(updatedSettings);
 
-      // update onboarding snapshot so dashboard/calendar can use it immediately
       setOnboardingData({
         ...onboardingData,
         mosque: selectedMosque
           ? {
-            id: selectedMosque.placeId ?? selectedMosque.id ?? selectedMosque.name,
-            name: selectedMosque.name,
-            address: selectedMosque.address ?? selectedMosque.city,
-            location: selectedMosque.location ?? null,
-          }
+              id: selectedMosque.placeId,
+              name: selectedMosque.name,
+              city: selectedMosque.address,
+              location: selectedMosque.location ?? null,
+            }
           : { id: selectedMosqueId },
       });
 
@@ -212,8 +201,6 @@ export default function MosqueSelector({
       setSaving(false);
     }
   };
-
-  // ----- Render -----
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -288,18 +275,18 @@ export default function MosqueSelector({
 
                 <div className="space-y-3 mt-2">
                   {mosques.map((mosque) => {
-                    const mosqueKey = mosque.placeId ?? mosque.id ?? mosque.name;
-                    const isSelected = mosqueKey === selectedMosqueId;
+                    const isSelected = mosque.placeId === selectedMosqueId;
 
                     return (
                       <button
-                        key={mosqueKey}
+                        key={mosque.placeId}
                         type="button"
-                        onClick={() => setSelectedMosqueId(mosqueKey)}
+                        onClick={() => setSelectedMosqueId(mosque.placeId)}
                         className={`w-full text-left p-4 rounded-xl border transition-colors flex items-start justify-between gap-4
-                          ${isSelected
-                            ? 'border-emerald-500 bg-emerald-500/10'
-                            : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
+                          ${
+                            isSelected
+                              ? 'border-emerald-500 bg-emerald-500/10'
+                              : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
                           }`}
                       >
                         <div>

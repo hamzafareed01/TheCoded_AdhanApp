@@ -1,4 +1,3 @@
-// frontend/src/components/dashboard/Dashboard.tsx
 import type { LoggedInUser } from '../auth/LoginView';
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
@@ -11,16 +10,15 @@ import {
   Settings,
   Volume2,
   CheckCircle,
-  MapPin,
   Edit,
   Building2,
 } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:4000';
+// Use VITE_API_BASE if available, otherwise fall back to localhost
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE ?? 'http://localhost:4000';
 
 const PRAYER_ORDER = ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'] as const;
-// For “next prayer” we don’t want sunrise
-const NEXT_PRAYER_ORDER = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'] as const;
 
 const PRAYER_LABELS: Record<string, string> = {
   fajr: 'Fajr',
@@ -52,43 +50,16 @@ type DashboardProps = {
   user: LoggedInUser;
 };
 
-type NextPrayerInfo = {
-  code: string;
-  label: string;
-  timeStr: string;
+type PrayerMap = {
+  [key: string]: string;
 };
-
-function parseTimeToDate(baseDateStr: string, timeStr: string): Date | null {
-  if (!timeStr) return null;
-  const [hStr, mStr] = timeStr.split(':');
-  const h = parseInt(hStr, 10);
-  const m = parseInt(mStr, 10);
-  if (Number.isNaN(h) || Number.isNaN(m)) return null;
-
-  const d = new Date(`${baseDateStr}T00:00:00`);
-  d.setHours(h, m, 0, 0);
-  return d;
-}
-
-function formatDiff(diffMs: number): string {
-  if (diffMs <= 0) return '00:00:00';
-  let totalSeconds = Math.floor(diffMs / 1000);
-
-  const hours = Math.floor(totalSeconds / 3600);
-  totalSeconds -= hours * 3600;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds - minutes * 60;
-
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-}
 
 export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const navigate = useNavigate();
 
-  const [timeToNextPrayer, setTimeToNextPrayer] = useState('00:00:00');
+  const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
+  const [nextPrayerCode, setNextPrayerCode] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const [nextPrayer, setNextPrayer] = useState<NextPrayerInfo | null>(null);
   const [automationOn, setAutomationOn] = useState(true);
 
   const [todayData, setTodayData] = useState<any | null>(null);
@@ -101,7 +72,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const connectedPlatforms = onboardingData.connectedPlatforms || [];
   const deviceCount = onboardingData.devices?.length || 0;
 
-  // ---- Load today's prayer times ----
+  // ---------- Load today's prayer times ----------
   useEffect(() => {
     async function loadToday() {
       try {
@@ -125,7 +96,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     loadToday();
   }, []);
 
-  // ---- Load user settings (quiet hours + mosque) ----
+  // ---------- Load user settings (quiet hours, etc.) ----------
   useEffect(() => {
     async function loadSettings() {
       try {
@@ -145,137 +116,144 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     loadSettings();
   }, []);
 
-  const prayers = todayData?.prayers || null;
+  const prayers: PrayerMap | null = todayData?.prayers || null;
   const prayerMeta = todayData || null;
+
+  // ---------- Countdown + progress ----------
+  useEffect(() => {
+    if (!prayers) {
+      setTimeToNextPrayer(null);
+      setNextPrayerCode(null);
+      setProgress(0);
+      return;
+    }
+
+    const countdownCodes: (keyof PrayerMap)[] = [
+      'fajr',
+      'dhuhr',
+      'asr',
+      'maghrib',
+      'isha',
+    ];
+
+    const parseTimeToToday = (timeStr: string): Date | null => {
+      if (!timeStr) return null;
+      const [hStr, mStr] = timeStr.split(':');
+      const h = Number(hStr);
+      const m = Number(mStr);
+      if (Number.isNaN(h) || Number.isNaN(m)) return null;
+
+      const d = new Date();
+      d.setSeconds(0, 0);
+      d.setHours(h, m, 0, 0);
+      return d;
+    };
+
+    const computeNextAndPrev = () => {
+      const now = new Date();
+      const entries = countdownCodes
+        .map((code) => {
+          const t = prayers[code];
+          const dt = t ? parseTimeToToday(t) : null;
+          return dt ? { code, time: dt } : null;
+        })
+        .filter((e): e is { code: string; time: Date } => e !== null);
+
+      if (entries.length === 0) {
+        return { nextCode: null as string | null, nextTime: null as Date | null, prevTime: null as Date | null };
+      }
+
+      let idx = entries.findIndex((e) => e.time > now);
+
+      // After Isha → next Fajr tomorrow
+      if (idx === -1) {
+        const fajrEntry = entries.find((e) => e.code === 'fajr') || entries[0];
+        const nextTime = new Date(fajrEntry.time.getTime() + 24 * 60 * 60 * 1000);
+        const prevTime = entries[entries.length - 1].time;
+        return { nextCode: fajrEntry.code, nextTime, prevTime };
+      }
+
+      const nextEntry = entries[idx];
+      const prevEntry = idx > 0 ? entries[idx - 1] : null;
+
+      return {
+        nextCode: nextEntry.code,
+        nextTime: nextEntry.time,
+        prevTime: prevEntry?.time ?? null,
+      };
+    };
+
+    const update = () => {
+      const now = new Date();
+      const { nextCode, nextTime, prevTime } = computeNextAndPrev();
+
+      if (!nextCode || !nextTime) {
+        setTimeToNextPrayer(null);
+        setNextPrayerCode(null);
+        setProgress(0);
+        return;
+      }
+
+      const diffMs = nextTime.getTime() - now.getTime();
+      const hours = Math.max(0, Math.floor(diffMs / 3_600_000));
+      const minutes = Math.max(
+        0,
+        Math.floor((diffMs % 3_600_000) / 60_000),
+      );
+      const seconds = Math.max(0, Math.floor((diffMs % 60_000) / 1000));
+
+      const formatted = [hours, minutes, seconds]
+        .map((n) => String(n).padStart(2, '0'))
+        .join(':');
+
+      setTimeToNextPrayer(formatted);
+      setNextPrayerCode(nextCode);
+
+      if (prevTime) {
+        const totalMs = nextTime.getTime() - prevTime.getTime();
+        const elapsedMs = now.getTime() - prevTime.getTime();
+        const pct = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 0;
+        setProgress(Math.min(100, Math.max(0, pct)));
+      } else {
+        // Before first prayer, treat progress as time since midnight
+        const startOfDay = new Date(now);
+        startOfDay.setHours(0, 0, 0, 0);
+        const totalMs = nextTime.getTime() - startOfDay.getTime();
+        const elapsedMs = now.getTime() - startOfDay.getTime();
+        const pct = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 0;
+        setProgress(Math.min(100, Math.max(0, pct)));
+      }
+    };
+
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [prayers]);
+
+  const nextPrayerLabel = nextPrayerCode
+    ? PRAYER_LABELS[nextPrayerCode]
+    : '--';
+  const nextPrayerTime =
+    nextPrayerCode && prayers ? prayers[nextPrayerCode] : '--:--';
+
   const quietHours = userSettings?.quietHours;
 
   const mosqueFromSettings =
     userSettings && userSettings.mosqueId
       ? {
-          id: userSettings.mosqueId,
-          name:
-            userSettings.mosqueName ??
-            onboardingData.mosque?.name ??
-            undefined,
-          address:
-            userSettings.mosqueAddress ??
-            onboardingData.mosque?.address ??
-            undefined,
-          city: userSettings.city ?? onboardingData.mosque?.city,
-          location: onboardingData.mosque?.location,
-        }
+        id: userSettings.mosqueId,
+        name:
+          userSettings.mosqueName ?? onboardingData.mosque?.name ?? undefined,
+        address:
+          userSettings.mosqueAddress ??
+          onboardingData.mosque?.address ??
+          undefined,
+        city: userSettings.city ?? onboardingData.mosque?.city,
+        location: onboardingData.mosque?.location,
+      }
       : null;
 
   const mosque = mosqueFromSettings || onboardingData.mosque || null;
-
-  // ---- Live countdown + progress based on device time ----
-  useEffect(() => {
-    if (!prayers) return;
-
-    const baseDateStr: string =
-      (todayData && todayData.date) || new Date().toISOString().slice(0, 10);
-
-    const updateCountdown = () => {
-      const now = new Date();
-
-      let upcoming: {
-        code: string;
-        label: string;
-        timeStr: string;
-        diffMs: number;
-      } | null = null;
-      let lastPrayerDate: Date | null = null;
-
-      for (const code of NEXT_PRAYER_ORDER) {
-        const tStr = (prayers as any)[code];
-        if (!tStr) continue;
-
-        const prayerDate = parseTimeToDate(baseDateStr, tStr);
-        if (!prayerDate) continue;
-
-        const diff = prayerDate.getTime() - now.getTime();
-
-        if (diff >= 0) {
-          // future prayer – candidate for "next"
-          if (!upcoming || diff < upcoming.diffMs) {
-            upcoming = {
-              code,
-              label: PRAYER_LABELS[code],
-              timeStr: tStr,
-              diffMs: diff,
-            };
-          }
-        } else {
-          // past prayer – keep track of the most recent one
-          if (!lastPrayerDate || prayerDate > lastPrayerDate) {
-            lastPrayerDate = prayerDate;
-          }
-        }
-      }
-
-      if (!upcoming) {
-        // All today's prayers have passed – simple behaviour for now
-        setNextPrayer(null);
-        setTimeToNextPrayer('00:00:00');
-        setProgress(100);
-        return;
-      }
-
-      // Set next prayer info
-      setNextPrayer({
-        code: upcoming.code,
-        label: upcoming.label,
-        timeStr: upcoming.timeStr,
-      });
-      setTimeToNextPrayer(formatDiff(upcoming.diffMs));
-
-      // Progress between lastPrayerDate -> upcoming
-      if (lastPrayerDate) {
-        const totalSegmentMs =
-          upcoming.diffMs + (now.getTime() - lastPrayerDate.getTime());
-        const elapsedSegmentMs = now.getTime() - lastPrayerDate.getTime();
-
-        const pct =
-          totalSegmentMs > 0
-            ? Math.min(
-                100,
-                Math.max(0, (elapsedSegmentMs / totalSegmentMs) * 100),
-              )
-            : 0;
-        setProgress(pct);
-      } else {
-        // Before first prayer of the day – progress from midnight -> first prayer
-        const midnight = new Date(`${baseDateStr}T00:00:00`);
-        const firstPrayerDate = parseTimeToDate(
-          baseDateStr,
-          upcoming.timeStr,
-        );
-        if (!firstPrayerDate) {
-          setProgress(0);
-          return;
-        }
-
-        const totalSegmentMs = firstPrayerDate.getTime() - midnight.getTime();
-        const elapsedSegmentMs = now.getTime() - midnight.getTime();
-
-        const pct =
-          totalSegmentMs > 0
-            ? Math.min(
-                100,
-                Math.max(0, (elapsedSegmentMs / totalSegmentMs) * 100),
-              )
-            : 0;
-        setProgress(pct);
-      }
-    };
-
-    updateCountdown(); // initial
-    const id = window.setInterval(updateCountdown, 1000);
-    return () => window.clearInterval(id);
-  }, [prayers, todayData]);
-
-  const nextPrayerLabel = nextPrayer?.label ?? 'Next prayer';
-  const nextPrayerTime = nextPrayer?.timeStr ?? '--:--';
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -304,41 +282,35 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 <p className="text-slate-500 text-xs mt-2">
                   Quiet hours:{' '}
                   {quietHours.enabled
-                    ? `${quietHours.from}–${quietHours.to}${
-                        quietHours.muteFajr ? ' · Fajr muted' : ''
-                      }`
+                    ? `${quietHours.from}–${quietHours.to}${quietHours.muteFajr ? ' · Fajr muted' : ''
+                    }`
                     : 'Off'}
                 </p>
               )}
               {settingsError && (
-                <p className="text-amber-400 text-xs mt-1">
-                  {settingsError}
-                </p>
+                <p className="text-amber-400 text-xs mt-1">{settingsError}</p>
               )}
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <Badge
-                className={`px-3 py-1.5 ${
-                  automationOn
+                className={`px-3 py-1.5 ${automationOn
                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
                     : 'bg-slate-700 text-slate-400 border-slate-600'
-                }`}
+                  }`}
               >
                 <div
-                  className={`w-2 h-2 rounded-full mr-2 ${
-                    automationOn ? 'bg-emerald-400' : 'bg-slate-400'
-                  }`}
+                  className={`w-2 h-2 rounded-full mr-2 ${automationOn ? 'bg-emerald-400' : 'bg-slate-400'
+                    }`}
                 />
                 Automation: {automationOn ? 'ON' : 'OFF'}
               </Badge>
 
-              {/* Uses our TestAdhanButton, which handles audio + backend call + quiet hours */}
               <TestAdhanButton />
             </div>
           </div>
           <p className="text-slate-500 text-sm">
-            Play a sample Adhan on your selected device. If it&apos;s within your
-            quiet hours, we&apos;ll mute it automatically.
+            Play a sample Adhan on your selected device. If it&apos;s within
+            your quiet hours, we&apos;ll mute it automatically.
           </p>
         </div>
 
@@ -352,7 +324,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               <div className="mb-4">
                 <div className="text-slate-400 mb-2">Next prayer in</div>
                 <div className="text-3xl text-emerald-400 mb-4">
-                  {timeToNextPrayer}
+                  {timeToNextPrayer ?? '--:--:--'}
                 </div>
                 <div className="text-white text-xl">
                   {nextPrayerLabel} – {nextPrayerTime}
@@ -366,9 +338,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               </div>
             </div>
 
-            {/* Today's Timetable Card */}
+            {/* Today's Timetable */}
             <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
-              <h2 className="text-white mb-4">Today's Timetable</h2>
+              <h2 className="text-white mb-4">Today&apos;s Timetable</h2>
 
               {loadingToday && (
                 <p className="text-slate-400 text-sm">
@@ -382,18 +354,17 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
               <div className="space-y-3">
                 {PRAYER_ORDER.map((code) => {
-                  const isNext = nextPrayer?.code === code;
                   const label = PRAYER_LABELS[code];
                   const time = prayers?.[code] || '--:--';
+                  const isNext = code === nextPrayerCode;
 
                   return (
                     <div
                       key={code}
-                      className={`flex items-center justify-between p-3 rounded-lg ${
-                        isNext
+                      className={`flex items-center justify-between p-3 rounded-lg ${isNext
                           ? 'bg-emerald-500/10 border border-emerald-500/30'
                           : 'bg-slate-800/50'
-                      }`}
+                        }`}
                     >
                       <span
                         className={isNext ? 'text-emerald-400' : 'text-white'}
@@ -416,7 +387,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
           {/* Right Column */}
           <div className="space-y-6">
-            {/* Platforms & Devices Card */}
+            {/* Platforms & Devices */}
             <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
               <h2 className="text-white mb-4">Connected platforms</h2>
               <div className="space-y-3 mb-4">
@@ -471,12 +442,12 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                         {mosque.address
                           ? mosque.address
                           : mosque.city
-                          ? mosque.city
-                          : mosque.location
-                          ? `${mosque.location.lat?.toFixed(
-                              3,
-                            )}, ${mosque.location.lng?.toFixed(3)}`
-                          : 'Using mosque location from settings'}
+                            ? mosque.city
+                            : mosque.location
+                              ? `${mosque.location.lat?.toFixed(
+                                3,
+                              )}, ${mosque.location.lng?.toFixed(3)}`
+                              : 'Using mosque location from settings'}
                       </div>
                     </div>
                   </div>
@@ -486,9 +457,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                       Source:{' '}
                       {prayerMeta.source === 'mosque'
                         ? 'official mosque timetable'
-                        : `calculated using method ${
-                            prayerMeta.settingsUsed?.method ?? 'ISNA'
-                          }`}
+                        : `calculated using method ${prayerMeta.settingsUsed?.method ?? 'ISNA'
+                        }`}
                     </p>
                   )}
                 </div>
@@ -521,7 +491,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               </Button>
             </div>
 
-            {/* Quick Actions Card */}
+            {/* Quick Actions */}
             <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
               <h2 className="text-white mb-4">Quick Actions</h2>
               <div className="space-y-3">

@@ -1,3 +1,5 @@
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE ?? "http://localhost:4000";
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Logo } from '../shared/Logo';
@@ -39,7 +41,6 @@ export default function Step6Summary({
 
     const quietHoursEnabled = !!adhanPreferences.quietHoursEnabled;
     const quiet = adhanPreferences.quietHours || {};
-
     const payload = {
       // Location
       country: location.country || 'US',
@@ -48,15 +49,16 @@ export default function Step6Summary({
 
       // Prayer rules
       calculationMethod: prayerSettings.calculationMethod || 'isna',
-      // Asr method maps to madhhab in backend: hanafi vs shafi
+      // Asr method → hanafi vs shafi for backend
       madhhab: prayerSettings.asrMethod === 'hanafi' ? 'hanafi' : 'shafi',
-      shia: !!prayerSettings.shia,
+      // Shia flag comes from madhab selection
+      shia: prayerSettings.madhab === 'shia',
       highLatitudeMethod: prayerSettings.highLatitudeMode || 'automatic',
 
       // Mosque selection (if chosen)
       mosqueId: mosque?.id || null,
 
-      // Quiet hours / Adhan preferences
+      // Quiet hours / Adhan preferences (unchanged)
       quietHours: quietHoursEnabled
         ? {
           enabled: true,
@@ -72,13 +74,29 @@ export default function Step6Summary({
         },
     };
 
+
     try {
-      const res = await fetch('http://localhost:4000/api/user/settings', {
+      const res = await fetch(`${API_BASE}/api/user/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+        body: JSON.stringify({
+          // location
+          country: location.country || "US",
+          city: location.city || "Chicago",
+          timezone: location.timezone || "America/Chicago",
+          latitude: location.latitude,
+          longitude: location.longitude,
 
+          // prayer settings
+          calculationMethod: prayerSettings.calculationMethod || "isna",
+          madhhab: prayerSettings.madhhab || "hanafi",
+          shia: !!prayerSettings.shia,
+          highLatitudeMethod: prayerSettings.highLatitudeMethod || "middle_of_the_night",
+
+          // quiet hours etc (if you’re sending them here)
+          // quietHours: onboardingData.quietHours,
+        }),
+      });
       if (!res.ok) {
         // Try to get a message but don't crash if body isn't JSON
         let msg = 'Could not save your settings on the server.';
