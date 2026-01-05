@@ -1,25 +1,41 @@
+// frontend/src/components/onboarding/Step6Summary.tsx
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Logo } from "../shared/Logo";
+import { ProgressIndicator } from "../shared/ProgressIndicator";
+import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
+import { CheckCircle, XCircle, PartyPopper } from "lucide-react";
+
 const API_BASE =
   (import.meta as any).env?.VITE_API_BASE ?? "http://localhost:4000";
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Logo } from '../shared/Logo';
-import { ProgressIndicator } from '../shared/ProgressIndicator';
-import { Button } from '../ui/button';
-import { Badge } from '../ui/badge';
-import { CheckCircle, XCircle, PartyPopper } from 'lucide-react';
 
-const platformNames: any = {
-  alexa: 'Amazon Alexa',
-  google: 'Google Assistant',
-  apple: 'Apple Home',
-  samsung: 'Samsung SmartThings',
-  sonos: 'Sonos',
+const platformNames: Record<string, string> = {
+  alexa: "Amazon Alexa",
+  google: "Google Assistant",
+  apple: "Apple Home",
+  samsung: "Samsung SmartThings",
+  sonos: "Sonos",
 };
 
 type Step6SummaryProps = {
   onboardingData: any;
   setOnboardingData: (data: any) => void;
 };
+
+function mapHighLatitudeMode(mode?: string): string {
+  switch (mode) {
+    case "angle":
+      return "angle_based";
+    case "one-seventh":
+      return "one_seventh";
+    case "midnight":
+      return "middle_of_the_night";
+    // "auto" or anything else -> backend default (middle_of_the_night)
+    default:
+      return "middle_of_the_night";
+  }
+}
 
 export default function Step6Summary({
   onboardingData,
@@ -33,7 +49,6 @@ export default function Step6Summary({
     setSaving(true);
     setError(null);
 
-    // Build payload for /api/user/settings from onboarding data
     const location = onboardingData.location || {};
     const prayerSettings = onboardingData.prayerSettings || {};
     const adhanPreferences = onboardingData.adhanPreferences || {};
@@ -41,81 +56,75 @@ export default function Step6Summary({
 
     const quietHoursEnabled = !!adhanPreferences.quietHoursEnabled;
     const quiet = adhanPreferences.quietHours || {};
+
     const payload = {
       // Location
-      country: location.country || 'US',
-      city: location.city || 'Chicago',
-      timezone: location.timezone || 'America/Chicago',
+      country: location.country || "US",
+      city: location.city || "Chicago",
+      timezone: location.timezone || "America/Chicago",
+      latitude:
+        typeof location.latitude === "number" ? location.latitude : undefined,
+      longitude:
+        typeof location.longitude === "number" ? location.longitude : undefined,
 
       // Prayer rules
-      calculationMethod: prayerSettings.calculationMethod || 'isna',
-      // Asr method → hanafi vs shafi for backend
-      madhhab: prayerSettings.asrMethod === 'hanafi' ? 'hanafi' : 'shafi',
-      // Shia flag comes from madhab selection
-      shia: prayerSettings.madhab === 'shia',
-      highLatitudeMethod: prayerSettings.highLatitudeMode || 'automatic',
+      calculationMethod: prayerSettings.calculationMethod || "isna",
+      madhhab:
+        prayerSettings.asrMethod === "hanafi" ? "hanafi" : "shafi",
+      shia: prayerSettings.madhab === "shia",
+      highLatitudeMethod: mapHighLatitudeMode(
+        prayerSettings.highLatitudeMode,
+      ),
 
-      // Mosque selection (if chosen)
+      // Mosque (if chosen)
       mosqueId: mosque?.id || null,
 
-      // Quiet hours / Adhan preferences (unchanged)
+      // Quiet hours / Adhan preferences
       quietHours: quietHoursEnabled
         ? {
-          enabled: true,
-          from: quiet.from || '22:00',
-          to: quiet.to || '07:00',
-          muteFajr: !!adhanPreferences.muteFajr,
-        }
+            enabled: true,
+            from: quiet.from || "22:00",
+            to: quiet.to || "07:00",
+            muteFajr: !!adhanPreferences.muteFajr,
+          }
         : {
-          enabled: false,
-          from: quiet.from || '22:00',
-          to: quiet.to || '07:00',
-          muteFajr: !!adhanPreferences.muteFajr,
-        },
+            enabled: false,
+            from: quiet.from || "22:00",
+            to: quiet.to || "07:00",
+            muteFajr: !!adhanPreferences.muteFajr,
+          },
     };
-
 
     try {
       const res = await fetch(`${API_BASE}/api/user/settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // location
-          country: location.country || "US",
-          city: location.city || "Chicago",
-          timezone: location.timezone || "America/Chicago",
-          latitude: location.latitude,
-          longitude: location.longitude,
-
-          // prayer settings
-          calculationMethod: prayerSettings.calculationMethod || "isna",
-          madhhab: prayerSettings.madhhab || "hanafi",
-          shia: !!prayerSettings.shia,
-          highLatitudeMethod: prayerSettings.highLatitudeMethod || "middle_of_the_night",
-
-          // quiet hours etc (if you’re sending them here)
-          // quietHours: onboardingData.quietHours,
-        }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
+
       if (!res.ok) {
-        // Try to get a message but don't crash if body isn't JSON
-        let msg = 'Could not save your settings on the server.';
+        let msg = "Could not save your settings on the server.";
         try {
           const json = await res.json();
           if (json?.error) msg = json.error;
         } catch {
-          // ignore
+          // ignore parse errors
         }
         setError(msg);
+        setSaving(false);
+        return;
       }
-    } catch (err) {
-      console.error('Failed to save user settings', err);
-      setError('Could not reach the backend. We will continue with local settings.');
-    } finally {
+
       setIsComplete(true);
+    } catch (err) {
+      console.error("Failed to save user settings", err);
+      setError(
+        "Could not reach the backend. We will continue with local settings.",
+      );
+    } finally {
       setSaving(false);
       setTimeout(() => {
-        navigate('/dashboard');
+        navigate("/dashboard");
       }, 1200);
     }
   };
@@ -139,7 +148,8 @@ export default function Step6Summary({
 
   const selectedPlatforms = onboardingData.selectedPlatforms || [];
   const connectedPlatforms = onboardingData.connectedPlatforms || [];
-  const { location, prayerSettings, devices, adhanPreferences } = onboardingData;
+  const { location, prayerSettings, devices, adhanPreferences } =
+    onboardingData;
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -166,7 +176,10 @@ export default function Step6Summary({
               <h2 className="text-white mb-4">Platforms & Accounts</h2>
               <div className="space-y-2">
                 {selectedPlatforms.map((platform: string) => (
-                  <div key={platform} className="flex items-center justify-between">
+                  <div
+                    key={platform}
+                    className="flex items-center justify-between"
+                  >
                     <span className="text-slate-300">
                       {platformNames[platform]}
                     </span>
@@ -183,10 +196,13 @@ export default function Step6Summary({
                     )}
                   </div>
                 ))}
-                {selectedPlatforms.includes('sonos') && (
+                {selectedPlatforms.includes("sonos") && (
                   <p className="text-slate-500 text-sm mt-2">
-                    Sonos: Using{' '}
-                    {connectedPlatforms.includes('alexa') ? 'Alexa' : 'Google'} connection
+                    Sonos: Using{" "}
+                    {connectedPlatforms.includes("alexa")
+                      ? "Alexa"
+                      : "Google"}{" "}
+                    connection
                   </p>
                 )}
               </div>
@@ -197,16 +213,16 @@ export default function Step6Summary({
               <h2 className="text-white mb-4">Location & Timezone</h2>
               <div className="space-y-1 text-slate-300">
                 <p>
-                  <span className="text-slate-500">Country:</span>{' '}
-                  {location?.country?.toUpperCase() || 'Not set'}
+                  <span className="text-slate-500">Country:</span>{" "}
+                  {location?.country?.toUpperCase() || "Not set"}
                 </p>
                 <p>
-                  <span className="text-slate-500">City:</span>{' '}
-                  {location?.city || 'Not set'}
+                  <span className="text-slate-500">City:</span>{" "}
+                  {location?.city || "Not set"}
                 </p>
                 <p>
-                  <span className="text-slate-500">Timezone:</span>{' '}
-                  {location?.timezone || 'Not set'}
+                  <span className="text-slate-500">Timezone:</span>{" "}
+                  {location?.timezone || "Not set"}
                 </p>
               </div>
             </div>
@@ -216,16 +232,24 @@ export default function Step6Summary({
               <h2 className="text-white mb-4">Prayer Settings</h2>
               <div className="space-y-1 text-slate-300">
                 <p>
-                  <span className="text-slate-500">Method:</span>{' '}
-                  {prayerSettings?.calculationMethod?.toUpperCase() || 'ISNA'}
+                  <span className="text-slate-500">Method:</span>{" "}
+                  {prayerSettings?.calculationMethod?.toUpperCase() || "ISNA"}
                 </p>
                 <p>
-                  <span className="text-slate-500">Asr Method:</span>{' '}
-                  {prayerSettings?.asrMethod === 'hanafi' ? 'Hanafi' : 'Standard'}
+                  <span className="text-slate-500">Madhab:</span>{" "}
+                  {prayerSettings?.madhab === "shia"
+                    ? "Shia (Jafari)"
+                    : "Sunni"}
                 </p>
                 <p>
-                  <span className="text-slate-500">High-latitude:</span>{' '}
-                  {prayerSettings?.highLatitudeMode || 'Automatic'}
+                  <span className="text-slate-500">Asr Method:</span>{" "}
+                  {prayerSettings?.asrMethod === "hanafi"
+                    ? "Hanafi"
+                    : "Standard"}
+                </p>
+                <p>
+                  <span className="text-slate-500">High-latitude:</span>{" "}
+                  {prayerSettings?.highLatitudeMode || "Automatic"}
                 </p>
               </div>
             </div>
@@ -235,17 +259,17 @@ export default function Step6Summary({
               <h2 className="text-white mb-4">Devices & Adhan</h2>
               <div className="space-y-3 text-slate-300">
                 <p>
-                  <span className="text-slate-500">Devices:</span>{' '}
+                  <span className="text-slate-500">Devices:</span>{" "}
                   {devices?.length || 0} device(s) selected
                 </p>
                 <p>
-                  <span className="text-slate-500">Reciter:</span>{' '}
-                  {adhanPreferences?.reciter || 'Madinah'}
+                  <span className="text-slate-500">Reciter:</span>{" "}
+                  {adhanPreferences?.reciter || "Madinah"}
                 </p>
                 {adhanPreferences?.quietHoursEnabled && (
                   <p>
-                    <span className="text-slate-500">Quiet Hours:</span>{' '}
-                    {adhanPreferences?.quietHours?.from} –{' '}
+                    <span className="text-slate-500">Quiet Hours:</span>{" "}
+                    {adhanPreferences?.quietHours?.from} –{" "}
                     {adhanPreferences?.quietHours?.to}
                   </p>
                 )}
@@ -255,7 +279,7 @@ export default function Step6Summary({
 
           <div className="flex gap-4">
             <Button
-              onClick={() => navigate('/onboarding/step5')}
+              onClick={() => navigate("/onboarding/step5")}
               variant="outline"
               className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
               size="lg"
@@ -269,7 +293,7 @@ export default function Step6Summary({
               size="lg"
               disabled={saving}
             >
-              {saving ? 'Saving…' : 'Confirm & Enable Adhan'}
+              {saving ? "Saving…" : "Confirm & Enable Adhan"}
             </Button>
           </div>
         </div>

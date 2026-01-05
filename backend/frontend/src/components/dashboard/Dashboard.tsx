@@ -59,6 +59,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
   const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
   const [nextPrayerCode, setNextPrayerCode] = useState<string | null>(null);
+  const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [automationOn, setAutomationOn] = useState(true);
 
@@ -72,7 +73,25 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const connectedPlatforms = onboardingData.connectedPlatforms || [];
   const deviceCount = onboardingData.devices?.length || 0;
 
+  // ---------- Load user settings (quiet hours, mosque selection, etc.) ----------
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        setSettingsError(null);
+        const res = await fetch(`${API_BASE}/api/user/settings`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setUserSettings(data);
+      } catch (err) {
+        console.error('Failed to load user settings:', err);
+        setSettingsError('Could not load your automation settings.');
+      }
+    }
+    loadSettings();
+  }, []);
+
   // ---------- Load today's prayer times ----------
+  // IMPORTANT: re-fetch when key settings change (mosque/city/method).
   useEffect(() => {
     async function loadToday() {
       try {
@@ -80,9 +99,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         setTodayError(null);
 
         const res = await fetch(`${API_BASE}/api/prayer-times/today`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
         const data = await res.json();
         setTodayData(data);
       } catch (err) {
@@ -94,27 +112,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     }
 
     loadToday();
-  }, []);
-
-  // ---------- Load user settings (quiet hours, etc.) ----------
-  useEffect(() => {
-    async function loadSettings() {
-      try {
-        setSettingsError(null);
-        const res = await fetch(`${API_BASE}/api/user/settings`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        setUserSettings(data);
-      } catch (err) {
-        console.error('Failed to load user settings:', err);
-        setSettingsError('Could not load your automation settings.');
-      }
-    }
-
-    loadSettings();
-  }, []);
+  }, [
+    userSettings?.mosqueId,
+    userSettings?.mosqueLat,
+    userSettings?.mosqueLng,
+    userSettings?.city,
+    userSettings?.country,
+    userSettings?.calculationMethod,
+  ]);
 
   const prayers: PrayerMap | null = todayData?.prayers || null;
   const prayerMeta = todayData || null;
@@ -124,6 +129,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     if (!prayers) {
       setTimeToNextPrayer(null);
       setNextPrayerCode(null);
+      setNextPrayerTimeDisplay(null);
       setProgress(0);
       return;
     }
@@ -138,14 +144,44 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
     const parseTimeToToday = (timeStr: string): Date | null => {
       if (!timeStr) return null;
-      const [hStr, mStr] = timeStr.split(':');
-      const h = Number(hStr);
-      const m = Number(mStr);
-      if (Number.isNaN(h) || Number.isNaN(m)) return null;
+
+      // Strip " (CDT)" etc if present
+      const raw = String(timeStr).trim();
+      const t = raw.replace(/\s*\(.*?\)\s*$/, '').trim();
+
+      // Supports:
+      //  - "5:55 AM" / "05:55AM"
+      //  - "14:15" / "14:15:00"
+      const m12 = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)$/i);
+      const m24 = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+
+      let h: number;
+      let m: number;
+      let s = 0;
+
+      if (m12) {
+        h = Number(m12[1]);
+        m = Number(m12[2]);
+        s = m12[3] ? Number(m12[3]) : 0;
+
+        const meridian = m12[4].toUpperCase();
+        if (meridian === 'AM') {
+          if (h === 12) h = 0;
+        } else {
+          if (h !== 12) h += 12;
+        }
+      } else if (m24) {
+        h = Number(m24[1]);
+        m = Number(m24[2]);
+        s = m24[3] ? Number(m24[3]) : 0;
+      } else {
+        return null;
+      }
+
+      if ([h, m, s].some((n) => Number.isNaN(n))) return null;
 
       const d = new Date();
-      d.setSeconds(0, 0);
-      d.setHours(h, m, 0, 0);
+      d.setHours(h, m, s, 0);
       return d;
     };
 
@@ -190,16 +226,29 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       if (!nextCode || !nextTime) {
         setTimeToNextPrayer(null);
         setNextPrayerCode(null);
+        setNextPrayerTimeDisplay(null);
         setProgress(0);
         return;
       }
 
+      // display time for the next prayer:
+      // - normally: prayers[nextCode]
+      // - special case: after isha, next is tomorrow fajr → use backend nextFajr if provided
+      const isTomorrow =
+        nextTime.getFullYear() !== now.getFullYear() ||
+        nextTime.getMonth() !== now.getMonth() ||
+        nextTime.getDate() !== now.getDate();
+
+      let displayTime = prayers[nextCode] ?? '--:--';
+      if (nextCode === 'fajr' && isTomorrow) {
+        displayTime = (todayData as any)?.nextFajr ?? displayTime;
+      }
+
+      setNextPrayerTimeDisplay(displayTime);
+
       const diffMs = nextTime.getTime() - now.getTime();
       const hours = Math.max(0, Math.floor(diffMs / 3_600_000));
-      const minutes = Math.max(
-        0,
-        Math.floor((diffMs % 3_600_000) / 60_000),
-      );
+      const minutes = Math.max(0, Math.floor((diffMs % 3_600_000) / 60_000));
       const seconds = Math.max(0, Math.floor((diffMs % 60_000) / 1000));
 
       const formatted = [hours, minutes, seconds]
@@ -215,7 +264,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         const pct = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 0;
         setProgress(Math.min(100, Math.max(0, pct)));
       } else {
-        // Before first prayer, treat progress as time since midnight
         const startOfDay = new Date(now);
         startOfDay.setHours(0, 0, 0, 0);
         const totalMs = nextTime.getTime() - startOfDay.getTime();
@@ -228,32 +276,37 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     update();
     const timer = setInterval(update, 1000);
     return () => clearInterval(timer);
-  }, [prayers]);
+  }, [prayers, todayData]);
 
-  const nextPrayerLabel = nextPrayerCode
-    ? PRAYER_LABELS[nextPrayerCode]
-    : '--';
-  const nextPrayerTime =
-    nextPrayerCode && prayers ? prayers[nextPrayerCode] : '--:--';
+  const nextPrayerLabel = nextPrayerCode ? PRAYER_LABELS[nextPrayerCode] : '--';
+  const nextPrayerTime = nextPrayerTimeDisplay ?? '--:--';
 
   const quietHours = userSettings?.quietHours;
 
   const mosqueFromSettings =
     userSettings && userSettings.mosqueId
       ? {
-        id: userSettings.mosqueId,
-        name:
-          userSettings.mosqueName ?? onboardingData.mosque?.name ?? undefined,
-        address:
-          userSettings.mosqueAddress ??
-          onboardingData.mosque?.address ??
-          undefined,
-        city: userSettings.city ?? onboardingData.mosque?.city,
-        location: onboardingData.mosque?.location,
-      }
+          id: userSettings.mosqueId,
+          name: userSettings.mosqueName ?? onboardingData.mosque?.name ?? undefined,
+          address: userSettings.mosqueAddress ?? onboardingData.mosque?.address ?? undefined,
+          city: userSettings.city ?? onboardingData.mosque?.city,
+          location:
+            onboardingData.mosque?.location ??
+            (typeof (userSettings as any)?.mosqueLat === 'number' &&
+            typeof (userSettings as any)?.mosqueLng === 'number'
+              ? { lat: (userSettings as any).mosqueLat, lng: (userSettings as any).mosqueLng }
+              : undefined),
+        }
       : null;
 
   const mosque = mosqueFromSettings || onboardingData.mosque || null;
+
+  const locationLabel =
+    prayerMeta?.source === 'mosque'
+      ? prayerMeta?.mosque?.name || prayerMeta?.location?.city
+      : prayerMeta?.location?.city;
+
+  const locationPrefix = prayerMeta?.source === 'mosque' ? 'at' : 'in';
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -273,17 +326,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               </h1>
               <p className="text-slate-400">
                 Here are your prayer times for today
-                {todayData?.location?.city
-                  ? ` in ${todayData.location.city}`
-                  : ''}
+                {locationLabel ? ` ${locationPrefix} ${locationLabel}` : ''}
                 .
               </p>
               {quietHours && (
                 <p className="text-slate-500 text-xs mt-2">
                   Quiet hours:{' '}
                   {quietHours.enabled
-                    ? `${quietHours.from}–${quietHours.to}${quietHours.muteFajr ? ' · Fajr muted' : ''
-                    }`
+                    ? `${quietHours.from}–${quietHours.to}${quietHours.muteFajr ? ' · Fajr muted' : ''}`
                     : 'Off'}
                 </p>
               )}
@@ -293,14 +343,16 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <Badge
-                className={`px-3 py-1.5 ${automationOn
+                className={`px-3 py-1.5 ${
+                  automationOn
                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
                     : 'bg-slate-700 text-slate-400 border-slate-600'
-                  }`}
+                }`}
               >
                 <div
-                  className={`w-2 h-2 rounded-full mr-2 ${automationOn ? 'bg-emerald-400' : 'bg-slate-400'
-                    }`}
+                  className={`w-2 h-2 rounded-full mr-2 ${
+                    automationOn ? 'bg-emerald-400' : 'bg-slate-400'
+                  }`}
                 />
                 Automation: {automationOn ? 'ON' : 'OFF'}
               </Badge>
@@ -361,21 +413,16 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   return (
                     <div
                       key={code}
-                      className={`flex items-center justify-between p-3 rounded-lg ${isNext
+                      className={`flex items-center justify-between p-3 rounded-lg ${
+                        isNext
                           ? 'bg-emerald-500/10 border border-emerald-500/30'
                           : 'bg-slate-800/50'
-                        }`}
+                      }`}
                     >
-                      <span
-                        className={isNext ? 'text-emerald-400' : 'text-white'}
-                      >
+                      <span className={isNext ? 'text-emerald-400' : 'text-white'}>
                         {label}
                       </span>
-                      <span
-                        className={
-                          isNext ? 'text-emerald-400' : 'text-slate-300'
-                        }
-                      >
+                      <span className={isNext ? 'text-emerald-400' : 'text-slate-300'}>
                         {time}
                       </span>
                     </div>
@@ -397,12 +444,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                     className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-2xl">
-                        {platformIcons[platform]}
-                      </span>
-                      <span className="text-white">
-                        {platformNames[platform]}
-                      </span>
+                      <span className="text-2xl">{platformIcons[platform]}</span>
+                      <span className="text-white">{platformNames[platform]}</span>
                     </div>
                     <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
                       <CheckCircle className="w-3 h-3 mr-1" />
@@ -442,12 +485,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                         {mosque.address
                           ? mosque.address
                           : mosque.city
-                            ? mosque.city
-                            : mosque.location
-                              ? `${mosque.location.lat?.toFixed(
-                                3,
-                              )}, ${mosque.location.lng?.toFixed(3)}`
-                              : 'Using mosque location from settings'}
+                          ? mosque.city
+                          : 'Using mosque location from settings'}
                       </div>
                     </div>
                   </div>
@@ -456,9 +495,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                     <p className="text-xs text-slate-500">
                       Source:{' '}
                       {prayerMeta.source === 'mosque'
-                        ? 'official mosque timetable'
-                        : `calculated using method ${prayerMeta.settingsUsed?.method ?? 'ISNA'
-                        }`}
+                        ? 'based on your selected mosque location'
+                        : `calculated using method ${prayerMeta.settingsUsed?.method ?? 'ISNA'}`}
                     </p>
                   )}
                 </div>
@@ -472,13 +510,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 </p>
               )}
 
-              {mosque && (
-                <Badge
-                  variant="outline"
-                  className="border-emerald-500/30 text-emerald-400 mb-4"
-                >
+              {mosque && prayerMeta?.source === 'mosque' && (
+                <span className="inline-flex items-center rounded-full border border-emerald-700/60 bg-emerald-900/25 px-3 py-1 text-xs text-emerald-200">
                   Following mosque timings
-                </Badge>
+                </span>
               )}
 
               <Button
