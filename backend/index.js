@@ -1,23 +1,91 @@
-require('dotenv').config();
-
 // backend/index.js
+require('dotenv').config();
 const express = require("express");
 const cors = require("cors");
 const adhan = require("adhan");
-require("dotenv").config();
 const path = require("path");
+const GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
+
 
 // Node 18+ has global fetch built in (Node 22 in your case).
 // If you ever run on Node < 18, install node-fetch and require it here.
 const QURAN_API_BASE = "https://api.alquran.cloud/v1";
 const ALADHAN_BASE = "https://api.aladhan.com/v1";
+// ------------------------------
+// Helpers for AlAdhan timings
+// ------------------------------
+function toDDMMYYYY(isoDate) {
+  const [y, m, d] = String(isoDate).split("-");
+  return `${d}-${m}-${y}`;
+}
+
+function addDaysISO(isoDate, days) {
+  const dt = new Date(`${isoDate}T12:00:00`);
+  dt.setDate(dt.getDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+// AlAdhan may return "05:12 (CST)" — keep only "05:12"
+function stripAladhanTime(v) {
+  return String(v ?? "").trim().split(" ")[0];
+}
+
+// Map your stored method ("isna"/"karachi") to AlAdhan method numbers.
+// (You only care about US + PK for now)
+function aladhanMethodNumber(methodLike, fallback) {
+  // numeric string like "2"
+  if (typeof methodLike === "string" && /^\d+$/.test(methodLike.trim())) {
+    return Number(methodLike.trim());
+  }
+  if (typeof methodLike === "number" && Number.isFinite(methodLike)) {
+    return methodLike;
+  }
+
+  const s = String(methodLike ?? "").toLowerCase().trim();
+  if (s === "karachi") return 1;
+  if (s === "isna") return 2;
+
+  return Number(fallback || 2);
+}
+
+async function aladhanTimingsByCoords(lat, lng, isoDate, methodNum) {
+  const dateParam = toDDMMYYYY(isoDate);
+
+  const url =
+    `${ALADHAN_BASE}/timings/${dateParam}` +
+    `?latitude=${encodeURIComponent(lat)}` +
+    `&longitude=${encodeURIComponent(lng)}` +
+    `&method=${encodeURIComponent(methodNum)}`;
+
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`AlAdhan HTTP ${resp.status}`);
+
+  const json = await resp.json();
+  const t = json?.data?.timings;
+  if (!t) return null;
+
+  return {
+    fajr: stripAladhanTime(t.Fajr),
+    sunrise: stripAladhanTime(t.Sunrise),
+    dhuhr: stripAladhanTime(t.Dhuhr),
+    asr: stripAladhanTime(t.Asr),
+    maghrib: stripAladhanTime(t.Maghrib),
+    isha: stripAladhanTime(t.Isha),
+  };
+}
+
 
 const duas = require("./data/duas.json");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
+const GOOGLE_PLACES_SEARCH_URL =
+  'https://places.googleapis.com/v1/places:searchText';
 const PRAYER_METHOD_DEFAULT = Number(process.env.PRAYER_METHOD_DEFAULT || 2);
+const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY;
+console.log('OPENCAGE_API_KEY present?', !!OPENCAGE_API_KEY);
 
 app.use(cors());
 app.use(express.json());
@@ -76,6 +144,80 @@ let userSettings = {
   },
 };
 
+// --------------------------------------
+// Minimal real coordinates for cities we support
+// (no fake timetables – just real lat/lon + timezone)
+// --------------------------------------
+const KNOWN_CITY_COORDS = {
+  "us:chicago": {
+    lat: 41.8781,
+    lon: -87.6298,
+    timezone: "America/Chicago",
+    city: "Chicago",
+    country: "US",
+  },
+  "pk:karachi": {
+    lat: 24.8607,
+    lon: 67.0011,
+    timezone: "Asia/Karachi",
+    city: "Karachi",
+    country: "PK",
+  },
+  "pk:lahore": {
+    lat: 31.5204,
+    lon: 74.3587,
+    timezone: "Asia/Karachi",
+    city: "Lahore",
+    country: "PK",
+  },
+  "pk:islamabad": {
+    lat: 33.6844,
+    lon: 73.0479,
+    timezone: "Asia/Karachi",
+    city: "Islamabad",
+    country: "PK",
+  },
+};
+
+function resolveCoordinatesFromSettings({ city, country }) {
+  // 1) If we already have explicit coordinates (e.g. from a mosque),
+  //    use those and respect the stored timezone.
+  if (
+    typeof userSettings.latitude === "number" &&
+    typeof userSettings.longitude === "number"
+  ) {
+    return {
+      lat: userSettings.latitude,
+      lon: userSettings.longitude,
+      timezone: userSettings.timezone || "America/Chicago",
+      city: userSettings.city || "Chicago",
+      country: userSettings.country || "US",
+    };
+  }
+
+  const normalizedCity = (city || userSettings.city || "")
+    .trim()
+    .toLowerCase();
+  const normalizedCountry = (country || userSettings.country || "US")
+    .trim()
+    .toLowerCase();
+
+  const key = `${normalizedCountry}:${normalizedCity}`;
+  const entry = KNOWN_CITY_COORDS[key];
+
+  if (entry) {
+    return entry;
+  }
+
+  // Fallback: Pakistan but unknown city → Karachi
+  if (normalizedCountry === "pk") {
+    return KNOWN_CITY_COORDS["pk:karachi"];
+  }
+
+  // Default → Chicago, US
+  return KNOWN_CITY_COORDS["us:chicago"];
+}
+
 
 // tiny mock mosque list (legacy – UI will use Google-based routes instead)
 const mockMosques = [
@@ -103,38 +245,7 @@ const mockMosques = [
 ];
 
 // mock mosque-specific timetables (legacy / fallback)
-const mockMosqueTimetables = [
-  {
-    mosqueId: "mosque-1",
-    date: "2025-12-10",
-    fajr: "05:45",
-    sunrise: "07:05",
-    dhuhr: "12:40",
-    asr: "15:55",
-    maghrib: "17:10",
-    isha: "18:30",
-  },
-  {
-    mosqueId: "mosque-1",
-    date: "2025-12-11",
-    fajr: "05:46",
-    sunrise: "07:06",
-    dhuhr: "12:41",
-    asr: "15:56",
-    maghrib: "17:11",
-    isha: "18:31",
-  },
-  {
-    mosqueId: "mosque-2",
-    date: "2025-12-10",
-    fajr: "05:50",
-    sunrise: "07:08",
-    dhuhr: "12:42",
-    asr: "15:58",
-    maghrib: "17:12",
-    isha: "18:33",
-  },
-];
+const mockMosqueTimetables = [];
 
 // --------------------------------------
 // BASIC LOCATION → COORDINATES MAPPING (DEMO)
@@ -215,9 +326,7 @@ function bearingToDirection(bearing) {
 
 // helper: find mosque timings for given mosque + date (mock table)
 function findMosqueTimes(mosqueId, date) {
-  return mockMosqueTimetables.find(
-    (row) => row.mosqueId === mosqueId && row.date === date
-  );
+  return null;
 }
 
 // --------------------------------------
@@ -234,75 +343,126 @@ function getCalculationParams(methodKey) {
   }
 }
 
-function buildPrayerTimesForDate({ date, timezone, method, madhhab, shia }) {
-  const lat =
-    typeof userSettings.latitude === 'number'
-      ? userSettings.latitude
-      : 41.8781;
-  const lng =
-    typeof userSettings.longitude === 'number'
-      ? userSettings.longitude
-      : -87.6298;
+// --------------------------------------
+// Build prayer times for a single day
+// --------------------------------------
+function buildPrayerTimesForDate({
+  date,
+  city,
+  country,
+  method,
+  madhhab,
+  shia,
+  mosqueId, // kept for future but not used for any fake timetables
+  timezone,
+}) {
+  // 1) Resolve coordinates (US or Pakistan, or mosque coordinates)
+  const {
+    lat,
+    lon,
+    timezone: resolvedTz,
+    city: resolvedCity,
+    country: resolvedCountry,
+  } = resolveCoordinatesFromSettings({ city, country });
 
-  const timeZone = timezone || userSettings.timezone || 'America/Chicago';
+  const coordinates = new adhan.Coordinates(lat, lon);
 
-  const params = getCalculationParams(method || userSettings.calculationMethod);
+  // 2) Calculation method
+  const methodToUse = method || userSettings.calculationMethod || "isna";
+
+  let params;
+  switch (methodToUse) {
+    case "makkah":
+      params = adhan.CalculationMethod.Makkah();
+      break;
+    case "egypt":
+      params = adhan.CalculationMethod.Egyptian();
+      break;
+    case "karachi":
+      params = adhan.CalculationMethod.Karachi();
+      break;
+    case "mwl":
+      params = adhan.CalculationMethod.MuslimWorldLeague();
+      break;
+    case "isna":
+    default:
+      params = adhan.CalculationMethod.NorthAmerica();
+      break;
+  }
+
+  // 3) Madhhab
+  const madhhabToUse = madhhab || userSettings.madhhab || "shafi";
   params.madhab =
-    (madhhab || userSettings.madhhab) === 'hanafi'
+    madhhabToUse === "hanafi"
       ? adhan.Madhab.Hanafi
       : adhan.Madhab.Shafi;
 
-  // You can tweak this later if you support multiple high-latitude rules
-  params.highLatitudeRule = adhan.HighLatitudeRule.MiddleOfTheNight;
+  // 4) High latitude rule based on user setting
+  const highLatSetting =
+    userSettings.highLatitudeMethod || "automatic";
 
-  const coordinates = new adhan.Coordinates(lat, lng);
+  switch (highLatSetting) {
+    case "middle_of_the_night":
+      params.highLatitudeRule = adhan.HighLatitudeRule.MiddleOfTheNight;
+      break;
+    case "one_seventh":
+      params.highLatitudeRule = adhan.HighLatitudeRule.SeventhOfTheNight;
+      break;
+    case "angle_based":
+      params.highLatitudeRule = adhan.HighLatitudeRule.TwilightAngle;
+      break;
+    case "automatic":
+    default:
+      // keep library default
+      break;
+  }
 
-  // We just want this calendar date in local time; noon is safe
-  const dateObj = new Date(`${date}T12:00:00`);
+  // 5) Create a Date for that calendar day (server timezone is OK;
+  //    the adhan library mainly needs the calendar date).
+  const dateForCalc = new Date(`${date}T12:00:00`);
 
-  const pt = new adhan.PrayerTimes(coordinates, dateObj, params);
+  const prayerTimes = new adhan.PrayerTimes(
+    coordinates,
+    dateForCalc,
+    params
+  );
 
-  const format = (d) =>
-    formatTimeWithTz(d, timeZone); // you already have formatTimeWithTz helper
+  function formatTime(d) {
+    return d.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
 
   const prayers = {
-    fajr: format(pt.fajr),
-    sunrise: format(pt.sunrise),
-    dhuhr: format(pt.dhuhr),
-    asr: format(pt.asr),
-    maghrib: format(pt.maghrib),
-    isha: format(pt.isha),
+    fajr: formatTime(prayerTimes.fajr),
+    sunrise: formatTime(prayerTimes.sunrise),
+    dhuhr: formatTime(prayerTimes.dhuhr),
+    asr: formatTime(prayerTimes.asr),
+    maghrib: formatTime(prayerTimes.maghrib),
+    isha: formatTime(prayerTimes.isha),
   };
 
-  const mosque =
-    userSettings.mosqueId != null
-      ? {
-        id: userSettings.mosqueId,
-        name: userSettings.mosqueName,
-        address: userSettings.mosqueAddress,
-        city: userSettings.city,
-      }
-      : null;
-
   return {
-    location: {
-      city: userSettings.city,
-      country: userSettings.country,
-      timezone: timeZone,
-      latitude: lat,
-      longitude: lng,
-    },
     date,
-    source: 'calculation', // **honest** – until we ingest real mosque timetables
-    mosque,
+    location: {
+      city: resolvedCity,
+      country: resolvedCountry,
+    },
+    // 🔴 Important: NO fake mosque timetables. Everything is calculated.
+    source: "calculation",
+    mosque: null,
     settingsUsed: {
-      method: method || userSettings.calculationMethod,
-      madhhab: madhhab || userSettings.madhhab,
-      shia: !!(shia ?? userSettings.shia),
+      method: methodToUse,
+      madhhab: madhhabToUse,
+      shia: !!shia,
+      highLatitudeMethod: highLatSetting,
     },
     prayers,
   };
 }
+
 
 // --------------------------------------
 // Quiet hours helper
@@ -350,6 +510,76 @@ app.get("/", (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", message: "Adhan backend running" });
 });
+
+// ---------------------------------------------------------------------------
+// Geocoding: turn "city + country" into lat/lng + timezone (US / PK)
+// ---------------------------------------------------------------------------
+// -------------------------------------------------------------
+// Geocoding: look up lat/lng + timezone for a city in US/PK
+// -------------------------------------------------------------
+app.get("/api/geocode", async (req, res) => {
+  const { city, country } = req.query; // country: "US" or "PK"
+
+  if (!city || !country) {
+    return res.status(400).json({ error: "city and country are required" });
+  }
+
+  if (!OPENCAGE_API_KEY) {
+    return res.status(500).json({
+      error:
+        "Geocoding is not configured on the server (missing OPENCAGE_API_KEY).",
+    });
+  }
+
+  try {
+    const q = `${city}, ${country}`;
+    const params = new URLSearchParams({
+      q,
+      key: OPENCAGE_API_KEY,
+      limit: "1",
+      no_annotations: "0", // we want timezone info
+      language: "en",
+      countrycode: country.toLowerCase(), // restrict to US or PK
+    });
+
+    const response = await fetch(
+      `https://api.opencagedata.com/geocode/v1/json?${params.toString()}`
+    );
+
+    if (!response.ok) {
+      throw new Error(`OpenCage HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.results || data.results.length === 0) {
+      return res.status(404).json({ error: "No matching location found." });
+    }
+
+    // OpenCage response shape: geometry.lat / geometry.lng / annotations.timezone.name :contentReference[oaicite:1]{index=1}
+    const result = data.results[0];
+    const { lat, lng } = result.geometry;
+    const timezone =
+      result.annotations &&
+        result.annotations.timezone &&
+        result.annotations.timezone.name
+        ? result.annotations.timezone.name
+        : null;
+
+    return res.json({
+      lat,
+      lng,
+      timezone,
+    });
+  } catch (err) {
+    console.error("Geocoding error:", err);
+    return res.status(500).json({
+      error: "Geocoding failed. Please try again later.",
+    });
+  }
+});
+
+
 
 app.post("/api/test-adhan", (req, res) => {
   const { prayerCode } = req.body || {};
@@ -653,33 +883,108 @@ app.post("/api/auth/login", (req, res) => {
 // --------------------------------------
 // PRAYER TIMES
 // --------------------------------------
-app.get("/api/prayer-times/today", (req, res) => {
-  const {
-    city = userSettings.city,
-    country = userSettings.country,
-    method = userSettings.calculationMethod,
-    madhhab = userSettings.madhhab,
-    shia = userSettings.shia,
-    mosqueId: queryMosqueId,
-    date: queryDate,
-    timezone = userSettings.timezone,
-  } = req.query;
+app.get("/api/prayer-times/today", async (req, res) => {
+  try {
+    const isoDate =
+      typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : new Date().toISOString().slice(0, 10);
 
-  const today = new Date().toISOString().slice(0, 10);
-  const normalizedShia = shia === "true" || shia === true;
+    const normalizedShia =
+      req.query.shia === "true" || req.query.shia === true || userSettings.shia === true;
 
-  const result = buildPrayerTimesForDate({
-    date: today,
-    city,
-    country,
-    method,
-    madhhab,
-    shia: normalizedShia,
-    mosqueId: queryMosqueId,
-    timezone,
-  });
+    // If a mosque is selected AND has coords, return mosque-based timings (Naperville etc.)
+    const hasSelectedMosqueCoords =
+      !!userSettings.mosqueId &&
+      typeof userSettings.mosqueLat === "number" &&
+      typeof userSettings.mosqueLng === "number";
 
-  res.json(result);
+    const methodNum = aladhanMethodNumber(
+      req.query.method ?? userSettings.calculationMethod,
+      PRAYER_METHOD_DEFAULT
+    );
+
+    // --------------------------
+    // 1) MOSQUE MODE (SYNC DASHBOARD TO SELECTED MOSQUE)
+    // --------------------------
+    if (hasSelectedMosqueCoords) {
+      const prayers = await aladhanTimingsByCoords(
+        userSettings.mosqueLat,
+        userSettings.mosqueLng,
+        isoDate,
+        methodNum
+      );
+
+      // tomorrow fajr used by dashboard for "after isha" next prayer display
+      const tomorrowISO = addDaysISO(isoDate, 1);
+      const tomorrowPrayers = await aladhanTimingsByCoords(
+        userSettings.mosqueLat,
+        userSettings.mosqueLng,
+        tomorrowISO,
+        methodNum
+      );
+
+      if (prayers) {
+        return res.json({
+          date: isoDate,
+          location: {
+            city: userSettings.city,
+            country: userSettings.country,
+            timezone: userSettings.timezone,
+          },
+          source: "mosque",
+          mosque: {
+            id: userSettings.mosqueId,
+            name: userSettings.mosqueName,
+            address: userSettings.mosqueAddress,
+            location: { lat: userSettings.mosqueLat, lng: userSettings.mosqueLng },
+          },
+          settingsUsed: {
+            method: userSettings.calculationMethod,
+            madhhab: userSettings.madhhab,
+            shia: !!normalizedShia,
+            highLatitudeMethod: userSettings.highLatitudeMethod,
+          },
+          prayers,
+          nextFajr: tomorrowPrayers?.fajr ?? null,
+          nextFajrDate: tomorrowISO,
+          meta: {
+            provider: "aladhan",
+            method: methodNum,
+          },
+        });
+      }
+
+      console.warn("AlAdhan returned no timings; falling back to calculation.");
+    }
+
+    // --------------------------
+    // 2) FALLBACK MODE (CITY/CALCULATION)
+    // --------------------------
+    const {
+      city = userSettings.city,
+      country = userSettings.country,
+      method = userSettings.calculationMethod,
+      madhhab = userSettings.madhhab,
+      timezone = userSettings.timezone,
+    } = req.query;
+
+    const result = buildPrayerTimesForDate({
+      date: isoDate,
+      city,
+      country,
+      method,
+      madhhab,
+      shia: normalizedShia,
+      mosqueId: req.query.mosqueId,
+      timezone,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    console.error("Error in /api/prayer-times/today:", err);
+    return res.status(500).json({ error: "Failed to compute today's prayer times." });
+  }
 });
 
 app.get("/api/prayer-times/month", (req, res) => {
@@ -758,56 +1063,64 @@ app.get("/api/prayer-times/month", (req, res) => {
 //   });
 // });
 
-// --------------------------------------
-// MOSQUE SEARCH – REAL (Google Places)
-// --------------------------------------
-// --------------------------------------
-// MOSQUE SEARCH – REAL (Google Places)
-// --------------------------------------
+// ---------------------------------------------------------------------------
+// Mosque search: Google Places proxy
+// ---------------------------------------------------------------------------
+// /api/mosques/search?q=Chicago
 app.get('/api/mosques/search', async (req, res) => {
   try {
-    const { q, country } = req.query;
+    const { q, country, bias, lat, lng, radius } = req.query;
 
     if (!q || typeof q !== 'string') {
-      return res
-        .status(400)
-        .json({ error: 'Missing q query param (city or mosque name)' });
+      return res.status(400).json({ error: 'Missing q query param' });
+    }
+    if (!GOOGLE_PLACES_API_KEY) {
+      return res.status(500).json({ error: 'Google Places API key not configured' });
     }
 
-    const query = encodeURIComponent(`mosque ${q}`);
+    // Only US + PK for now (your requirement)
+    const c = String(country || userSettings.country || 'US').toUpperCase();
+    const region = c === 'PK' ? 'pk' : 'us';
 
-    // Optional: narrow Google results by country/region.
-    // We support US + Pakistan explicitly for now; everything else is global.
-    let regionParam = '';
-    if (typeof country === 'string') {
-      const c = country.toLowerCase();
-      if (c === 'us' || c === 'usa' || c.includes('united states')) {
-        regionParam = '&region=us';
-      } else if (c === 'pk' || c === 'pakistan') {
-        regionParam = '&region=pk';
+    const isUserBias = String(bias || '').toLowerCase() === 'user';
+
+    let url = '';
+    if (isUserBias) {
+      if (typeof lat !== 'string' || typeof lng !== 'string') {
+        return res.status(400).json({ error: 'bias=user requires lat and lng' });
       }
-    }
 
-    const url =
-      `https://maps.googleapis.com/maps/api/place/textsearch/json` +
-      `?query=${query}&type=mosque${regionParam}&key=${GOOGLE_PLACES_API_KEY}`;
+      const r = Number(radius || 25000);
+
+      // Nearby Search: mosques around user onboarding coords
+      url =
+        `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+        `?location=${encodeURIComponent(lat)},${encodeURIComponent(lng)}` +
+        `&radius=${encodeURIComponent(String(r))}` +
+        `&keyword=${encodeURIComponent('mosque')}` +
+        `&type=${encodeURIComponent('mosque')}` +
+        `&key=${GOOGLE_PLACES_API_KEY}`;
+    } else {
+      // Text Search: mosques in the user typed area (NO Chicago bias)
+      const text = `mosque in ${q}`;
+      url =
+        `https://maps.googleapis.com/maps/api/place/textsearch/json` +
+        `?query=${encodeURIComponent(text)}` +
+        `&type=${encodeURIComponent('mosque')}` +
+        `&region=${encodeURIComponent(region)}` +
+        `&key=${GOOGLE_PLACES_API_KEY}`;
+    }
 
     const resp = await fetch(url);
     if (!resp.ok) {
       console.error('Google Places HTTP error status:', resp.status);
-      return res
-        .status(502)
-        .json({ error: 'Failed to fetch mosques from Google Places' });
+      return res.status(502).json({ error: 'Failed to fetch mosques from Google Places' });
     }
 
     const data = await resp.json();
 
     if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-      console.error(
-        'Google Places API status:',
-        data.status,
-        data.error_message,
-      );
+      console.error('Google Places status:', data.status, data.error_message);
       return res.status(502).json({
         error: 'Unexpected response status from Google Places',
         apiStatus: data.status,
@@ -818,7 +1131,7 @@ app.get('/api/mosques/search', async (req, res) => {
     const mosques = (data.results || []).map((m) => ({
       placeId: m.place_id,
       name: m.name,
-      address: m.formatted_address,
+      address: m.vicinity || m.formatted_address,
       location: {
         lat: m.geometry?.location?.lat,
         lng: m.geometry?.location?.lng,
@@ -832,43 +1145,17 @@ app.get('/api/mosques/search', async (req, res) => {
   }
 });
 
+
 // --------------------------------------
-// MOSQUE TIMETABLE – legacy mock timetable
+// Mosque timetable endpoint – not using any fake data.
+// Prayer times are always calculated from real coordinates.
 // --------------------------------------
-// app.get("/api/mosques/:id/timetable", (req, res) => {
-//   const mosqueId = req.params.id;
-//   const date = req.query.date || new Date().toISOString().slice(0, 10);
-
-//   const mosque = mockMosques.find((m) => m.id === mosqueId);
-//   if (!mosque) {
-//     return res.status(404).json({ error: "Mosque not found" });
-//   }
-
-//   const row = findMosqueTimes(mosqueId, date);
-//   if (!row) {
-//     return res.json({
-//       mosque,
-//       date,
-//       hasTimetable: false,
-//       message: "No timetable row for this date (using calculation fallback).",
-//     });
-//   }
-
-//   res.json({
-//     mosque,
-//     date,
-//     hasTimetable: true,
-//     prayers: {
-//       fajr: row.fajr,
-//       sunrise: row.sunrise,
-//       dhuhr: row.dhuhr,
-//       asr: row.asr,
-//       maghrib: row.maghrib,
-//       isha: row.isha,
-//     },
-//   });
-// });
-
+app.get("/api/mosques/:id/timetable", (req, res) => {
+  return res.status(501).json({
+    error:
+      "Mosque-specific timetables are not implemented yet. Prayer times are calculated from your selected city/mosque location.",
+  });
+});
 // --------------------------------------
 // MOSQUE TIMINGS – REAL (Google Places + AlAdhan)
 // --------------------------------------
