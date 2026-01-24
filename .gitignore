@@ -18,3 +18,23 @@ pnpm-debug.log*
 # misc
 .DS_Store
 Thumbs.db
+# node
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# env files (secrets)
+.env
+.env.*
+!.env.example
+
+# vite/build outputs
+**/dist/
+**/build/
+**/.vite/
+
+# misc
+.DS_Store
+Thumbs.db
