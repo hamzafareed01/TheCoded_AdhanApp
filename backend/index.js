@@ -669,7 +669,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", message: "Adhan backend running" });
+  res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() });
 });
 
 // ---------------------------------------------------------------------------
@@ -1694,7 +1694,7 @@ app.get("/api/qiblah", (req, res) => {
 // --------------------------------------
 // START SERVER
 // --------------------------------------
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 8080;
 
 const server = app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
