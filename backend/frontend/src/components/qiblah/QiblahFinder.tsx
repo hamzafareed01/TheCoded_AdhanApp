@@ -1,34 +1,55 @@
 // frontend/src/components/qiblah/QiblahFinder.tsx
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
+import { apiFetch } from "../../lib/api";
 
 type QiblahResult = {
   location: { lat: number; lon: number };
   kaaba: { lat: number; lon: number };
-  bearing: number;      // degrees from true north
-  direction: string;    // e.g. "NE"
+  bearing: number; // degrees from true north
+  direction: string; // e.g. "NE"
   source: string;
   message: string;
 };
 
-export default function QiblahFinder() {
-  const [latInput, setLatInput] = useState<string>("");
-  const [lngInput, setLngInput] = useState<string>("");
+function speak(text: string) {
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    synth.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    synth.speak(utter);
+  } catch {
+    // ignore
+  }
+}
 
-  const [loading, setLoading] = useState(false);
+export default function QiblahFinder() {
   const [result, setResult] = useState<QiblahResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const [latInput, setLatInput] = useState("");
+  const [lngInput, setLngInput] = useState("");
+
+  const [autoAnnounce, setAutoAnnounce] = useState(false);
+
+  const canSpeak = useMemo(() => typeof window !== "undefined" && "speechSynthesis" in window, []);
+
+  useEffect(() => {
+    if (autoAnnounce && result) {
+      speak(`Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${result.direction}.`);
+    }
+  }, [autoAnnounce, result]);
 
   const callBackend = async (lat: number, lng: number) => {
     try {
       setLoading(true);
       setError(null);
 
-      const res = await fetch(
-        `http://localhost:4000/api/qiblah?lat=${lat}&lng=${lng}`
-      );
+      const res = await apiFetch(`/api/qiblah?lat=${lat}&lng=${lng}`);
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -46,7 +67,7 @@ export default function QiblahFinder() {
     }
   };
 
-  const handleUseMyLocation = () => {
+  const handleUseCurrent = () => {
     setError(null);
     setResult(null);
 
@@ -77,8 +98,8 @@ export default function QiblahFinder() {
     setError(null);
     setResult(null);
 
-    const lat = parseFloat(latInput);
-    const lng = parseFloat(lngInput);
+    const lat = Number(latInput);
+    const lng = Number(lngInput);
 
     if (Number.isNaN(lat) || Number.isNaN(lng)) {
       setError("Please enter valid latitude and longitude.");
@@ -88,130 +109,114 @@ export default function QiblahFinder() {
     callBackend(lat, lng);
   };
 
-  // Helper for a simple “compass” style dial
-  const bearingStyle = result
-    ? { transform: `rotate(${result.bearing}deg)` }
-    : {};
+  const handleAnnounce = () => {
+    if (!result) return;
+    speak(`Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${result.direction}.`);
+  };
 
   return (
-    <div className="min-h-screen bg-slate-950 py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
+    <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
+      <div className="max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
           <Logo />
           <Navigation />
         </div>
 
-        <h1 className="text-white text-2xl md:text-3xl mb-2">
-          Qiblah Finder
-        </h1>
-        <p className="text-slate-400 mb-6">
-          Find the direction of the Kaaba from your current location.
-        </p>
+        <header className="mb-6">
+          <h1 className="text-white text-2xl md:text-3xl mb-2">Qiblah Finder</h1>
+          <p className="text-slate-400">
+            Find the direction of the Kaaba from your current location, or enter coordinates manually.
+          </p>
+        </header>
 
-        {/* Controls */}
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
-          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
-            <h2 className="text-white mb-3">Use my current location</h2>
-            <p className="text-slate-400 text-sm mb-4">
-              We will request browser geolocation, then calculate Qiblah
-              direction using the backend.
-            </p>
-            <Button
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={handleUseMyLocation}
-              disabled={loading}
-            >
-              {loading ? "Detecting location..." : "Use my location"}
-            </Button>
-          </div>
-
-          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
-            <h2 className="text-white mb-3">Enter manually</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-slate-400 text-sm mb-1">
-                  Latitude
-                </label>
-                <input
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  placeholder="e.g. 41.8781"
-                  value={latInput}
-                  onChange={(e) => setLatInput(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-slate-400 text-sm mb-1">
-                  Longitude
-                </label>
-                <input
-                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  placeholder="-87.6298"
-                  value={lngInput}
-                  onChange={(e) => setLngInput(e.target.value)}
-                />
-              </div>
-              <Button
-                variant="outline"
-                className="w-full border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
-                onClick={handleUseManual}
-                disabled={loading}
-              >
-                {loading ? "Calculating..." : "Calculate Qiblah"}
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Error */}
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="mb-6 p-4 rounded-2xl border border-red-900/60 bg-red-950/30 text-red-200">
             {error}
           </div>
         )}
 
-        {/* Result */}
-        {result && !error && (
-          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl flex flex-col md:flex-row gap-6">
-            <div className="flex-1">
-              <h2 className="text-white mb-2">Result</h2>
-              <p className="text-slate-400 text-sm mb-4">
-                {result.message}
-              </p>
-              <div className="space-y-2 text-sm text-slate-300">
-                <div>
-                  <span className="text-slate-400">Bearing: </span>
-                  {result.bearing.toFixed(1)}°
-                </div>
-                <div>
-                  <span className="text-slate-400">Direction: </span>
-                  {result.direction}
-                </div>
-                <div>
-                  <span className="text-slate-400">Your location: </span>
-                  {result.location.lat.toFixed(4)},{" "}
-                  {result.location.lon.toFixed(4)}
-                </div>
-                <div className="text-slate-500 text-xs">
-                  Source: {result.source}
-                </div>
-              </div>
+        <div className="grid md:grid-cols-2 gap-6 mb-8">
+          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
+            <h2 className="text-white mb-3">Use my current location</h2>
+            <p className="text-slate-400 text-sm mb-4">
+              We will request browser geolocation, then calculate Qiblah direction using the backend.
+            </p>
+            <Button
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={handleUseCurrent}
+              disabled={loading}
+            >
+              {loading ? "Locating…" : "Use Current Location"}
+            </Button>
+          </div>
+
+          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
+            <h2 className="text-white mb-3">Enter coordinates</h2>
+            <p className="text-slate-400 text-sm mb-4">
+              Paste latitude/longitude from Maps if you prefer manual entry.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <input
+                className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-emerald-600"
+                placeholder="Latitude"
+                value={latInput}
+                onChange={(e) => setLatInput(e.target.value)}
+              />
+              <input
+                className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-slate-100 outline-none focus:ring-2 focus:ring-emerald-600"
+                placeholder="Longitude"
+                value={lngInput}
+                onChange={(e) => setLngInput(e.target.value)}
+              />
             </div>
 
-            {/* Simple compass */}
-            <div className="flex items-center justify-center md:w-56">
-              <div className="relative w-40 h-40 rounded-full border border-slate-700 bg-slate-950 flex items-center justify-center">
-                {/* Static N/E/S/W markers */}
-                <div className="absolute top-2 text-xs text-slate-400">N</div>
-                <div className="absolute bottom-2 text-xs text-slate-400">S</div>
-                <div className="absolute right-2 text-xs text-slate-400">E</div>
-                <div className="absolute left-2 text-xs text-slate-400">W</div>
+            <Button
+              className="w-full bg-slate-200 hover:bg-white text-slate-900"
+              onClick={handleUseManual}
+              disabled={loading}
+            >
+              {loading ? "Calculating…" : "Find Qiblah"}
+            </Button>
+          </div>
+        </div>
 
-                {/* Needle */}
-                <div
-                  className="w-1 h-14 bg-emerald-500 rounded-full origin-bottom transition-transform"
-                  style={bearingStyle}
-                />
+        {result && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h3 className="text-white text-xl mb-1">Result</h3>
+                <p className="text-slate-300">{result.message}</p>
+                <p className="text-slate-400 text-sm mt-2">
+                  Bearing: <span className="text-slate-100 font-semibold">{Math.round(result.bearing)}°</span> • Direction:{" "}
+                  <span className="text-slate-100 font-semibold">{result.direction}</span>
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3 min-w-[220px]">
+                <Button
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  onClick={handleAnnounce}
+                  disabled={!canSpeak}
+                >
+                  Announce Direction
+                </Button>
+
+                <label className="flex items-center justify-between gap-3 text-slate-300 text-sm bg-slate-950/40 border border-slate-800 rounded-xl px-4 py-3">
+                  <span>Auto-announce</span>
+                  <input
+                    type="checkbox"
+                    checked={autoAnnounce}
+                    onChange={(e) => setAutoAnnounce(e.target.checked)}
+                    className="h-4 w-4 accent-emerald-600"
+                  />
+                </label>
+
+                {!canSpeak && (
+                  <p className="text-slate-500 text-xs">
+                    Speech is not available in this browser/device.
+                  </p>
+                )}
               </div>
             </div>
           </div>

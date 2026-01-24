@@ -3,6 +3,7 @@ import { Logo } from '../shared/Logo';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { apiFetch } from "../../lib/api";
 
 export type LoggedInUser = {
     userId: string;
@@ -43,7 +44,7 @@ export default function LoginView({ onLogin, storageKey }: LoginViewProps) {
         try {
             setLoading(true);
 
-            const res = await fetch('http://localhost:4000/api/auth/login', {
+            const res = await apiFetch("/api/auth/login", {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password }),

@@ -4,7 +4,7 @@ import { Logo } from '../shared/Logo';
 import { ProgressIndicator } from '../shared/ProgressIndicator';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
-import { CheckCircle, Settings } from 'lucide-react';
+import { CheckCircle } from 'lucide-react';
 import {
   AlexaIcon,
   GoogleIcon,
@@ -12,7 +12,7 @@ import {
   SamsungIcon,
   SonosIcon,
 } from '../shared/BrandIcons';
-import { ensureAmazonSdk } from '../../lib/amazonLogin';
+import { apiFetch } from '../../lib/api';
 
 const platformIconMap: any = {
   alexa: AlexaIcon,
@@ -23,7 +23,7 @@ const platformIconMap: any = {
 };
 
 const platformDetails: any = {
-  alexa: { name: 'Amazon Alexa', buttonText: 'Connect Amazon' },
+  alexa: { name: 'Amazon Alexa', buttonText: 'Login with Amazon' },
   google: { name: 'Google Assistant', buttonText: 'Connect Google' },
   apple: { name: 'Apple Home', buttonText: 'Show HomeKit setup code' },
   samsung: { name: 'Samsung SmartThings', buttonText: 'Connect SmartThings' },
@@ -34,145 +34,220 @@ const platformDetails: any = {
   },
 };
 
+// -------- Amazon SDK Loader (robust) --------
+let amazonSdkPromise: Promise<any> | null = null;
+
+function getAmazonClientId(): string {
+  const id = (import.meta as any).env?.VITE_AMAZON_CLIENT_ID;
+  return (id || '').trim();
+}
+
+function getReturnUrl(): string {
+  const envUrl = (import.meta as any).env?.VITE_AMAZON_RETURN_URL;
+  const fallback = `${window.location.origin}/onboarding/step2`;
+  return (envUrl || fallback).trim();
+}
+
+function waitFor(condition: () => boolean, timeoutMs = 12000, intervalMs = 50) {
+  return new Promise<void>((resolve, reject) => {
+    const start = Date.now();
+    const t = setInterval(() => {
+      if (condition()) {
+        clearInterval(t);
+        resolve();
+      } else if (Date.now() - start > timeoutMs) {
+        clearInterval(t);
+        reject(new Error('Timed out waiting for Amazon Login SDK'));
+      }
+    }, intervalMs);
+  });
+}
+
+async function loadAmazonSdk(): Promise<any> {
+  if (amazonSdkPromise) return amazonSdkPromise;
+
+  amazonSdkPromise = (async () => {
+    const clientId = getAmazonClientId();
+    if (!clientId) {
+      throw new Error('Missing VITE_AMAZON_CLIENT_ID in frontend .env');
+    }
+
+    const w: any = window as any;
+    if (w.amazon?.Login) {
+      w.amazon.Login.setClientId(clientId);
+      return w.amazon;
+    }
+
+    const existing = document.getElementById('amazon-login-sdk') as HTMLScriptElement | null;
+    if (!existing) {
+      const s = document.createElement('script');
+      s.id = 'amazon-login-sdk';
+      s.src = 'https://api-cdn.amazon.com/sdk/login1.js';
+      s.async = true;
+      s.defer = true;
+      document.head.appendChild(s);
+    }
+
+    await waitFor(() => {
+      const ww: any = window as any;
+      return !!(ww.amazon && ww.amazon.Login && typeof ww.amazon.Login.setClientId === 'function');
+    });
+
+    const amazon = (window as any).amazon;
+    amazon.Login.setClientId(clientId);
+    return amazon;
+  })();
+
+  return amazonSdkPromise;
+}
+
+function randomState(len = 16) {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let out = '';
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+// -------------------------------------------
+
 export default function Step2ConnectAccounts({ onboardingData, setOnboardingData }: any) {
   const navigate = useNavigate();
 
-  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>(
-    onboardingData.connectedPlatforms || []
-  );
+  const selectedPlatforms = onboardingData.selectedPlatforms || [];
+
+  // IMPORTANT: start every visit as "not connected"
+  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedPlatforms = onboardingData.selectedPlatforms || [];
+  // Force re-login behavior: every time Step2 loads, clear any remembered connection
   useEffect(() => {
-    async function syncFromBackend() {
+    setConnectedPlatforms([]);
+
+    // Also clear it from onboardingData so refresh/back doesn't keep it
+    setOnboardingData((prev: any) => ({
+      ...prev,
+      connectedPlatforms: [],
+    }));
+
+    // OPTIONAL but recommended: clear server-side saved token so backend doesn't say "connected"
+    // If you add the backend route, this will work. If not, it just fails silently.
+    (async () => {
       try {
-        const res = await fetch('http://localhost:4000/api/integrations');
-        if (!res.ok) return;
-
-        const data = await res.json();
-
-        const initial: string[] = [];
-        if (data.alexa?.connected) initial.push('alexa');
-        if (data.google?.connected) initial.push('google');
-        if (data.apple?.connected) initial.push('apple');
-        // you can extend this later for samsung/sonos when they’re real
-
-        if (initial.length) {
-          setConnectedPlatforms((prev) => {
-            const merged = new Set([...prev, ...initial]);
-            return Array.from(merged);
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to load integration status from backend', err);
+        await apiFetch('/api/integrations/alexa/logout', { method: 'POST' });
+      } catch {
+        // ignore
       }
-    }
+    })();
 
-    syncFromBackend();
+    // Also try to log out from Amazon SDK context (helps avoid silent auth)
+    (async () => {
+      try {
+        const amazon = await loadAmazonSdk();
+        if (amazon?.Login?.logout) amazon.Login.logout();
+      } catch {
+        // ignore
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const markConnected = (platformId: string) => {
-    setConnectedPlatforms((prev) =>
-      prev.includes(platformId) ? prev : [...prev, platformId]
-    );
-
-    // Phase 0: tell the backend that Alexa is linked
-    if (platformId === 'alexa') {
-      fetch('http://localhost:4000/api/integrations/alexa/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // In Phase 0 we don’t really validate this on the backend;
-          // it just flips the "connected" flag.
-          accessToken: 'demo-front-only',
-          profile: null,
-        }),
-      }).catch((err) => {
-        console.warn('Could not update Alexa integration status on backend', err);
-      });
-    }
+    setConnectedPlatforms((prev) => (prev.includes(platformId) ? prev : [...prev, platformId]));
   };
 
+  const connectAmazonPopup = async () => {
+    setError(null);
+    setConnecting('alexa');
+
+    try {
+      const amazon = await loadAmazonSdk();
+      const returnUrl = getReturnUrl();
+
+      // Force prompt-like behavior as much as possible
+      // (logout() above helps; extra fields are safe even if SDK ignores them)
+      try {
+        if (amazon?.Login?.logout) amazon.Login.logout();
+      } catch {
+        // ignore
+      }
+
+      const options: any = {
+        scope: 'profile',
+        response_type: 'token',
+        redirect_uri: returnUrl,
+        popup: true,
+        state: randomState(),
+
+        // best-effort "force login" hints (ignored if unsupported)
+        prompt: 'login',
+        interactive: 'always',
+      };
+
+      amazon.Login.authorize(options, async (response: any) => {
+        if (response?.error) {
+          setError(
+            response.error_description ||
+              'Amazon login failed or was cancelled. Please try again.'
+          );
+          setConnecting(null);
+          return;
+        }
+
+        const accessToken = response?.access_token;
+        if (!accessToken) {
+          setError('Amazon did not return an access token. Check return URL settings.');
+          setConnecting(null);
+          return;
+        }
+
+        // Correct SDK usage: retrieveProfile(callback)
+        let profile: any = null;
+        try {
+          await new Promise<void>((resolve) => {
+            amazon.Login.retrieveProfile((profileResponse: any) => {
+              if (profileResponse?.success) profile = profileResponse.profile;
+              resolve();
+            });
+          });
+        } catch {
+          // ignore
+        }
+
+        // Save to backend
+        try {
+          const r = await apiFetch('/api/integrations/alexa/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accessToken, profile }),
+          });
+
+          if (!r.ok) {
+            const msg = await r.text().catch(() => '');
+            throw new Error(`Backend /alexa/login failed: ${r.status} ${msg}`);
+          }
+        } catch {
+          setError('Connected to Amazon, but backend could not save connection.');
+          // still allow user to proceed if they want
+        }
+
+        markConnected('alexa');
+        setConnecting(null);
+      });
+    } catch (e: any) {
+      setConnecting(null);
+      setError(e?.message || 'Could not start Amazon login. Check console.');
+    }
+  };
 
   const handleConnect = async (platformId: string) => {
     setError(null);
 
-    // Real Login with Amazon flow for Alexa
     if (platformId === 'alexa') {
-      try {
-        setConnecting('alexa');
-
-        // 1) Load SDK + set clientId
-        await ensureAmazonSdk();
-
-        const amazon = (window as any).amazon;
-        if (!amazon || !amazon.Login) {
-          throw new Error('Amazon SDK not available');
-        }
-
-        // 2) Use simple popup implicit flow (access_token directly)
-        const options: any = {
-          scope: 'profile',
-          popup: true, // keep user on our page, open Amazon in popup
-        };
-
-        amazon.Login.authorize(options, function (response: any) {
-          // This callback runs AFTER the popup closes
-          setConnecting(null);
-
-          if (response.error) {
-            console.error('Amazon auth error:', response.error);
-            setError('Could not connect your Amazon account. Please try again.');
-            return;
-          }
-
-          const accessToken = response.access_token;
-          if (!accessToken) {
-            setError('No access token returned from Amazon.');
-            return;
-          }
-
-          // 3) Optional: fetch profile so we know which account is linked
-          amazon.Login.retrieveProfile(
-            accessToken,
-            async function (profileResponse: any) {
-              if (!profileResponse.success) {
-                console.warn('Profile lookup error:', profileResponse.error);
-              }
-
-              const profile = profileResponse.profile;
-
-              // 4) Tell our backend (non-blocking for Phase 0)
-              try {
-                await fetch('http://localhost:4000/api/integrations/alexa/login', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    accessToken,
-                    profile,
-                  }),
-                });
-              } catch (e) {
-                console.warn('Backend /alexa/login failed (Phase 0 demo only):', e);
-              }
-
-              // 5) Mark Alexa as connected in onboarding state
-              markConnected('alexa');
-            }
-          );
-        });
-      } catch (err) {
-        console.error(err);
-        setConnecting(null);
-        setError('Could not start Login with Amazon. Check console for details.');
-      }
-
+      await connectAmazonPopup();
       return;
     }
 
-
-    // For other platforms we still just mock “connected” for Phase 0
+    // other platforms still mock
     markConnected(platformId);
   };
 
@@ -181,18 +256,18 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     navigate('/onboarding/step3');
   };
 
+  const isBusy = connecting === 'alexa';
+
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
       <div className="max-w-4xl mx-auto">
         <Logo className="mb-8" />
-
         <ProgressIndicator currentStep={2} totalSteps={6} />
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
           <h1 className="text-white mb-4">Connect your accounts</h1>
           <p className="text-slate-300 mb-4">
-            Connect your smart home accounts so we can discover your devices and schedule
-            Adhan safely.
+            Connect your smart home accounts so we can discover your devices and schedule Adhan safely.
           </p>
 
           {error && (
@@ -206,7 +281,6 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
               const platform = platformDetails[platformId];
               const isConnected = connectedPlatforms.includes(platformId);
               const IconComponent = platformIconMap[platformId];
-              const isBusy = connecting === platformId;
 
               return (
                 <div
@@ -218,46 +292,37 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
                       <IconComponent className="w-12 h-12" />
                       <div>
                         <div className="text-white mb-1">{platform.name}</div>
+
                         {isConnected ? (
-                          <div className="flex items-center gap-2">
-                            <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                              <CheckCircle className="w-3 h-3 mr-1" />
-                              Connected
-                            </Badge>
-                          </div>
+                          <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                            <CheckCircle className="w-3 h-3 mr-1" />
+                            Connected
+                          </Badge>
                         ) : (
                           <div className="text-slate-400 text-sm">
-                            {isBusy ? 'Waiting for Amazon…' : 'Not connected'}
+                            {platformId === 'alexa' && isBusy
+                              ? 'Waiting for Amazon login…'
+                              : 'Not connected'}
                           </div>
                         )}
+
                         {platform.helper && (
-                          <div className="text-slate-500 text-sm mt-1">
-                            {platform.helper}
-                          </div>
+                          <div className="text-slate-500 text-sm mt-1">{platform.helper}</div>
                         )}
                       </div>
                     </div>
 
                     <div>
-                      {isConnected ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-slate-600 text-slate-300 hover:bg-slate-700"
-                        >
-                          <Settings className="w-4 h-4 mr-2" />
-                          Manage
-                        </Button>
-                      ) : (
-                        <Button
-                          onClick={() => handleConnect(platformId)}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                          size="sm"
-                          disabled={isBusy || platformId === 'sonos'}
-                        >
-                          {isBusy ? 'Connecting…' : platform.buttonText}
-                        </Button>
-                      )}
+                      <Button
+                        onClick={() => handleConnect(platformId)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                        size="sm"
+                        disabled={(platformId === 'alexa' && isBusy) || platformId === 'sonos'}
+                      >
+                        {platformId === 'alexa' && isBusy
+                          ? 'Connecting…'
+                          : platform.buttonText}
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -274,6 +339,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
             >
               Back
             </Button>
+
             <Button
               onClick={handleNext}
               disabled={connectedPlatforms.length === 0}
@@ -288,4 +354,3 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     </div>
   );
 }
-

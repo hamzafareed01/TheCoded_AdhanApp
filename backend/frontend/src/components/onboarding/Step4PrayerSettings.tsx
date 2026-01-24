@@ -1,32 +1,41 @@
-// frontend/src/components/onboarding/Step4PrayerSettings.tsx
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Logo } from "../shared/Logo";
-import { ProgressIndicator } from "../shared/ProgressIndicator";
-import { Button } from "../ui/button";
-import { Label } from "../ui/label";
+/**
+ * Step 4 – Prayer Settings (Onboarding)
+ *
+ * PURPOSE:
+ * - Let the user choose between Sunni and Shia
+ * - If Sunni:
+ *    - Default: Hanafi + ISNA
+ *    - Allow all Sunni calculation methods
+ * - If Shia:
+ *    - Let user choose Jafari or Tehran
+ *    - Force Shia mode ON
+ *    - Hide Sunni-only controls (Asr madhhab)
+ *
+ * IMPORTANT:
+ * - calculationMethod stores BOTH Sunni + Shia methods
+ * - shia boolean is the mode switch used by Dashboard + Backend
+ */
+
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Logo } from '../shared/Logo';
+import { ProgressIndicator } from '../shared/ProgressIndicator';
+import { Button } from '../ui/button';
+import { Label } from '../ui/label';
 import {
   Select,
+  SelectTrigger,
   SelectContent,
   SelectItem,
-  SelectTrigger,
   SelectValue,
-} from "../ui/select";
-import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
+} from '../ui/select';
 
 type PrayerSettings = {
-  calculationMethod:
-    | "isna"
-    | "mwl"
-    | "umm-al-qura"
-    | "karachi"
-    | "moonsighting"
-    | "other"
-    | string; // future methods
-  madhab: "sunni" | "shia";
-  asrMethod: "standard" | "hanafi";
-  // UI values – Step6Summary maps these to backend values
-  highLatitudeMode: "auto" | "middle-of-the-night" | "angle-based" | "one-seventh";
+  madhab: 'sunni' | 'shia';
+  shia: boolean;
+  madhhab: 'hanafi' | 'shafi';
+  calculationMethod: string;
+  highLatitudeMethod: string;
 };
 
 type Step4PrayerSettingsProps = {
@@ -34,205 +43,176 @@ type Step4PrayerSettingsProps = {
   setOnboardingData: (data: any) => void;
 };
 
+// Sunni + Shia calculation methods
+const SUNNI_METHODS = [
+  { value: 'isna', label: 'ISNA (North America)' },
+  { value: 'mwl', label: 'Muslim World League' },
+  { value: 'karachi', label: 'Karachi' },
+  { value: 'egypt', label: 'Egyptian Authority' },
+  { value: 'umm-al-qura', label: 'Umm al-Qura (Makkah)' },
+  { value: 'moonsighting', label: 'Moonsighting Committee' },
+];
+
+const SHIA_METHODS = [
+  { value: 'jafari', label: 'Jafari (Shia)' },
+  { value: 'tehran', label: 'Tehran (Shia)' },
+];
+
 export default function Step4PrayerSettings({
   onboardingData,
   setOnboardingData,
 }: Step4PrayerSettingsProps) {
   const navigate = useNavigate();
 
-  const locationCountry: "US" | "PK" =
-    onboardingData.location?.country === "PK" ? "PK" : "US";
+  // 🔹 Initialize from onboardingData or defaults
+  const [settings, setSettings] = useState<PrayerSettings>(() => ({
+    madhab: onboardingData.prayerSettings?.madhab ?? 'sunni',
+    shia: onboardingData.prayerSettings?.shia ?? false,
+    madhhab: onboardingData.prayerSettings?.madhhab ?? 'hanafi',
+    calculationMethod:
+      onboardingData.prayerSettings?.calculationMethod ?? 'isna',
+    highLatitudeMethod:
+      onboardingData.prayerSettings?.highLatitudeMethod ?? 'auto',
+  }));
 
-  const [prayerSettings, setPrayerSettings] = useState<PrayerSettings>(() => {
-    const existing = onboardingData.prayerSettings || {};
+  /**
+   * Handle Sunni ↔ Shia switch
+   */
+  const handleMadhabChange = (value: 'sunni' | 'shia') => {
+    if (value === 'shia') {
+      // ✅ Switch to Shia mode
+      setSettings({
+        madhab: 'shia',
+        shia: true,
+        madhhab: 'shafi', // Asr madhhab irrelevant for Shia
+        calculationMethod: 'jafari', // default Shia method
+        highLatitudeMethod: 'auto',
+      });
+    } else {
+      // ✅ Switch back to Sunni defaults
+      setSettings({
+        madhab: 'sunni',
+        shia: false,
+        madhhab: 'hanafi',
+        calculationMethod: 'isna',
+        highLatitudeMethod: 'auto',
+      });
+    }
+  };
 
-    return {
-      calculationMethod:
-        existing.calculationMethod ||
-        (locationCountry === "PK" ? "karachi" : "isna"),
-      madhab: (existing.madhab as "sunni" | "shia") || "sunni",
-      asrMethod:
-        (existing.asrMethod as "standard" | "hanafi") ||
-        (locationCountry === "PK" ? "hanafi" : "standard"),
-      highLatitudeMode:
-        (existing.highLatitudeMode as
-          | "auto"
-          | "middle-of-the-night"
-          | "angle-based"
-          | "one-seventh") || "auto",
-    };
-  });
-
+  /**
+   * Save & continue
+   */
   const handleNext = () => {
-    setOnboardingData({ ...onboardingData, prayerSettings });
-    navigate("/onboarding/step5");
+    setOnboardingData({
+      ...onboardingData,
+      prayerSettings: {
+        madhab: settings.madhab,
+        shia: settings.shia,
+        madhhab: settings.madhhab,
+        calculationMethod: settings.calculationMethod,
+        highLatitudeMethod: settings.highLatitudeMethod,
+      },
+    });
+
+    navigate('/onboarding/step5');
   };
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
       <div className="max-w-4xl mx-auto">
         <Logo className="mb-8" />
-
         <ProgressIndicator currentStep={4} totalSteps={6} />
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
-          <h1 className="text-white mb-4">Prayer Settings</h1>
+          <h1 className="text-white mb-4">Prayer calculation preferences</h1>
           <p className="text-slate-300 mb-8">
-            Configure how your prayer times are calculated.
+            Choose how prayer times should be calculated.
           </p>
 
-          <div className="space-y-8 mb-8">
-            {/* Madhab Selection */}
+          <div className="space-y-6">
+            {/* Sunni / Shia selector */}
             <div>
-              <Label className="text-white mb-3 block">Madhab</Label>
-              <RadioGroup
-                value={prayerSettings.madhab}
-                onValueChange={(value: "sunni" | "shia") =>
-                  setPrayerSettings({ ...prayerSettings, madhab: value })
-                }
-                className="space-y-3"
-              >
-                <div className="flex items-center gap-3 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-                  <RadioGroupItem value="sunni" id="madhab-sunni" />
-                  <Label
-                    htmlFor="madhab-sunni"
-                    className="text-white cursor-pointer flex-1"
-                  >
-                    Sunni
-                  </Label>
-                </div>
-                <div className="flex items-center gap-3 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-                  <RadioGroupItem value="shia" id="madhab-shia" />
-                  <Label
-                    htmlFor="madhab-shia"
-                    className="text-white cursor-pointer flex-1"
-                  >
-                    Shia (Jafari)
-                  </Label>
-                </div>
-              </RadioGroup>
-            </div>
-
-            {/* Calculation Method */}
-            <div>
-              <Label
-                htmlFor="calc-method"
-                className="text-white mb-2 block"
-              >
-                Calculation Method
-              </Label>
+              <Label className="text-white mb-2 block">Fiqh</Label>
               <Select
-                value={prayerSettings.calculationMethod}
-                onValueChange={(value: string) =>
-                  setPrayerSettings({
-                    ...prayerSettings,
-                    calculationMethod: value as PrayerSettings["calculationMethod"],
-                  })
+                value={settings.madhab}
+                onValueChange={(v: 'sunni' | 'shia') =>
+                  handleMadhabChange(v)
                 }
               >
-                <SelectTrigger
-                  id="calc-method"
-                  className="bg-slate-800 border-slate-700 text-white"
-                >
+                <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-800 border-slate-700">
-                  <SelectItem value="isna">
-                    ISNA (recommended for North America)
-                  </SelectItem>
-                  <SelectItem value="mwl">Muslim World League (MWL)</SelectItem>
-                  <SelectItem value="umm-al-qura">
-                    Umm al-Qura University (Makkah)
-                  </SelectItem>
-                  <SelectItem value="karachi">
-                    Univ. of Islamic Sciences, Karachi
-                  </SelectItem>
-                  <SelectItem value="moonsighting">
-                    Moonsighting Committee Worldwide
-                  </SelectItem>
-                  <SelectItem value="other">Other…</SelectItem>
+                  <SelectItem value="sunni">Sunni</SelectItem>
+                  <SelectItem value="shia">Shia (Jafari)</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-slate-400 text-sm mt-2">
-                Choose how your prayer times are calculated.
-              </p>
             </div>
 
-            {/* Asr Method */}
+            {/* Calculation method */}
             <div>
-              <Label className="text-white mb-3 block">Asr Method</Label>
-              <RadioGroup
-                value={prayerSettings.asrMethod}
-                onValueChange={(value: "standard" | "hanafi") =>
-                  setPrayerSettings({ ...prayerSettings, asrMethod: value })
-                }
-                className="space-y-3"
-              >
-                <div className="flex items-center gap-3 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-                  <RadioGroupItem value="standard" id="asr-standard" />
-                  <Label
-                    htmlFor="asr-standard"
-                    className="text-white cursor-pointer flex-1"
-                  >
-                    Standard (Shafi&apos;i, Maliki, Hanbali)
-                  </Label>
-                </div>
-                <div className="flex items-center gap-3 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-                  <RadioGroupItem value="hanafi" id="asr-hanafi" />
-                  <Label
-                    htmlFor="asr-hanafi"
-                    className="text-white cursor-pointer flex-1"
-                  >
-                    Hanafi
-                  </Label>
-                </div>
-              </RadioGroup>
-            </div>
-
-            {/* High Latitude Mode */}
-            <div>
-              <Label
-                htmlFor="high-lat"
-                className="text-white mb-2 block"
-              >
-                High Latitude Mode
+              <Label className="text-white mb-2 block">
+                Calculation method
               </Label>
               <Select
-                value={prayerSettings.highLatitudeMode}
-                onValueChange={(
-                  value:
-                    | "auto"
-                    | "middle-of-the-night"
-                    | "angle-based"
-                    | "one-seventh"
-                ) =>
-                  setPrayerSettings({
-                    ...prayerSettings,
-                    highLatitudeMode: value,
-                  })
+                value={settings.calculationMethod}
+                onValueChange={(v: string) =>
+                  setSettings((prev) => ({
+                    ...prev!,
+                    calculationMethod: v,
+                  }))
                 }
               >
-                <SelectTrigger
-                  id="high-lat"
-                  className="bg-slate-800 border-slate-700 text-white"
-                >
+                <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-800 border-slate-700">
-                  <SelectItem value="auto">Automatic</SelectItem>
-                  <SelectItem value="angle-based">Angle-based</SelectItem>
-                  <SelectItem value="middle-of-the-night">
-                    Middle of the night
-                  </SelectItem>
-                  <SelectItem value="one-seventh">One-seventh</SelectItem>
+                  {settings.shia
+                    ? SHIA_METHODS.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>
+                        {m.label}
+                      </SelectItem>
+                    ))
+                    : SUNNI_METHODS.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Asr madhhab (Sunni only) */}
+            {!settings.shia && (
+              <div>
+                <Label className="text-white mb-2 block">
+                  Asr madhhab
+                </Label>
+                <Select
+                  value={settings.madhhab}
+                  onValueChange={(v: 'hanafi' | 'shafi') =>
+                    setSettings((prev) => ({
+                      ...prev!,
+                      madhhab: v,
+                    }))
+                  }
+                >
+                  <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-700">
+                    <SelectItem value="hanafi">Hanafi</SelectItem>
+                    <SelectItem value="shafi">Standard (Shafi)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
-          <div className="flex gap-4">
+          <div className="flex gap-4 mt-10">
             <Button
-              onClick={() => navigate("/onboarding/step3")}
+              onClick={() => navigate('/onboarding/step3')}
               variant="outline"
               className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
               size="lg"

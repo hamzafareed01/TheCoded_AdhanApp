@@ -1,28 +1,132 @@
 [
-    {
-        "id": "morning-protection-1",
-        "category": "morning-evening",
-        "title": "Morning protection dua",
-        "textArabic": "بِسْمِ اللَّهِ الَّذِي لا يَضُرُّ ...",
-        "textTransliteration": "Bismillāhilladhī lā yaḍurru maʿa ismihī shay’un ...",
-        "textTranslation": "In the Name of Allah with whose Name nothing on earth or in the heavens can cause harm...",
-        "audioUrl": "/audio/duas/morning-protection-1.mp3",
-        "tags": [
-            "protection",
-            "daily"
-        ]
-    },
-    {
-        "id": "before-sleep-1",
-        "category": "before-sleep",
-        "title": "Before sleeping dua",
-        "textArabic": "اللَّهُمَّ بِاسْمِكَ أَمُوتُ وَأَحْيَا",
-        "textTransliteration": "Allāhumma bismika amūtu wa aḥyā",
-        "textTranslation": "O Allah, in Your Name I die and live.",
-        "audioUrl": "/audio/duas/before-sleep-1.mp3",
-        "tags": [
-            "sleep",
-            "daily"
-        ]
-    }
+  {
+    "id": "waking-up",
+    "category": "Daily Life",
+    "title": "Upon Waking Up",
+    "textArabic": "الْحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا وَإِلَيْهِ النُّشُورُ",
+    "textTransliteration": "Alhamdu lillahil-ladhi ahyana ba‘da ma amatana wa ilayhin-nushur.",
+    "textTranslation": "All praise is for Allah who gave us life after causing us to die, and to Him is the resurrection.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "before-sleep",
+    "category": "Daily Life",
+    "title": "Before Sleeping",
+    "textArabic": "بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا",
+    "textTransliteration": "Bismika Allahumma amutu wa ahya.",
+    "textTranslation": "In Your name, O Allah, I die and I live.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "before-eating",
+    "category": "Food",
+    "title": "Before Eating",
+    "textArabic": "بِسْمِ ٱللَّٰهِ",
+    "textTransliteration": "Bismillah.",
+    "textTranslation": "In the name of Allah.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "after-eating",
+    "category": "Food",
+    "title": "After Eating",
+    "textArabic": "الْحَمْدُ لِلَّهِ الَّذِي أَطْعَمَنِي هَذَا وَرَزَقَنِيهِ مِنْ غَيْرِ حَوْلٍ مِنِّي وَلَا قُوَّةٍ",
+    "textTransliteration": "Alhamdu lillahil-ladhi at‘amani hadha wa razaqanihi min ghayri hawlin minni wa la quwwah.",
+    "textTranslation": "All praise is for Allah who fed me this and provided it for me without any strength or power from me.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "entering-home",
+    "category": "Home",
+    "title": "Entering Home",
+    "textArabic": "بِسْمِ ٱللَّٰهِ وَلَجْنَا، وَبِسْمِ ٱللَّٰهِ خَرَجْنَا، وَعَلَى ٱللَّٰهِ رَبِّنَا تَوَكَّلْنَا",
+    "textTransliteration": "Bismillahi walajna, wa bismillahi kharajna, wa ‘alallahi rabbina tawakkalna.",
+    "textTranslation": "In the name of Allah we enter, in the name of Allah we leave, and upon our Lord we rely.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "leaving-home",
+    "category": "Home",
+    "title": "Leaving Home",
+    "textArabic": "بِسْمِ ٱللَّٰهِ، تَوَكَّلْتُ عَلَى ٱللَّٰهِ، وَلَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِٱللَّٰهِ",
+    "textTransliteration": "Bismillah, tawakkaltu ‘alallah, wa la hawla wa la quwwata illa billah.",
+    "textTranslation": "In the name of Allah, I rely upon Allah, and there is no power nor strength except with Allah.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "entering-restroom",
+    "category": "Restroom",
+    "title": "Entering Restroom",
+    "textArabic": "اللَّهُمَّ إِنِّي أَعُوذُ بِكَ مِنَ الْخُبُثِ وَالْخَبَائِثِ",
+    "textTransliteration": "Allahumma inni a‘udhu bika minal-khubthi wal-khaba’ith.",
+    "textTranslation": "O Allah, I seek refuge in You from male and female devils.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "leaving-restroom",
+    "category": "Restroom",
+    "title": "Leaving Restroom",
+    "textArabic": "غُفْرَانَكَ",
+    "textTransliteration": "Ghufranak.",
+    "textTranslation": "I seek Your forgiveness.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "entering-masjid",
+    "category": "Masjid",
+    "title": "Entering Masjid",
+    "textArabic": "اللَّهُمَّ افْتَحْ لِي أَبْوَابَ رَحْمَتِكَ",
+    "textTransliteration": "Allahumma iftah li abwaba rahmatik.",
+    "textTranslation": "O Allah, open for me the doors of Your mercy.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "leaving-masjid",
+    "category": "Masjid",
+    "title": "Leaving Masjid",
+    "textArabic": "اللَّهُمَّ إِنِّي أَسْأَلُكَ مِنْ فَضْلِكَ",
+    "textTransliteration": "Allahumma inni as’aluka min fadlik.",
+    "textTranslation": "O Allah, I ask You from Your bounty.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "after-adhan",
+    "category": "Prayer",
+    "title": "After Adhan",
+    "textArabic": "اللَّهُمَّ رَبَّ هٰذِهِ الدَّعْوَةِ التَّامَّةِ وَالصَّلَاةِ الْقَائِمَةِ، آتِ مُحَمَّدًا الْوَسِيلَةَ وَالْفَضِيلَةَ، وَابْعَثْهُ مَقَامًا مَحْمُودًا الَّذِي وَعَدْتَهُ",
+    "textTransliteration": "Allahumma rabba hathihid-da‘watit-tammah was-salatil-qa’imah, ati Muhammadan al-wasilata wal-fadilah, wab‘athhu maqaman mahmudan alladhi wa‘adtah.",
+    "textTranslation": "O Allah, Lord of this perfect call and established prayer, grant Muhammad the station of intercession and favor, and raise him to the praised مقام you promised him.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "after-wudu",
+    "category": "Purification",
+    "title": "After Wudu",
+    "textArabic": "أَشْهَدُ أَنْ لَا إِلَٰهَ إِلَّا ٱللَّٰهُ وَحْدَهُ لَا شَرِيكَ لَهُ، وَأَشْهَدُ أَنَّ مُحَمَّدًا عَبْدُهُ وَرَسُولُهُ",
+    "textTransliteration": "Ashhadu an la ilaha illallah wahdahu la sharika lah, wa ashhadu anna Muhammadan ‘abduhu wa rasuluh.",
+    "textTranslation": "I bear witness that there is no god but Allah alone with no partner, and I bear witness that Muhammad is His servant and messenger.",
+    "audioUrl": null,
+    "tags": []
+  },
+  {
+    "id": "travel",
+    "category": "Travel",
+    "title": "Travel Dua",
+    "textArabic": "سُبْحَانَ الَّذِي سَخَّرَ لَنَا هَٰذَا وَمَا كُنَّا لَهُ مُقْرِنِينَ، وَإِنَّا إِلَىٰ رَبِّنَا لَمُنقَلِبُونَ",
+    "textTransliteration": "Subhanal-ladhi sakhkhara lana hadha wa ma kunna lahu muqrinin, wa inna ila rabbina lamunqalibun.",
+    "textTranslation": "Glory be to the One who made this subservient to us, and we could not have done it by ourselves; and surely to our Lord we will return.",
+    "audioUrl": null,
+    "tags": []
+  }
 ]

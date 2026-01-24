@@ -1,9 +1,11 @@
 // frontend/src/components/calendar/CalendarView.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Badge } from "../ui/badge";
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
+import { Button } from "../ui/button";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
+import { apiFetch, apiUrl } from "../../lib/api";
 
 type PrayerTimes = {
   fajr: string;
@@ -14,278 +16,265 @@ type PrayerTimes = {
   isha: string;
 };
 
-type MosqueMeta = {
-  id: string;
-  name: string;
-  city: string;
-  madhhab: string;
-  hasRamadanTimetable: boolean;
-} | null;
-
-type DayRow = {
-  location: { city: string; country: string };
-  date: string; // "2025-12-10"
-  source: string; // "mosque" | "calculation"
-  mosque: MosqueMeta;
-  settingsUsed: {
-    method: string;
-    madhhab: string;
-    shia: boolean;
-  };
+type DayEntry = {
+  date: string; // YYYY-MM-DD
+  source: "calculation" | "mosque" | string;
   prayers: PrayerTimes;
 };
 
 type CalendarResponse = {
   location: { city: string; country: string };
-  month: string; // "2025-12"
-  days: DayRow[];
+  month: string; // YYYY-MM
+  days: DayEntry[];
 };
 
-export default function CalendarView() {
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [monthIndex, setMonthIndex] = useState(now.getMonth()); // 0–11
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
 
+function monthKeyFromDate(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+function buildDate(y: number, mIndex: number, day: number) {
+  return new Date(y, mIndex, day, 12, 0, 0); // noon avoids DST edge cases
+}
+
+function isoDate(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+export default function CalendarView() {
+  const today = useMemo(() => new Date(), []);
+  const [activeMonth, setActiveMonth] = useState<Date>(new Date(today.getFullYear(), today.getMonth(), 1));
   const [data, setData] = useState<CalendarResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const todayStr = useMemo(() => isoDate(today), [today]);
+  const [selectedDate, setSelectedDate] = useState<string>(todayStr);
 
-  const buildMonthKey = (y: number, mIndex: number) =>
-    `${y}-${String(mIndex + 1).padStart(2, "0")}`; // "YYYY-MM"
+  const monthKey = useMemo(() => monthKeyFromDate(activeMonth), [activeMonth]);
 
-  const fetchMonthData = async (monthKey: string) => {
+  const dayMap = useMemo(() => {
+    const map = new Map<string, DayEntry>();
+    for (const d of data?.days || []) map.set(d.date, d);
+    return map;
+  }, [data]);
+
+  const selectedDay = dayMap.get(selectedDate) || null;
+
+  // Build a 6x7 calendar grid starting from Sunday of the first week
+  const gridDates = useMemo(() => {
+    const y = activeMonth.getFullYear();
+    const m = activeMonth.getMonth();
+    const firstOfMonth = buildDate(y, m, 1);
+    const firstDow = firstOfMonth.getDay(); // 0=Sun
+    const start = buildDate(y, m, 1 - firstDow);
+
+    const cells: Date[] = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      cells.push(d);
+    }
+    return cells;
+  }, [activeMonth]);
+
+  const fetchMonth = async (key: string) => {
     try {
       setLoading(true);
       setError(null);
 
-      const url = new URL("http://localhost:4000/api/prayer-times/month");
-      url.searchParams.set("month", monthKey);
-
-      const res = await fetch(url.toString());
-      if (!res.ok) {
-        throw new Error(`Failed to load calendar (${res.status})`);
-      }
+      const res = await apiFetch(`/api/prayer-times/month?month=${encodeURIComponent(key)}`);
+      if (!res.ok) throw new Error(`Failed to load calendar (${res.status})`);
 
       const json = (await res.json()) as CalendarResponse;
       setData(json);
+
+      // If user switched months, default selectedDate to today if in month, otherwise first day
+      const inMonth = json.days.some((d) => d.date === todayStr);
+      if (monthKey === key && inMonth) setSelectedDate(todayStr);
+      else setSelectedDate(`${key}-01`);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Something went wrong while loading calendar.");
       setData(null);
+      setError(err.message || "Something went wrong while loading calendar.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Load initial month
   useEffect(() => {
-    fetchMonthData(buildMonthKey(year, monthIndex));
+    fetchMonth(monthKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [monthKey]);
 
-  const changeMonth = (offset: number) => {
-    const d = new Date(year, monthIndex + offset, 1);
-    const newYear = d.getFullYear();
-    const newMonthIndex = d.getMonth();
-    setYear(newYear);
-    setMonthIndex(newMonthIndex);
-    fetchMonthData(buildMonthKey(newYear, newMonthIndex));
+  const goMonth = (offset: number) => {
+    const y = activeMonth.getFullYear();
+    const m = activeMonth.getMonth();
+    setActiveMonth(new Date(y, m + offset, 1));
   };
 
-  const handlePrevMonth = () => changeMonth(-1);
-  const handleNextMonth = () => changeMonth(1);
-
-  const monthLabel = new Date(year, monthIndex, 1).toLocaleDateString(
-    undefined,
-    { month: "long", year: "numeric" }
-  );
-
-  const formatDateLabel = (dateStr: string) => {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    return d.toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      weekday: "short",
-    }); // e.g. "Dec 10, Wed"
+  const jumpToday = () => {
+    setActiveMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setSelectedDate(todayStr);
   };
+
+  const activeMonthLabel = useMemo(() => {
+    return activeMonth.toLocaleString(undefined, { month: "long", year: "numeric" });
+  }, [activeMonth]);
 
   return (
-    <div className="min-h-screen bg-slate-950 py-8 px-4">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
+    <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
+      <div className="max-w-7xl mx-auto">
+        {/* Top nav */}
         <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
           <Logo />
           <Navigation />
         </div>
 
-        <h1 className="text-white text-2xl md:text-3xl mb-2">
-          Monthly Prayer Calendar
-        </h1>
-        <p className="text-slate-400 mb-6 text-sm md:text-base">
-          View a full month of prayer times. Rows in{" "}
-          <span className="text-emerald-400 font-medium">green</span> are using
-          mosque timetables (e.g., Chicago Hilal / local mosque); others use
-          the calculation method.
-        </p>
-
-        {/* Controls */}
-        <div className="flex flex-wrap items-center gap-4 mb-6">
-          <div className="flex flex-col gap-1">
-            <span className="text-slate-400 text-sm">Select month</span>
-            <div className="flex items-center gap-3 rounded-full bg-slate-900 border border-slate-700 px-3 py-1.5">
-              <button
-                type="button"
-                onClick={handlePrevMonth}
-                className="p-1.5 rounded-full hover:bg-slate-800 text-slate-300"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-
-              <div className="flex items-center gap-2">
-                <CalendarIcon className="w-4 h-4 text-emerald-400" />
-                <span className="text-sm text-slate-100">{monthLabel}</span>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleNextMonth}
-                className="p-1.5 rounded-full hover:bg-slate-800 text-slate-300"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+        {/* Heading */}
+        <header className="mb-6">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-slate-900 border border-slate-800">
+              <CalendarIcon className="text-emerald-400" size={20} />
+            </div>
+            <div>
+              <h1 className="text-white text-2xl md:text-3xl">Prayer Calendar</h1>
+              <p className="text-slate-400 text-sm md:text-base">
+                Click any day to view prayer times. Use the arrows to navigate months.
+              </p>
             </div>
           </div>
+        </header>
 
-          {data && (
-            <div className="text-slate-400 text-sm">
-              Location:{" "}
-              <span className="text-slate-200">
-                {data.location.city}, {data.location.country}
-              </span>
+        {/* Controls */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              className="border-slate-700 text-slate-200"
+              onClick={() => goMonth(-1)}
+            >
+              <ChevronLeft size={18} />
+            </Button>
+            <div className="px-4 py-2 rounded-2xl bg-slate-900 border border-slate-800 text-slate-100">
+              {activeMonthLabel}
             </div>
-          )}
+            <Button
+              variant="outline"
+              className="border-slate-700 text-slate-200"
+              onClick={() => goMonth(1)}
+            >
+              <ChevronRight size={18} />
+            </Button>
+          </div>
+
+          <Button
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            onClick={jumpToday}
+          >
+            Today
+          </Button>
         </div>
 
-        {/* Loading / Error */}
+        {/* Status */}
         {loading && (
-          <div className="text-slate-300 text-sm mb-4">Loading calendar…</div>
+          <div className="text-slate-300 bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-6">
+            Loading month…
+          </div>
         )}
-
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div className="text-red-200 bg-red-950/40 border border-red-900/60 rounded-2xl p-4 mb-6">
             {error}
           </div>
         )}
 
-        {/* Calendar table */}
-        {data && !loading && !error && (
-          <div className="overflow-x-auto rounded-2xl bg-slate-900 border border-slate-800">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-900/70">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Date
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Source
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Fajr
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Sunrise
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Dhuhr
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Asr
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Maghrib
-                  </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-400">
-                    Isha
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.days.map((day) => {
-                  const isToday = day.date === todayStr;
-                  const isMosque = day.source === "mosque";
+        <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-6">
+          {/* Month grid */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <div className="grid grid-cols-7 gap-2 mb-2 text-xs text-slate-400 px-1">
+              {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d) => (
+                <div key={d} className="text-center">{d}</div>
+              ))}
+            </div>
 
-                  const rowClasses = [
-                    "border-t border-slate-800",
-                    isToday ? "bg-slate-800/40" : "",
-                    isMosque ? "bg-emerald-500/5" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
+            <div className="grid grid-cols-7 gap-2">
+              {gridDates.map((d) => {
+                const dIso = isoDate(d);
+                const inMonth = d.getMonth() === activeMonth.getMonth();
+                const isToday = dIso === todayStr;
+                const isSelected = dIso === selectedDate;
 
-                  return (
-                    <tr key={day.date} className={rowClasses}>
-                      <td className="px-4 py-3 whitespace-nowrap text-slate-200">
-                        <div className="flex items-center gap-2">
-                          <span>{formatDateLabel(day.date)}</span>
-                          {isToday && (
-                            <Badge className="bg-sky-500/20 text-sky-300 border-sky-500/40 text-[10px]">
-                              Today
-                            </Badge>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-300">
-                        {isMosque && day.mosque ? (
-                          <div className="flex flex-col">
-                            <span className="text-emerald-300 text-xs font-medium">
-                              Mosque timetable
-                            </span>
-                            <span className="text-slate-400 text-[11px]">
-                              {day.mosque.name}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 text-xs">
-                            Calculation ({day.settingsUsed.method})
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-slate-100">
-                        {day.prayers.fajr}
-                      </td>
-                      <td className="px-4 py-3 text-slate-100">
-                        {day.prayers.sunrise}
-                      </td>
-                      <td className="px-4 py-3 text-slate-100">
-                        {day.prayers.dhuhr}
-                      </td>
-                      <td className="px-4 py-3 text-slate-100">
-                        {day.prayers.asr}
-                      </td>
-                      <td className="px-4 py-3 text-slate-100">
-                        {day.prayers.maghrib}
-                      </td>
-                      <td className="px-4 py-3 text-slate-100">
-                        {day.prayers.isha}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                const hasData = dayMap.has(dIso);
+                const source = dayMap.get(dIso)?.source;
+
+                const base =
+                  "rounded-xl border px-2 py-2 text-sm text-center cursor-pointer select-none";
+                const style = [
+                  base,
+                  inMonth ? "bg-slate-950/30 border-slate-800 text-slate-100" : "bg-slate-950/10 border-slate-900 text-slate-600",
+                  isSelected ? "ring-2 ring-emerald-500" : "",
+                  isToday ? "border-emerald-500/60" : "",
+                ].join(" ");
+
+                return (
+                  <div
+                    key={dIso}
+                    className={style}
+                    onClick={() => setSelectedDate(dIso)}
+                    title={hasData ? `Source: ${source}` : "No data"}
+                  >
+                    <div className="font-medium">{d.getDate()}</div>
+                    {hasData && (
+                      <div className="mt-1 flex justify-center">
+                        <Badge className={source === "mosque" ? "bg-emerald-600/20 text-emerald-300 border border-emerald-600/30" : "bg-slate-800/60 text-slate-200 border border-slate-700"}>
+                          {source === "mosque" ? "Mosque" : "Calc"}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        )}
 
-        {data && !loading && !error && (
-          <p className="mt-3 text-xs text-slate-500">
-            Note: For now this uses mock data in the backend (with a mosque
-            override for a couple of days). Later we’ll connect it to real
-            mosque & Hilal committee timetables.
-          </p>
-        )}
+          {/* Day details */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+            <h2 className="text-white text-xl mb-1">Day Details</h2>
+            <p className="text-slate-400 text-sm mb-4">{selectedDate}</p>
+
+            {!selectedDay ? (
+              <div className="text-slate-300">
+                No prayer times loaded for this day.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Source</span>
+                  <Badge className={selectedDay.source === "mosque" ? "bg-emerald-600/20 text-emerald-300 border border-emerald-600/30" : "bg-slate-800/60 text-slate-200 border border-slate-700"}>
+                    {selectedDay.source === "mosque" ? "Mosque Timetable" : "Calculation"}
+                  </Badge>
+                </div>
+
+                {([
+                  ["Fajr", selectedDay.prayers.fajr],
+                  ["Sunrise", selectedDay.prayers.sunrise],
+                  ["Dhuhr", selectedDay.prayers.dhuhr],
+                  ["Asr", selectedDay.prayers.asr],
+                  ["Maghrib", selectedDay.prayers.maghrib],
+                  ["Isha", selectedDay.prayers.isha],
+                ] as const).map(([label, value]) => (
+                  <div key={label} className="flex items-center justify-between bg-slate-950/40 border border-slate-800 rounded-xl px-4 py-3">
+                    <span className="text-slate-300">{label}</span>
+                    <span className="text-white font-semibold">{value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
