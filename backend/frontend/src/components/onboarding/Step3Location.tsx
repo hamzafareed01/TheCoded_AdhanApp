@@ -13,9 +13,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Switch } from "../ui/switch";
-
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ?? "http://localhost:4000";
+import { apiFetch } from "../../lib/api";
 
 type LocationSettings = {
   country: "US" | "PK";
@@ -84,7 +82,7 @@ export default function Step3Location({
         city: cityTrimmed,
         country: loc.country,
       });
-      const res = await fetch(`${API_BASE}/api/geocode?${params.toString()}`);
+      const res = await apiFetch(`/api/geocode?${params.toString()}`);
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {

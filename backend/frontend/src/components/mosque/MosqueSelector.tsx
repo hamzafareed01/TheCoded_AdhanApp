@@ -5,10 +5,8 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { ScrollArea } from '../ui/scroll-area';
 import { Label } from '../ui/label';
+import { apiFetch } from "../../lib/api";
 import { MapPin, Search, CheckCircle2, Navigation2 } from 'lucide-react';
-
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ?? 'http://localhost:4000';
 
 type QuietHours = {
   enabled: boolean;
@@ -153,27 +151,23 @@ export default function MosqueSelector({
       const effectiveQuery = rawQuery || settings.city;
 
       const params = new URLSearchParams();
-      params.set('q', effectiveQuery);
-      params.set('country', settings.country || 'US');
+      params.set("query", effectiveQuery);
+      params.set("country", settings.country || "US");
+      params.set("radiusKm", "25");
 
-      // IMPORTANT RULE (your requirement):
-      // - If query matches onboarding location -> bias to onboarding lat/lng (vicinity)
-      // - If query is different -> DO NOT use onboarding lat/lng bias
       if (
         sameAsOnboarding &&
-        typeof settings.latitude === 'number' &&
-        typeof settings.longitude === 'number'
+        typeof settings.latitude === "number" &&
+        typeof settings.longitude === "number"
       ) {
-        params.set('bias', 'user');
-        params.set('lat', String(settings.latitude));
-        params.set('lng', String(settings.longitude));
-        params.set('radius', '25000'); // ~25km; tune if needed
+        // Bias search around the user's onboarding location
+        params.set("bias", "user");
       } else {
-        params.set('bias', 'search');
+        // No bias if user is searching a different city/zip/etc.
+        params.set("bias", "none");
       }
 
-      const url = `${API_BASE}/api/mosques/search?${params.toString()}`;
-      const res = await fetch(url);
+      const res = await apiFetch(`/api/mosques?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to load mosques');
 
       const json = await res.json();
@@ -199,7 +193,7 @@ export default function MosqueSelector({
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/user/settings`);
+        const res = await apiFetch(`/api/user/settings`);
         if (!res.ok) throw new Error('Failed to load settings');
         const json: UserSettings = await res.json();
         setSettings(json);
@@ -246,7 +240,7 @@ export default function MosqueSelector({
         mosqueLat: selectedMosque?.location?.lat,
         mosqueLng: selectedMosque?.location?.lng,
       };
-      const res = await fetch(`${API_BASE}/api/user/settings`, {
+      const res = await apiFetch(`/api/user/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

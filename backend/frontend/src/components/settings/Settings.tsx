@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '../ui/select';
 import { Checkbox } from '../ui/checkbox';
+import { apiFetch } from "../../lib/api";
 
 type QuietHours = {
   enabled: boolean;
@@ -53,7 +54,7 @@ export default function Settings({
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const res = await fetch('http://localhost:4000/api/user/settings');
+        const res = await apiFetch("/api/user/settings");
         if (!res.ok) throw new Error('Failed to load settings');
         const json = await res.json();
         setSettings(json);
@@ -92,7 +93,7 @@ export default function Settings({
       setSaveMessage(null);
       setError(null);
 
-      const res = await fetch('http://localhost:4000/api/user/settings', {
+      const res = await apiFetch("/api/user/settings", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),

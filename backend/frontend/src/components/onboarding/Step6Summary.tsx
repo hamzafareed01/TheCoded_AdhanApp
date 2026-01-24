@@ -6,9 +6,7 @@ import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { CheckCircle, XCircle, PartyPopper } from "lucide-react";
-
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ?? "http://localhost:4000";
+import { apiFetch } from "../../lib/api";
 
 const platformNames: Record<string, string> = {
   alexa: "Amazon Alexa",
@@ -96,7 +94,7 @@ export default function Step6Summary({
     };
 
     try {
-      const res = await fetch(`${API_BASE}/api/user/settings`, {
+      const res = await apiFetch(`/api/user/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

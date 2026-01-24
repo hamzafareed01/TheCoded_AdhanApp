@@ -13,10 +13,7 @@ import {
   Edit,
   Building2,
 } from 'lucide-react';
-
-// Use VITE_API_BASE if available, otherwise fall back to localhost
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE ?? 'http://localhost:4000';
+import { apiFetch } from "../../lib/api";
 
 const PRAYER_ORDER = ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'] as const;
 
@@ -78,7 +75,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     async function loadSettings() {
       try {
         setSettingsError(null);
-        const res = await fetch(`${API_BASE}/api/user/settings`);
+        const res = await apiFetch("/api/user/settings");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         setUserSettings(data);
@@ -98,7 +95,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         setLoadingToday(true);
         setTodayError(null);
 
-        const res = await fetch(`${API_BASE}/api/prayer-times/today`);
+        const res = await apiFetch("/api/prayer-times/today");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();

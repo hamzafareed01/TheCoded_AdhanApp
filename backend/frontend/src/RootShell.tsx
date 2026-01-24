@@ -14,8 +14,10 @@ import Settings from './components/settings/Settings';
 import CalendarView from './components/calendar/CalendarView';
 import DuaQuranView from './components/dua-quran/DuaQuranView';
 import QiblahFinder from './components/qiblah/QiblahFinder';
+import AlexaSetup from './components/alexa/AlexaSetup';
 
 import type { LoggedInUser } from './components/auth/LoginView';
+import { apiFetch } from "./lib/api";
 
 type RootShellProps = {
     user: LoggedInUser;
@@ -48,7 +50,7 @@ export default function RootShell({ user, onLogout }: RootShellProps) {
     useEffect(() => {
         async function loadUserSettings() {
             try {
-                const res = await fetch('http://localhost:4000/api/user/settings');
+                const res = await apiFetch("/api/user/settings");
                 if (!res.ok) {
                     console.error('Failed to load user settings', res.status);
                     return;
@@ -176,6 +178,8 @@ export default function RootShell({ user, onLogout }: RootShellProps) {
                             />
                         }
                     />
+
+                    <Route path="/alexa-setup" element={<AlexaSetup />} />
                     <Route path="/calendar" element={<CalendarView />} />
                     <Route path="/dua-quran" element={<DuaQuranView />} />
                     <Route path="/qiblah" element={<QiblahFinder />} />

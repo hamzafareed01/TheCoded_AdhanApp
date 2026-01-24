@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { Button } from '../ui/button';
 import { Volume2 } from 'lucide-react';
+import { apiFetch } from "../../lib/api";
 
 const ADHAN_AUDIO_URL = '/audio/adhan.mp3'; // 👈 matches frontend/public/audio/adhan.mp3
 
@@ -14,7 +15,7 @@ export default function TestAdhanButton() {
     setFeedback(null);
 
     try {
-      const res = await fetch('http://localhost:4000/api/test-adhan', {
+      const res = await apiFetch("/api/test-adhan", {
         method: 'POST',
       });
 

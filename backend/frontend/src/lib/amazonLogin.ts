@@ -27,6 +27,14 @@ export function ensureAmazonSdk(): Promise<void> {
             }
 
             window.amazon.Login.setClientId(CLIENT_ID);
+
+            // Important for LWA JS SDK: return URL must match an allowed return URL in your Amazon Security Profile.
+            // Defaulting to `${origin}/onboarding` covers the normal local dev flow.
+            const returnUrl =
+                (import.meta.env.VITE_AMAZON_RETURN_URL as string) ||
+                `${window.location.origin}/onboarding`;
+            window.amazon.Login.setReturnUrl(returnUrl);
+
             sdkLoaded = true;
             loadingPromise = null;
             resolve();
