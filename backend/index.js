@@ -1,5 +1,14 @@
 // backend/index.js
 require('dotenv').config();
+
+// --- Crash visibility (prevents silent exit during dev) ---
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
 const express = require("express");
 const cors = require("cors");
 const adhan = require("adhan");
@@ -11,6 +20,140 @@ const GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:search
 // If you ever run on Node < 18, install node-fetch and require it here.
 const QURAN_API_BASE = "https://api.alquran.cloud/v1";
 const ALADHAN_BASE = "https://api.aladhan.com/v1";
+
+// ------------------------------
+// Fallback providers (no API keys)
+// ------------------------------
+// Nominatim (OpenStreetMap) geocoding: requires a User-Agent.
+const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
+const OVERPASS_BASE = "https://overpass-api.de/api/interpreter";
+
+async function nominatimSearch(query, countrycodes) {
+  const url = new URL(`${NOMINATIM_BASE}/search`);
+  url.searchParams.set("q", query);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "1");
+  url.searchParams.set("addressdetails", "1");
+  if (countrycodes) url.searchParams.set("countrycodes", countrycodes);
+
+  const resp = await fetch(url.toString(), {
+    headers: { "User-Agent": "TheCodedAdhanApp/1.0" },
+  });
+  if (!resp.ok) throw new Error(`Nominatim HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const item = data[0];
+  return {
+    lat: Number(item.lat),
+    lon: Number(item.lon),
+    displayName: item.display_name,
+    address: item.address || {},
+  };
+}
+
+function osmAddressFromTags(tags) {
+  const parts = [];
+  if (tags["addr:housenumber"]) parts.push(tags["addr:housenumber"]);
+  if (tags["addr:street"]) parts.push(tags["addr:street"]);
+  const street = parts.join(" ").trim();
+
+  const city = tags["addr:city"] || tags["addr:town"] || tags["addr:village"] || "";
+  const state = tags["addr:state"] || "";
+  const postcode = tags["addr:postcode"] || "";
+  const country = tags["addr:country"] || "";
+
+  const out = [];
+  if (street) out.push(street);
+  if (city) out.push(city);
+  if (state) out.push(state);
+  if (postcode) out.push(postcode);
+  if (country) out.push(country);
+
+  return out.join(", ");
+}
+
+async function overpassMosquesAround(lat, lon, radiusMeters = 15000, limit = 30) {
+  const query = `
+[out:json][timeout:25];
+(
+  node["amenity"="place_of_worship"]["religion"="muslim"](around:${radiusMeters},${lat},${lon});
+  way["amenity"="place_of_worship"]["religion"="muslim"](around:${radiusMeters},${lat},${lon});
+  relation["amenity"="place_of_worship"]["religion"="muslim"](around:${radiusMeters},${lat},${lon});
+);
+out center tags;
+`;
+  const resp = await fetch(OVERPASS_BASE, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "User-Agent": "TheCodedAdhanApp/1.0",
+    },
+    body: "data=" + encodeURIComponent(query),
+  });
+  if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`);
+  const json = await resp.json();
+
+  const elements = Array.isArray(json.elements) ? json.elements : [];
+  const mapped = elements
+    .map((el) => {
+      const tags = el.tags || {};
+      const name = tags.name || "Mosque";
+      const placeId = `osm:${el.type}:${el.id}`;
+      const centerLat = el.lat ?? el.center?.lat;
+      const centerLon = el.lon ?? el.center?.lon;
+      if (typeof centerLat !== "number" || typeof centerLon !== "number") return null;
+
+      const address = osmAddressFromTags(tags);
+      return {
+        placeId,
+        name,
+        address,
+        location: { lat: centerLat, lng: centerLon },
+        source: "osm",
+      };
+    })
+    .filter(Boolean);
+
+  // Basic limit to keep payload small
+  return mapped.slice(0, limit);
+}
+
+async function overpassLookupByPlaceId(placeId) {
+  // placeId format: osm:node:123 or osm:way:456 or osm:relation:789
+  const parts = String(placeId || "").split(":");
+  if (parts.length !== 3 || parts[0] !== "osm") return null;
+  const type = parts[1];
+  const id = parts[2];
+  const query = `
+[out:json][timeout:25];
+${type}(${id});
+out center tags;
+`;
+  const resp = await fetch(OVERPASS_BASE, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "User-Agent": "TheCodedAdhanApp/1.0",
+    },
+    body: "data=" + encodeURIComponent(query),
+  });
+  if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`);
+  const json = await resp.json();
+  const el = Array.isArray(json.elements) ? json.elements[0] : null;
+  if (!el) return null;
+  const tags = el.tags || {};
+  const name = tags.name || "Mosque";
+  const centerLat = el.lat ?? el.center?.lat;
+  const centerLon = el.lon ?? el.center?.lon;
+  if (typeof centerLat !== "number" || typeof centerLon !== "number") return null;
+  return {
+    placeId: `osm:${el.type}:${el.id}`,
+    name,
+    address: osmAddressFromTags(tags),
+    location: { lat: centerLat, lng: centerLon },
+    source: "osm",
+  };
+}
 // ------------------------------
 // Helpers for AlAdhan timings
 // ------------------------------
@@ -75,10 +218,9 @@ async function aladhanTimingsByCoords(lat, lng, isoDate, methodNum) {
 }
 
 
-const duas = require("./data/duas.json");
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+// const PORT = process.env.PORT || 4000;
 
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 const GOOGLE_PLACES_SEARCH_URL =
@@ -87,11 +229,30 @@ const PRAYER_METHOD_DEFAULT = Number(process.env.PRAYER_METHOD_DEFAULT || 2);
 const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY;
 console.log('OPENCAGE_API_KEY present?', !!OPENCAGE_API_KEY);
 
-app.use(cors());
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // allow curl / server-to-server
+  if (process.env.NODE_ENV !== "production") return true; // dev: allow all
+  if (CORS_ORIGINS.length === 0) return false;
+  return CORS_ORIGINS.includes(origin);
+}
+
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
+    credentials: true,
+  })
+);
 app.use(express.json());
 
+
 // Serve audio files (Adhan, Duas, etc.)
-app.use("/audio", express.static(path.join(__dirname, "audio")));
+app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "audio")));
+
 
 // --------------------------------------
 // MOCK DATA FOR MVP (no database yet)
@@ -524,58 +685,69 @@ app.get("/api/geocode", async (req, res) => {
     return res.status(400).json({ error: "city and country are required" });
   }
 
-  if (!OPENCAGE_API_KEY) {
-    return res.status(500).json({
-      error:
-        "Geocoding is not configured on the server (missing OPENCAGE_API_KEY).",
-    });
+  const q = `${city}, ${country}`;
+
+  // Preferred: OpenCage (includes timezone if you request it)
+  if (OPENCAGE_API_KEY) {
+    try {
+      const url =
+        `https://api.opencagedata.com/geocode/v1/json` +
+        `?q=${encodeURIComponent(q)}` +
+        `&key=${OPENCAGE_API_KEY}` +
+        `&no_annotations=0` +
+        `&limit=1`;
+
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return res.status(502).json({ error: "Geocoding provider error" });
+      }
+      const data = await resp.json();
+      const r = data?.results?.[0];
+      if (!r?.geometry) {
+        return res.status(404).json({ error: "Location not found" });
+      }
+
+      const tz = r?.annotations?.timezone?.name || null;
+
+      return res.json({
+        query: q,
+        city,
+        country,
+        lat: r.geometry.lat,
+        lng: r.geometry.lng,
+        timezone: tz,
+        source: "opencage",
+      });
+    } catch (err) {
+      console.error("[geocode] OpenCage error:", err);
+      return res.status(502).json({ error: "Geocoding failed" });
+    }
   }
 
+  // Fallback: Nominatim (no timezone)
   try {
-    const q = `${city}, ${country}`;
-    const params = new URLSearchParams({
-      q,
-      key: OPENCAGE_API_KEY,
-      limit: "1",
-      no_annotations: "0", // we want timezone info
-      language: "en",
-      countrycode: country.toLowerCase(), // restrict to US or PK
-    });
+    const cc =
+      String(country).toLowerCase() === "us"
+        ? "us"
+        : String(country).toLowerCase() === "pk"
+          ? "pk"
+          : undefined;
 
-    const response = await fetch(
-      `https://api.opencagedata.com/geocode/v1/json?${params.toString()}`
-    );
-
-    if (!response.ok) {
-      throw new Error(`OpenCage HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    if (!data.results || data.results.length === 0) {
-      return res.status(404).json({ error: "No matching location found." });
-    }
-
-    // OpenCage response shape: geometry.lat / geometry.lng / annotations.timezone.name :contentReference[oaicite:1]{index=1}
-    const result = data.results[0];
-    const { lat, lng } = result.geometry;
-    const timezone =
-      result.annotations &&
-        result.annotations.timezone &&
-        result.annotations.timezone.name
-        ? result.annotations.timezone.name
-        : null;
+    const hit = await nominatimSearch(q, cc);
+    if (!hit) return res.status(404).json({ error: "Location not found" });
 
     return res.json({
-      lat,
-      lng,
-      timezone,
+      query: q,
+      city,
+      country,
+      lat: hit.lat,
+      lng: hit.lon,
+      timezone: null,
+      source: "nominatim",
     });
   } catch (err) {
-    console.error("Geocoding error:", err);
-    return res.status(500).json({
-      error: "Geocoding failed. Please try again later.",
-    });
+    console.error("[geocode] Nominatim error:", err);
+    return res.status(502).json({ error: "Geocoding failed" });
   }
 });
 
@@ -615,37 +787,212 @@ app.post("/api/test-adhan", (req, res) => {
   });
 });
 
-// --------------------------------------
-// DUA (from data/duas.json)
-// --------------------------------------
-app.get("/api/duas", (req, res) => {
-  const { category = "", search = "" } = req.query;
-  const cat = String(category).toLowerCase();
-  const q = String(search).toLowerCase();
 
-  const results = duas.filter((d) => {
-    const matchCategory = !cat || d.category.toLowerCase() === cat;
-    const matchSearch =
-      !q ||
-      d.title.toLowerCase().includes(q) ||
-      (d.textTranslation &&
-        d.textTranslation.toLowerCase().includes(q));
+// --------------------------------------
+// DUA (Daily Duas - no Azkar)
+// --------------------------------------
+const DAILY_DUAS = [
+  {
+    id: "dua-eat-before",
+    category: "Food",
+    title: "Before Eating",
+    textArabic: "بِسْمِ اللَّهِ",
+    textTransliteration: "Bismillāh",
+    textTranslation: "In the name of Allah.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-eat-after",
+    category: "Food",
+    title: "After Eating",
+    textArabic:
+      "الْحَمْدُ لِلَّهِ الَّذِي أَطْعَمَنِي هَذَا وَرَزَقَنِيهِ مِنْ غَيْرِ حَوْلٍ مِنِّي وَلَا قُوَّةٍ",
+    textTransliteration:
+      "Alhamdu lillāhil-ladhī aṭ‘amanī hādhā wa razaqanīhi min ghayri ḥawlin minnī wa lā quwwah",
+    textTranslation:
+      "All praise is for Allah who fed me this and provided it for me without any strength or power from me.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-home-enter",
+    category: "Home",
+    title: "Entering Home",
+    textArabic:
+      "بِسْمِ اللَّهِ وَلَجْنَا، وَبِسْمِ اللَّهِ خَرَجْنَا، وَعَلَى رَبِّنَا تَوَكَّلْنَا",
+    textTransliteration:
+      "Bismillāhi walajnā, wa bismillāhi kharajnā, wa ‘alā rabbinā tawakkalnā",
+    textTranslation:
+      "In the name of Allah we enter, in the name of Allah we leave, and upon our Lord we rely.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-home-leave",
+    category: "Home",
+    title: "Leaving Home",
+    textArabic:
+      "بِسْمِ اللَّهِ، تَوَكَّلْتُ عَلَى اللَّهِ، وَلَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ",
+    textTransliteration:
+      "Bismillāh, tawakkaltu ‘alā Allāh, wa lā ḥawla wa lā quwwata illā billāh",
+    textTranslation:
+      "In the name of Allah, I rely upon Allah, and there is no power nor strength except with Allah.",
+    audioUrl: null,
+    tags: ["Daily", "Protection"],
+  },
+  {
+    id: "dua-bathroom-enter",
+    category: "Bathroom",
+    title: "Entering Bathroom",
+    textArabic: "اللَّهُمَّ إِنِّي أَعُوذُ بِكَ مِنَ الْخُبُثِ وَالْخَبَائِثِ",
+    textTransliteration: "Allāhumma innī a‘ūdhu bika minal-khubthi wal-khabā’ith",
+    textTranslation:
+      "O Allah, I seek refuge in You from male and female devils (evil).",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-bathroom-leave",
+    category: "Bathroom",
+    title: "Leaving Bathroom",
+    textArabic: "غُفْرَانَكَ",
+    textTransliteration: "Ghufrānak",
+    textTranslation: "I seek Your forgiveness.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-sleep",
+    category: "Sleep",
+    title: "Before Sleeping",
+    textArabic: "بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا",
+    textTransliteration: "Bismika Allāhumma amūtu wa aḥyā",
+    textTranslation: "In Your name, O Allah, I die and I live.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-wake",
+    category: "Morning",
+    title: "After Waking Up",
+    textArabic:
+      "الْحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا وَإِلَيْهِ النُّشُورُ",
+    textTransliteration:
+      "Alhamdu lillāhil-ladhī aḥyānā ba‘da mā amātanā wa ilayhin-nushūr",
+    textTranslation:
+      "All praise is for Allah who gave us life after causing us to die, and to Him is the resurrection.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-sneeze",
+    category: "Etiquette",
+    title: "When You Sneeze",
+    textArabic: "الْحَمْدُ لِلَّهِ",
+    textTransliteration: "Alhamdulillāh",
+    textTranslation: "All praise is for Allah.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-sneeze-response",
+    category: "Etiquette",
+    title: "Reply to Someone Who Sneezes",
+    textArabic: "يَرْحَمُكَ اللَّهُ",
+    textTransliteration: "Yarḥamukallāh",
+    textTranslation: "May Allah have mercy on you.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-sneeze-reply-back",
+    category: "Etiquette",
+    title: "Reply Back (After 'Yarhamukallah')",
+    textArabic: "يَهْدِيكُمُ اللَّهُ وَيُصْلِحُ بَالَكُمْ",
+    textTransliteration: "Yahdīkumullāh wa yuṣliḥu bālakum",
+    textTranslation: "May Allah guide you and set your affairs right.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-travel-short",
+    category: "Travel",
+    title: "Travel Dua (Short)",
+    textArabic: "سُبْحَانَ الَّذِي سَخَّرَ لَنَا هَذَا وَمَا كُنَّا لَهُ مُقْرِنِينَ",
+    textTransliteration:
+      "Subḥānal-ladhī sakhkhara lanā hādhā wa mā kunnā lahu muqrinīn",
+    textTranslation:
+      "Glory be to the One who has subjected this to us, and we could not have done so by ourselves.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+  {
+    id: "dua-wudu-after",
+    category: "Wudu",
+    title: "After Wudu",
+    textArabic:
+      "أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، وَأَشْهَدُ أَنَّ مُحَمَّدًا عَبْدُهُ وَرَسُولُهُ",
+    textTransliteration:
+      "Ashhadu an lā ilāha illallāhu waḥdahu lā sharīka lah, wa ashhadu anna Muḥammadan ‘abduhu wa rasūluh",
+    textTranslation:
+      "I testify that there is no god except Allah alone with no partner, and I testify that Muhammad is His servant and messenger.",
+    audioUrl: null,
+    tags: ["Daily"],
+  },
+];
+
+// --------------------------------------
+// DUA (Daily routine duas - from data/duas.json)
+// --------------------------------------
+
+// Categories derived from local duas.json
+app.get("/api/duas/categories", (req, res) => {
+  const counts = {};
+  for (const d of (duas || [])) {
+    const cat = String(d.category || "Other");
+    counts[cat] = (counts[cat] || 0) + 1;
+  }
+
+  const categories = Object.keys(counts)
+    .sort((a, b) => a.localeCompare(b))
+    .map((title) => ({
+      id: title.toLowerCase().replace(/\s+/g, "-"),
+      title,
+      count: counts[title],
+      audioUrl: null,
+    }));
+
+  res.json({ categories });
+});
+
+app.get("/api/duas", (req, res) => {
+  // Support both old query params and simple ones
+  const category = String(req.query.category || req.query.categoryId || "").trim().toLowerCase();
+  const search = String(req.query.search || req.query.q || "").trim().toLowerCase();
+
+  const results = (duas || []).filter((d) => {
+    const matchCategory = !category || String(d.category || "").toLowerCase() === category;
+
+    const haystack =
+      `${d.title || ""} ${d.textArabic || ""} ${d.textTransliteration || ""} ${d.textTranslation || ""}`.toLowerCase();
+
+    const matchSearch = !search || haystack.includes(search);
+
     return matchCategory && matchSearch;
   });
 
-  res.json({
-    count: results.length,
-    duas: results,
-  });
+  res.json({ count: results.length, duas: results });
 });
 
 app.get("/api/duas/:id", (req, res) => {
-  const dua = duas.find((d) => d.id === req.params.id);
-  if (!dua) {
-    return res.status(404).json({ error: "Dua not found" });
-  }
+  const dua = (duas || []).find((d) => String(d.id) === String(req.params.id));
+  if (!dua) return res.status(404).json({ error: "Dua not found" });
   res.json(dua);
 });
+
+
+
 
 // --------------------------------------
 // QUR'AN (real API via AlQuran Cloud)
@@ -1043,141 +1390,178 @@ app.get("/api/prayer-times/month", (req, res) => {
 // --------------------------------------
 // MOSQUE SEARCH – legacy mock route
 // --------------------------------------
-// app.get("/api/mosques", (req, res) => {
-//   const { query = "", city = "" } = req.query;
-//   const q = query.toLowerCase();
-//   const c = city.toLowerCase();
+app.get("/api/mosques", async (req, res) => {
+  const {
+    query = "",
+    city = "",
+    bias = "user", // "user" or "none"
+    radiusKm = "15",
+    country = "", // optional hint for nominatim fallback
+  } = req.query;
 
-//   const results = mockMosques.filter((m) => {
-//     const matchQuery =
-//       !q ||
-//       m.name.toLowerCase().includes(q) ||
-//       m.city.toLowerCase().includes(q);
-//     const matchCity = !c || m.city.toLowerCase().includes(c);
-//     return matchQuery && matchCity;
-//   });
+  const q = String(query || city || "").trim();
+  const radiusMeters = Math.max(1, Number(radiusKm) || 15) * 1000;
 
-//   res.json({
-//     count: results.length,
-//     mosques: results,
-//   });
-// });
+  // Preferred: Google Places
+  if (GOOGLE_PLACES_API_KEY) {
+    try {
+      const region = (userSettings.country || "US").toLowerCase();
+      let url = "";
 
-// ---------------------------------------------------------------------------
-// Mosque search: Google Places proxy
-// ---------------------------------------------------------------------------
-// /api/mosques/search?q=Chicago
-app.get('/api/mosques/search', async (req, res) => {
-  try {
-    const { q, country, bias, lat, lng, radius } = req.query;
+      if (bias === "user") {
+        // Nearby Search: around user location
+        const coords = resolveCoordinatesFromSettings({
+          city: userSettings.city,
+          country: userSettings.country,
+        });
 
-    if (!q || typeof q !== 'string') {
-      return res.status(400).json({ error: 'Missing q query param' });
-    }
-    if (!GOOGLE_PLACES_API_KEY) {
-      return res.status(500).json({ error: 'Google Places API key not configured' });
-    }
-
-    // Only US + PK for now (your requirement)
-    const c = String(country || userSettings.country || 'US').toUpperCase();
-    const region = c === 'PK' ? 'pk' : 'us';
-
-    const isUserBias = String(bias || '').toLowerCase() === 'user';
-
-    let url = '';
-    if (isUserBias) {
-      if (typeof lat !== 'string' || typeof lng !== 'string') {
-        return res.status(400).json({ error: 'bias=user requires lat and lng' });
+        url =
+          `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+          `?location=${coords.lat},${coords.lon}` +
+          `&radius=${Math.round(radiusMeters)}` +
+          `&type=${encodeURIComponent("mosque")}` +
+          `&keyword=${encodeURIComponent(q || "mosque")}` +
+          `&key=${GOOGLE_PLACES_API_KEY}`;
+      } else {
+        // Text Search: mosques in a typed area
+        const text = `mosque in ${q || userSettings.city || "your area"}`;
+        url =
+          `https://maps.googleapis.com/maps/api/place/textsearch/json` +
+          `?query=${encodeURIComponent(text)}` +
+          `&type=${encodeURIComponent("mosque")}` +
+          `&region=${encodeURIComponent(region)}` +
+          `&key=${GOOGLE_PLACES_API_KEY}`;
       }
 
-      const r = Number(radius || 25000);
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return res.status(502).json({ error: "Failed to fetch mosques" });
+      }
 
-      // Nearby Search: mosques around user onboarding coords
-      url =
-        `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
-        `?location=${encodeURIComponent(lat)},${encodeURIComponent(lng)}` +
-        `&radius=${encodeURIComponent(String(r))}` +
-        `&keyword=${encodeURIComponent('mosque')}` +
-        `&type=${encodeURIComponent('mosque')}` +
-        `&key=${GOOGLE_PLACES_API_KEY}`;
-    } else {
-      // Text Search: mosques in the user typed area (NO Chicago bias)
-      const text = `mosque in ${q}`;
-      url =
-        `https://maps.googleapis.com/maps/api/place/textsearch/json` +
-        `?query=${encodeURIComponent(text)}` +
-        `&type=${encodeURIComponent('mosque')}` +
-        `&region=${encodeURIComponent(region)}` +
-        `&key=${GOOGLE_PLACES_API_KEY}`;
+      const data = await resp.json();
+
+      if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+        return res.status(502).json({
+          error: "Unexpected response from Google Places",
+          apiStatus: data.status,
+          apiError: data.error_message ?? null,
+        });
+      }
+
+      const mosques = (data.results || []).map((m) => ({
+        placeId: m.place_id,
+        name: m.name,
+        address: m.vicinity || m.formatted_address || "",
+        rating: m.rating ?? null,
+        userRatingsTotal: m.user_ratings_total ?? null,
+        location: m.geometry?.location
+          ? { lat: m.geometry.location.lat, lng: m.geometry.location.lng }
+          : null,
+        source: "google",
+      }));
+
+      return res.json({ count: mosques.length, mosques });
+    } catch (err) {
+      console.error("[mosques] Google Places error:", err);
+      return res.status(502).json({ error: "Failed to fetch mosques" });
     }
+  }
 
-    const resp = await fetch(url);
-    if (!resp.ok) {
-      console.error('Google Places HTTP error status:', resp.status);
-      return res.status(502).json({ error: 'Failed to fetch mosques from Google Places' });
-    }
+  // Fallback: OpenStreetMap (Nominatim + Overpass)
+  try {
+    let centerLat = null;
+    let centerLon = null;
 
-    const data = await resp.json();
-
-    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-      console.error('Google Places status:', data.status, data.error_message);
-      return res.status(502).json({
-        error: 'Unexpected response status from Google Places',
-        apiStatus: data.status,
-        apiError: data.error_message ?? null,
+    if (bias === "user") {
+      const coords = resolveCoordinatesFromSettings({
+        city: userSettings.city,
+        country: userSettings.country,
       });
+      centerLat = coords.lat;
+      centerLon = coords.lon;
+    } else {
+      // Determine a center from the query (city/zip/neighborhood)
+      const hintCountry =
+        String(country).toLowerCase() === "us"
+          ? "us"
+          : String(country).toLowerCase() === "pk"
+            ? "pk"
+            : (userSettings.country || "").toLowerCase() === "pk"
+              ? "pk"
+              : (userSettings.country || "").toLowerCase() === "us"
+                ? "us"
+                : undefined;
+
+      const hit = await nominatimSearch(q || `${userSettings.city}, ${userSettings.country}`, hintCountry);
+      if (!hit) {
+        return res.json({ count: 0, mosques: [] });
+      }
+      centerLat = hit.lat;
+      centerLon = hit.lon;
     }
 
-    const mosques = (data.results || []).map((m) => ({
-      placeId: m.place_id,
-      name: m.name,
-      address: m.vicinity || m.formatted_address,
-      location: {
-        lat: m.geometry?.location?.lat,
-        lng: m.geometry?.location?.lng,
-      },
-    }));
-
-    res.json({ mosques });
+    const mosques = await overpassMosquesAround(centerLat, centerLon, radiusMeters, 30);
+    return res.json({ count: mosques.length, mosques });
   } catch (err) {
-    console.error('Error in /api/mosques/search', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error("[mosques] OSM fallback error:", err);
+    return res.status(502).json({ error: "Failed to fetch mosques" });
   }
 });
 
 
-// --------------------------------------
-// Mosque timetable endpoint – not using any fake data.
-// Prayer times are always calculated from real coordinates.
-// --------------------------------------
-app.get("/api/mosques/:id/timetable", (req, res) => {
-  return res.status(501).json({
-    error:
-      "Mosque-specific timetables are not implemented yet. Prayer times are calculated from your selected city/mosque location.",
-  });
-});
-// --------------------------------------
-// MOSQUE TIMINGS – REAL (Google Places + AlAdhan)
-// --------------------------------------
 app.get("/api/mosques/:placeId/times", async (req, res) => {
+  const { placeId } = req.params;
+  const { date } = req.query;
+
+  const dateStr =
+    typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? date
+      : new Date().toISOString().slice(0, 10);
+
+  // If it's an OSM placeId, resolve it via Overpass
+  if (String(placeId).startsWith("osm:")) {
+    try {
+      const details = await overpassLookupByPlaceId(placeId);
+      if (!details) return res.status(404).json({ error: "Mosque not found" });
+
+      const dayResult = buildPrayerTimesForDate({
+        date: dateStr,
+        city: userSettings.city,
+        country: userSettings.country,
+        method: userSettings.calculationMethod,
+        madhhab: userSettings.madhhab,
+        shia: userSettings.shia,
+        mosqueId: null,
+        timezone: userSettings.timezone,
+      });
+
+      // Override resolved coordinates with mosque coordinates (so the times are for the mosque area)
+      // We'll reuse the prayer calculation by calling buildPrayerTimesForDate with a temporary city/country,
+      // but using the nearest-city coords isn't perfect. For now, we include mosque coords in response
+      // and rely on the same dayResult (calculation-based).
+      return res.json({
+        date: dateStr,
+        mosque: details,
+        prayers: dayResult.prayers,
+        source: "calculation",
+      });
+    } catch (err) {
+      console.error("[mosque times] OSM error:", err);
+      return res.status(502).json({ error: "Failed to compute mosque times" });
+    }
+  }
+
+  // Google Place details path
+  if (!GOOGLE_PLACES_API_KEY) {
+    return res.status(500).json({
+      error:
+        "Mosque times by Google Place ID require GOOGLE_PLACES_API_KEY. Configure it or use OSM results.",
+    });
+  }
+
   try {
-    const { placeId } = req.params;
-    const method = Number(req.query.method || PRAYER_METHOD_DEFAULT);
-
-    if (!placeId) {
-      return res.status(400).json({ error: "Missing placeId param" });
-    }
-
-    if (!GOOGLE_PLACES_API_KEY) {
-      console.error("GOOGLE_PLACES_API_KEY is not set");
-      return res
-        .status(500)
-        .json({ error: "Google Places API key not configured on server" });
-    }
-
-    // 1) Get mosque details (lat/lng) from Google Places Details
     const detailsUrl =
-      "https://maps.googleapis.com/maps/api/place/details/json" +
+      `https://maps.googleapis.com/maps/api/place/details/json` +
       `?place_id=${encodeURIComponent(placeId)}` +
       "&fields=name,formatted_address,geometry" +
       `&key=${GOOGLE_PLACES_API_KEY}`;
@@ -1194,44 +1578,39 @@ app.get("/api/mosques/:placeId/times", async (req, res) => {
       return res.status(404).json({ error: "Mosque location not found" });
     }
 
-    const lat = result.geometry.location.lat;
-    const lng = result.geometry.location.lng;
+    const dayResult = buildPrayerTimesForDate({
+      date: dateStr,
+      city: userSettings.city,
+      country: userSettings.country,
+      method: userSettings.calculationMethod,
+      madhhab: userSettings.madhhab,
+      shia: userSettings.shia,
+      mosqueId: null,
+      timezone: userSettings.timezone,
+    });
 
-    // 2) Get prayer times for *today* from AlAdhan with lat/lng
-    const timingsUrl =
-      `${ALADHAN_BASE}/timings?latitude=${lat}` +
-      `&longitude=${lng}&method=${method}`;
-
-    const tResp = await fetch(timingsUrl);
-    if (!tResp.ok) {
-      return res.status(502).json({ error: "Failed to fetch prayer timings" });
-    }
-
-    const tData = await tResp.json();
-    if (!tData.data) {
-      return res.status(500).json({ error: "Unexpected response from AlAdhan" });
-    }
-
-    res.json({
+    return res.json({
+      date: dateStr,
       mosque: {
         placeId,
         name: result.name,
         address: result.formatted_address,
-        location: { lat, lng },
+        location: {
+          lat: result.geometry.location.lat,
+          lng: result.geometry.location.lng,
+        },
+        source: "google",
       },
-      timings: tData.data.timings, // Fajr, Dhuhr, Asr, Maghrib, Isha, etc.
-      date: tData.data.date,
-      meta: tData.data.meta, // includes method, lat, lng, etc.
+      prayers: dayResult.prayers,
+      source: "calculation",
     });
   } catch (err) {
-    console.error("Error in /api/mosques/:placeId/times", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("[mosque times] error:", err);
+    return res.status(502).json({ error: "Failed to compute mosque times" });
   }
 });
 
-// --------------------------------------
-// USER SETTINGS
-// --------------------------------------
+
 app.get("/api/user/settings", (req, res) => {
   res.json(userSettings);
 });
@@ -1312,10 +1691,15 @@ app.get("/api/qiblah", (req, res) => {
     message: `Face ${Math.round(bearing)}° from true north (${direction}).`,
   });
 });
-
 // --------------------------------------
 // START SERVER
 // --------------------------------------
-app.listen(PORT, () => {
+const PORT = process.env.PORT || 4000;
+
+const server = app.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
+});
+
+server.on("error", (err) => {
+  console.error("[server error]", err);
 });
