@@ -155,6 +155,28 @@ out center tags;
   };
 }
 // ------------------------------
+// CORS setup
+const app = express();
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://nice-ground-009684610.1.azurestaticapps.net",
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // allow requests with no origin (like curl/postman/alexa)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
+
+
+// ------------------------------
 // Helpers for AlAdhan timings
 // ------------------------------
 function toDDMMYYYY(isoDate) {
@@ -219,7 +241,6 @@ async function aladhanTimingsByCoords(lat, lng, isoDate, methodNum) {
 
 
 
-const app = express();
 // const PORT = process.env.PORT || 4000;
 
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
