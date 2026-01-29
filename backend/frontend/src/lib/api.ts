@@ -1,22 +1,36 @@
-// backend/frontend/src/lib/api.ts
-export const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+// src/lib/api.ts
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
-  return res.json();
-}
+const API_BASE =
+  (import.meta as any).env?.VITE_API_BASE_URL ||
+  "http://localhost:4000";
 
-export async function apiPost<T>(path: string, body: any): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    credentials: "include",
+// Generic API fetch helper
+export async function apiFetch<T = any>(
+  path: string,
+  init: RequestInit = {}
+): Promise<T> {
+  const url =
+    path.startsWith("http")
+      ? path
+      : `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
+
+  const headers = {
+    ...(init.headers || {}),
+  };
+
+  const res = await fetch(url, {
+    ...init,
+    headers,
   });
-  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
-  return res.json();
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${res.status}`);
+  }
+
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    return (await res.json()) as T;
+  }
+  return (await res.text()) as unknown as T;
 }
