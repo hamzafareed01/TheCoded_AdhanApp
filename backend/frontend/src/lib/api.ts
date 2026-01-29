@@ -1,28 +1,22 @@
-// frontend/src/lib/api.ts
-// Single source of truth for the backend base URL.
-// - In dev, prefer Vite proxy + relative URLs (API_BASE empty)
-// - In prod, set VITE_API_BASE_URL to your deployed backend (e.g., https://api.example.com)
+// backend/frontend/src/lib/api.ts
+export const API_BASE =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
-const envAny: any = (import.meta as any).env || {};
-
-// Back-compat: support both VITE_API_BASE_URL (preferred) and older VITE_API_BASE
-const RAW_BASE: string =
-  (envAny.VITE_API_BASE_URL as string) ||
-  (envAny.VITE_API_BASE as string) ||
-  "";
-
-export const API_BASE = String(RAW_BASE || "").replace(/\/+$/, "");
-
-export function apiUrl(path: string): string {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return API_BASE ? `${API_BASE}${p}` : p;
+export async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+  return res.json();
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}) {
-  const url = apiUrl(path);
-  const headers = new Headers(init.headers || {});
-  if (!headers.has("Content-Type") && !(init.body instanceof FormData)) {
-    headers.set("Content-Type", "application/json");
-  }
-  return fetch(url, { ...init, headers });
+export async function apiPost<T>(path: string, body: any): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+  return res.json();
 }
