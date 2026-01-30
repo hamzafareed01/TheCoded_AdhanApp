@@ -1718,7 +1718,7 @@ app.get("/api/qiblah", (req, res) => {
 const PORT = process.env.PORT || 8080;
 
 const server = app.listen(PORT, () => {
-  console.log(`Backend listening on http://localhost:${PORT}`);
+  console.log(`Backend listening on ${PORT}`);
 });
 
 server.on("error", (err) => {
