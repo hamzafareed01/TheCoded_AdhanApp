@@ -24,3 +24,6 @@ Thumbs.db
 
 backend-deploy.zip
 *.zip
+.env
+**/.env
+
