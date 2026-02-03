@@ -1,36 +1,19 @@
-// src/lib/api.ts
+// const duas = require("./data/duas.json");
 
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE_URL ||
-  "http://localhost:4000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
 
-// Generic API fetch helper
-export async function apiFetch<T = any>(
-  path: string,
-  init: RequestInit = {}
-): Promise<T> {
-  const url =
-    path.startsWith("http")
-      ? path
-      : `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
+export function apiUrl(path: string) {
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const cleanBase = API_BASE.replace(/\/+$/, "");
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${cleanBase}${cleanPath}`;
+}
 
-  const headers = {
-    ...(init.headers || {}),
-  };
-
-  const res = await fetch(url, {
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const url = apiUrl(path);
+  return fetch(url, {
     ...init,
-    headers,
+    // Safe for now; helps later if you add cookie/session auth
+    credentials: init.credentials ?? "include",
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Request failed: ${res.status}`);
-  }
-
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    return (await res.json()) as T;
-  }
-  return (await res.text()) as unknown as T;
 }

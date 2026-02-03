@@ -14,6 +14,7 @@ const cors = require("cors");
 const adhan = require("adhan");
 const path = require("path");
 const GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
+const duas = require("./data/duas.json");
 
 
 // Node 18+ has global fetch built in (Node 22 in your case).
@@ -158,18 +159,24 @@ out center tags;
 // CORS setup
 const app = express();
 
-const allowedOrigins = [
+const defaultAllowedOrigins = [
   "http://localhost:5173",
-  "https://nice-ground-009684610.1.azurestaticapps.net",
+  "http://localhost:4173",
 ];
+
+const envOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envOrigins])];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      // allow requests with no origin (like curl/postman/alexa)
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error("Not allowed by CORS"));
+      return callback(new Error("Not allowed by CORS: " + origin));
     },
     credentials: true,
   })
@@ -249,27 +256,6 @@ const GOOGLE_PLACES_SEARCH_URL =
 const PRAYER_METHOD_DEFAULT = Number(process.env.PRAYER_METHOD_DEFAULT || 2);
 const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY;
 console.log('OPENCAGE_API_KEY present?', !!OPENCAGE_API_KEY);
-
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-function isAllowedOrigin(origin) {
-  if (!origin) return true; // allow curl / server-to-server
-  if (process.env.NODE_ENV !== "production") return true; // dev: allow all
-  if (CORS_ORIGINS.length === 0) return false;
-  return CORS_ORIGINS.includes(origin);
-}
-
-app.use(
-  cors({
-    origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
-    credentials: true,
-  })
-);
-app.use(express.json());
-
 
 // Serve audio files (Adhan, Duas, etc.)
 app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "audio")));
@@ -688,6 +674,8 @@ function isWithinQuietHours(now, quietHours) {
 app.get("/", (req, res) => {
   res.send("Adhan backend is running. Try /api/health");
 });
+
+app.get("/health", (req, res) => res.status(200).send("ok"));
 
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() });

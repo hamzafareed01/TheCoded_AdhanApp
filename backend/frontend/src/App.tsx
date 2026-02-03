@@ -1,8 +1,13 @@
 // src/App.tsx
-import RootShell from './RootShell';
+import RootShell from "./RootShell";
+import type { LoggedInUser } from "./components/auth/LoginView";
 
 export default function App() {
-  // Login screen removed for now (we'll switch to Amazon login later).
-  // RootShell controls routing (onboarding/dashboard/etc).
-  return <RootShell />;
+  const demoUser: LoggedInUser = {
+    userId: "demo",
+    email: "guest@adhanhome.app",
+    name: "Guest",
+  };
+
+  return <RootShell user={demoUser} onLogout={() => {}} />;
 }
