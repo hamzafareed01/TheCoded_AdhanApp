@@ -158,6 +158,8 @@ out center tags;
 // ------------------------------
 // CORS setup
 const app = express();
+app.get("/", (req, res) => res.status(200).send("OK"));
+app.get("/api/health", (req, res) => res.status(200).json({ ok: true }));
 
 const defaultAllowedOrigins = [
   "http://localhost:5173",
@@ -181,8 +183,7 @@ app.use(
     credentials: true,
   })
 );
-app.get("/", (req, res) => res.status(200).send("OK"));
-app.get("/api/health", (req, res) => res.status(200).json({ ok: true }));
+
 
 // ------------------------------
 // Helpers for AlAdhan timings
