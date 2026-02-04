@@ -181,7 +181,8 @@ app.use(
     credentials: true,
   })
 );
-
+app.get("/", (req, res) => res.status(200).send("OK"));
+app.get("/api/health", (req, res) => res.status(200).json({ ok: true }));
 
 // ------------------------------
 // Helpers for AlAdhan timings
