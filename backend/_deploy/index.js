@@ -155,13 +155,16 @@ out center tags;
     source: "osm",
   };
 }
-// ------------------------------
 // CORS setup
 const app = express();
+app.get("/", (req, res) => res.status(200).send("OK"));
+app.get("/api/health", (req, res) => res.status(200).json({ ok: true }));
 
 const defaultAllowedOrigins = [
   "http://localhost:5173",
   "http://localhost:4173",
+  // Add your SWA default hostname here (recommended as a fallback)
+  "https://nice-ground-009684610.1.azurestaticapps.net",
 ];
 
 const envOrigins = (process.env.CORS_ORIGINS || "")
@@ -171,18 +174,29 @@ const envOrigins = (process.env.CORS_ORIGINS || "")
 
 const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envOrigins])];
 
+// IMPORTANT: allow preflight to succeed fast
 app.use(
   cors({
-    origin: function (origin, callback) {
+    origin: (origin, callback) => {
+      // Allow server-to-server / curl / health checks (no Origin header)
       if (!origin) return callback(null, true);
+
       if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error("Not allowed by CORS: " + origin));
+
+      // Don't throw an Error() here; browsers treat it as a network failure.
+      return callback(null, false);
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+    maxAge: 86400, // cache preflight 24h
   })
 );
-app.get("/", (req, res) => res.status(200).send("OK"));
-app.get("/api/health", (req, res) => res.status(200).json({ ok: true }));
+
+// Handle OPTIONS preflight explicitly (important on some setups)
+app.options("*", cors());
+
 
 // ------------------------------
 // Helpers for AlAdhan timings
