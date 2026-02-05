@@ -1,6 +1,12 @@
 // const duas = require("./data/duas.json");
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+
+export async function health() {
+  const r = await fetch(`${API_BASE}/api/health`, { credentials: "include" });
+  return r.json();
+}
 
 export function apiUrl(path: string) {
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
