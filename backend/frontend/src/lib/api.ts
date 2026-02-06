@@ -1,25 +1,31 @@
-// const duas = require("./data/duas.json");
+// backend/frontend/src/lib/api.ts
 
+// IMPORTANT:
+// - In production (SWA), we set VITE_API_BASE to your Azure backend URL.
+// - In local dev / preview without env var, we use SAME-ORIGIN relative URLs like /api/health
+//   so it works from phone/laptop as long as the host serves the backend.
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 
 export async function health() {
-  const r = await fetch(`${API_BASE}/api/health`, { credentials: "include" });
+  const r = await fetch(apiUrl("/api/health"), { credentials: "include" });
   return r.json();
 }
 
 export function apiUrl(path: string) {
+  // allow absolute URLs if you ever pass one
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  const cleanBase = API_BASE.replace(/\/+$/, "");
+
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  return `${cleanBase}${cleanPath}`;
+
+  // If VITE_API_BASE is set, call that host. Otherwise call relative to current host.
+  return API_BASE ? `${API_BASE}${cleanPath}` : cleanPath;
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const url = apiUrl(path);
   return fetch(url, {
     ...init,
-    // Safe for now; helps later if you add cookie/session auth
     credentials: init.credentials ?? "include",
   });
 }

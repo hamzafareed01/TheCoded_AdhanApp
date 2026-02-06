@@ -101,7 +101,7 @@ async function loadAmazonSdk(): Promise<any> {
   return amazonSdkPromise;
 }
 
-function randomState(len = 16) {
+function randomState(len = 24) {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let out = '';
   for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
@@ -113,129 +113,104 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
   const navigate = useNavigate();
 
   const selectedPlatforms = onboardingData.selectedPlatforms || [];
-
-  // IMPORTANT: start every visit as "not connected"
   const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // Force re-login behavior: every time Step2 loads, clear any remembered connection
-  useEffect(() => {
-    setConnectedPlatforms([]);
-
-    // Also clear it from onboardingData so refresh/back doesn't keep it
-    setOnboardingData((prev: any) => ({
-      ...prev,
-      connectedPlatforms: [],
-    }));
-
-    // OPTIONAL but recommended: clear server-side saved token so backend doesn't say "connected"
-    // If you add the backend route, this will work. If not, it just fails silently.
-    (async () => {
-      try {
-        await apiFetch('/api/integrations/alexa/logout', { method: 'POST' });
-      } catch {
-        // ignore
-      }
-    })();
-
-    // Also try to log out from Amazon SDK context (helps avoid silent auth)
-    (async () => {
-      try {
-        const amazon = await loadAmazonSdk();
-        if (amazon?.Login?.logout) amazon.Login.logout();
-      } catch {
-        // ignore
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const markConnected = (platformId: string) => {
     setConnectedPlatforms((prev) => (prev.includes(platformId) ? prev : [...prev, platformId]));
   };
 
-  const connectAmazonPopup = async () => {
+  // Handle Amazon redirect callback (token comes back in URL hash)
+  useEffect(() => {
+    const handleAmazonCallback = async () => {
+      if (!window.location.hash?.includes('access_token=')) return;
+
+      const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const accessToken = params.get('access_token');
+      const returnedState = params.get('state');
+      const errorParam = params.get('error');
+      const errorDesc = params.get('error_description');
+
+      // Clean URL immediately to prevent repeat on refresh
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+
+      if (errorParam) {
+        setError(errorDesc || `Amazon login error: ${errorParam}`);
+        setConnecting(null);
+        return;
+      }
+
+      const expectedState = sessionStorage.getItem('lwa_state');
+      sessionStorage.removeItem('lwa_state');
+
+      if (expectedState && returnedState && expectedState !== returnedState) {
+        setError('Amazon login failed (state mismatch). Try again.');
+        setConnecting(null);
+        return;
+      }
+
+      if (!accessToken) {
+        setError('Amazon did not return an access token. Check return URL settings in Amazon console.');
+        setConnecting(null);
+        return;
+      }
+
+      try {
+        setConnecting('alexa');
+
+        // Fetch profile (works well on web/PWA)
+        const profileResp = await fetch(
+          `https://api.amazon.com/user/profile?access_token=${encodeURIComponent(accessToken)}`
+        );
+        const profile = profileResp.ok ? await profileResp.json() : null;
+
+        // Save to backend
+        const r = await apiFetch('/api/integrations/alexa/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accessToken, profile }),
+        });
+
+        if (!r.ok) {
+          const msg = await r.text().catch(() => '');
+          throw new Error(`Backend /alexa/login failed: ${r.status} ${msg}`);
+        }
+
+        markConnected('alexa');
+        setConnecting(null);
+      } catch (e: any) {
+        console.error(e);
+        setError(e?.message || 'Amazon login succeeded, but saving failed.');
+        setConnecting(null);
+      }
+    };
+
+    handleAmazonCallback();
+  }, []);
+
+  const connectAmazonRedirect = async () => {
     setError(null);
     setConnecting('alexa');
 
     try {
       const amazon = await loadAmazonSdk();
-      const returnUrl = getReturnUrl();
+      const redirectUri = getReturnUrl();
 
-      // Force prompt-like behavior as much as possible
-      // (logout() above helps; extra fields are safe even if SDK ignores them)
-      try {
-        if (amazon?.Login?.logout) amazon.Login.logout();
-      } catch {
-        // ignore
-      }
+      const state = randomState(24);
+      sessionStorage.setItem('lwa_state', state);
 
-      const options: any = {
+      // ✅ Redirect flow for mobile/PWA reliability
+      amazon.Login.authorize({
         scope: 'profile',
         response_type: 'token',
-        redirect_uri: returnUrl,
-        popup: true,
-        state: randomState(),
-
-        // best-effort "force login" hints (ignored if unsupported)
-        prompt: 'login',
-        interactive: 'always',
-      };
-
-      amazon.Login.authorize(options, async (response: any) => {
-        if (response?.error) {
-          setError(
-            response.error_description ||
-              'Amazon login failed or was cancelled. Please try again.'
-          );
-          setConnecting(null);
-          return;
-        }
-
-        const accessToken = response?.access_token;
-        if (!accessToken) {
-          setError('Amazon did not return an access token. Check return URL settings.');
-          setConnecting(null);
-          return;
-        }
-
-        // Correct SDK usage: retrieveProfile(callback)
-        let profile: any = null;
-        try {
-          await new Promise<void>((resolve) => {
-            amazon.Login.retrieveProfile((profileResponse: any) => {
-              if (profileResponse?.success) profile = profileResponse.profile;
-              resolve();
-            });
-          });
-        } catch {
-          // ignore
-        }
-
-        // Save to backend
-        try {
-          const r = await apiFetch('/api/integrations/alexa/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ accessToken, profile }),
-          });
-
-          if (!r.ok) {
-            const msg = await r.text().catch(() => '');
-            throw new Error(`Backend /alexa/login failed: ${r.status} ${msg}`);
-          }
-        } catch {
-          setError('Connected to Amazon, but backend could not save connection.');
-          // still allow user to proceed if they want
-        }
-
-        markConnected('alexa');
-        setConnecting(null);
+        redirect_uri: redirectUri, // ✅ IMPORTANT
+        state,
+        popup: false, // ✅ no popup on mobile
       });
     } catch (e: any) {
       setConnecting(null);
-      setError(e?.message || 'Could not start Amazon login. Check console.');
+      setError(e?.message || 'Could not start Amazon login.');
     }
   };
 
@@ -243,7 +218,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     setError(null);
 
     if (platformId === 'alexa') {
-      await connectAmazonPopup();
+      await connectAmazonRedirect();
       return;
     }
 
@@ -301,7 +276,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
                         ) : (
                           <div className="text-slate-400 text-sm">
                             {platformId === 'alexa' && isBusy
-                              ? 'Waiting for Amazon login…'
+                              ? 'Redirecting to Amazon…'
                               : 'Not connected'}
                           </div>
                         )}
