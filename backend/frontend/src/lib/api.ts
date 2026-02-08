@@ -1,31 +1,26 @@
-// backend/frontend/src/lib/api.ts
+// frontend/src/lib/api.ts
 
-// IMPORTANT:
-// - In production (SWA), we set VITE_API_BASE to your Azure backend URL.
-// - In local dev / preview without env var, we use SAME-ORIGIN relative URLs like /api/health
-//   so it works from phone/laptop as long as the host serves the backend.
-
-const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
-
-export async function health() {
-  const r = await fetch(apiUrl("/api/health"), { credentials: "include" });
-  return r.json();
-}
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_BASE ||
+  ""
+).replace(/\/+$/, "");
 
 export function apiUrl(path: string) {
-  // allow absolute URLs if you ever pass one
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
-
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
-
-  // If VITE_API_BASE is set, call that host. Otherwise call relative to current host.
   return API_BASE ? `${API_BASE}${cleanPath}` : cleanPath;
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function apiFetch(path: string, init: RequestInit = {}) {
   const url = apiUrl(path);
   return fetch(url, {
     ...init,
     credentials: init.credentials ?? "include",
   });
+}
+
+export async function health() {
+  const r = await apiFetch("/api/health");
+  return r.json();
 }
