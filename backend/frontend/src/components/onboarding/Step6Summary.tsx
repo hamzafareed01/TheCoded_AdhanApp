@@ -1,299 +1,268 @@
 // frontend/src/components/onboarding/Step6Summary.tsx
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
+import { Alert, AlertDescription } from "../ui/alert";
 import { CheckCircle, XCircle, PartyPopper } from "lucide-react";
 import { apiFetch } from "../../lib/api";
 
-const platformNames: Record<string, string> = {
-  alexa: "Amazon Alexa",
-  google: "Google Assistant",
-  apple: "Apple Home",
-  samsung: "Samsung SmartThings",
-  sonos: "Sonos",
-};
-
-type Step6SummaryProps = {
+type Props = {
   onboardingData: any;
   setOnboardingData: (data: any) => void;
 };
 
-function mapHighLatitudeMode(mode?: string): string {
-  switch (mode) {
-    case "angle":
-      return "angle_based";
-    case "one-seventh":
-      return "one_seventh";
-    case "midnight":
-      return "middle_of_the_night";
-    // "auto" or anything else -> backend default (middle_of_the_night)
-    default:
-      return "middle_of_the_night";
-  }
+const METHOD_LABEL: Record<string, string> = {
+  isna: "ISNA (North America)",
+  mwl: "Muslim World League",
+  karachi: "Karachi (Pakistan)",
+  makkah: "Makkah",
+  egypt: "Egyptian",
+  tehran: "Tehran",
+  jafari: "Jafari (Shia)",
+};
+
+const HIGHLAT_LABEL: Record<string, string> = {
+  automatic: "Automatic",
+  middle_of_the_night: "Middle of the Night",
+  one_seventh: "One Seventh",
+  angle_based: "Angle Based",
+};
+
+function readAmazonToken(): string | null {
+  // Support both sessionStorage and localStorage (different builds used both)
+  return (
+    sessionStorage.getItem("amazon_access_token") ||
+    localStorage.getItem("amazon_access_token") ||
+    null
+  );
 }
 
-export default function Step6Summary({
-  onboardingData,
-}: Step6SummaryProps) {
+function toNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return null;
+}
+
+export default function Step6Summary({ onboardingData }: Props) {
   const navigate = useNavigate();
-  const [isComplete, setIsComplete] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleConfirm = async () => {
+  const summary = useMemo(() => {
+    const location = onboardingData?.location || {};
+    const prayer = onboardingData?.prayerSettings || {};
+    const devices = onboardingData?.devices || {};
+    const platformsSelected: string[] = onboardingData?.selectedPlatforms || [];
+    const platformsConnected: string[] = onboardingData?.connectedPlatforms || [];
+
+    const country = location?.country || "US";
+    const city = location?.city || "Chicago";
+    const timezone = location?.timezone || "America/Chicago";
+    const latitude = toNumber(location?.latitude);
+    const longitude = toNumber(location?.longitude);
+
+    const calculationMethod: string = prayer?.calculationMethod || prayer?.method || "isna";
+    const madhhab: string = prayer?.madhhab || "hanafi"; // hanafi/shafi
+    const madhab: string = prayer?.madhab || (prayer?.shia ? "shia" : "sunni"); // sunni/shia
+    const highLatitudeMethod: string = prayer?.highLatitudeMethod || "automatic";
+
+    const quietHoursEnabled =
+      devices?.adhanPreferences?.quietHoursEnabled === true ||
+      devices?.quietHours?.enabled === true;
+
+    const quietFrom =
+      devices?.adhanPreferences?.quietHours?.from ||
+      devices?.quietHours?.from ||
+      "22:00";
+
+    const quietTo =
+      devices?.adhanPreferences?.quietHours?.to ||
+      devices?.quietHours?.to ||
+      "07:00";
+
+    return {
+      platformsSelected,
+      platformsConnected,
+      location: { country, city, timezone, latitude, longitude },
+      prayer: { calculationMethod, madhhab, madhab, highLatitudeMethod },
+      quiet: { enabled: quietHoursEnabled, from: quietFrom, to: quietTo },
+    };
+  }, [onboardingData]);
+
+  function isConnected(platform: string) {
+    return summary.platformsConnected?.includes(platform);
+  }
+
+  async function finish() {
     setSaving(true);
     setError(null);
 
-    const location = onboardingData.location || {};
-    const prayerSettings = onboardingData.prayerSettings || {};
-    const adhanPreferences = onboardingData.adhanPreferences || {};
-    const mosque = onboardingData.mosque || null;
-
-    const quietHoursEnabled = !!adhanPreferences.quietHoursEnabled;
-    const quiet = adhanPreferences.quietHours || {};
-
-    const payload = {
-      // Location
-      country: location.country || "US",
-      city: location.city || "Chicago",
-      timezone: location.timezone || "America/Chicago",
-      latitude:
-        typeof location.latitude === "number" ? location.latitude : undefined,
-      longitude:
-        typeof location.longitude === "number" ? location.longitude : undefined,
-
-      // Prayer rules
-      calculationMethod: prayerSettings.calculationMethod || "isna",
-      madhhab:
-        prayerSettings.asrMethod === "hanafi" ? "hanafi" : "shafi",
-      shia: prayerSettings.madhab === "shia",
-      highLatitudeMethod: mapHighLatitudeMode(
-        prayerSettings.highLatitudeMode,
-      ),
-
-      // Mosque (if chosen)
-      mosqueId: mosque?.id || null,
-
-      // Quiet hours / Adhan preferences
-      quietHours: quietHoursEnabled
-        ? {
-            enabled: true,
-            from: quiet.from || "22:00",
-            to: quiet.to || "07:00",
-            muteFajr: !!adhanPreferences.muteFajr,
-          }
-        : {
-            enabled: false,
-            from: quiet.from || "22:00",
-            to: quiet.to || "07:00",
-            muteFajr: !!adhanPreferences.muteFajr,
-          },
-    };
-
     try {
-      const res = await apiFetch(`/api/user/settings`, {
+      const amazonToken = readAmazonToken();
+
+      // If we have a token, you can optionally let backend mark "connected" again (safe no-op if already set)
+      if (amazonToken) {
+        await apiFetch("/api/integrations/alexa/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessToken: amazonToken }),
+        }).catch(() => {
+          // don't block onboarding completion if this fails
+        });
+      }
+
+      const payload = {
+        // location
+        country: summary.location.country,
+        city: summary.location.city,
+        timezone: summary.location.timezone,
+        ...(summary.location.latitude !== null ? { latitude: summary.location.latitude } : {}),
+        ...(summary.location.longitude !== null ? { longitude: summary.location.longitude } : {}),
+
+        // prayer prefs
+        calculationMethod: summary.prayer.calculationMethod,
+        madhhab: summary.prayer.madhhab,
+        shia: summary.prayer.madhab === "shia",
+        highLatitudeMethod: summary.prayer.highLatitudeMethod,
+
+        // quiet hours
+        quietHours: {
+          enabled: summary.quiet.enabled,
+          from: summary.quiet.from,
+          to: summary.quiet.to,
+          // backend supports it; ok if ignored
+          muteFajr: true,
+        },
+      };
+
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (amazonToken) headers["Authorization"] = `Bearer ${amazonToken}`;
+
+      const resp = await apiFetch("/api/user/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        let msg = "Could not save your settings on the server.";
-        try {
-          const json = await res.json();
-          if (json?.error) msg = json.error;
-        } catch {
-          // ignore parse errors
-        }
-        setError(msg);
-        setSaving(false);
-        return;
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        throw new Error(t || "Failed to save settings.");
       }
 
-      setIsComplete(true);
-    } catch (err) {
-      console.error("Failed to save user settings", err);
-      setError(
-        "Could not reach the backend. We will continue with local settings.",
-      );
+      navigate("/dashboard");
+    } catch (e: any) {
+      setError(e?.message || "Failed to finish onboarding.");
     } finally {
       setSaving(false);
-      setTimeout(() => {
-        navigate("/dashboard");
-      }, 1200);
     }
-  };
-
-  if (isComplete) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center py-8 px-4">
-        <div className="max-w-md text-center">
-          <div className="w-20 h-20 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-full flex items-center justify-center mx-auto mb-6">
-            <PartyPopper className="w-10 h-10 text-white" />
-          </div>
-          <h1 className="text-white mb-4">All set!</h1>
-          <p className="text-slate-300 text-lg">
-            Smart Adhan automation is now enabled on your devices.
-          </p>
-          <p className="text-slate-400 mt-4">Redirecting to dashboard...</p>
-        </div>
-      </div>
-    );
   }
 
-  const selectedPlatforms = onboardingData.selectedPlatforms || [];
-  const connectedPlatforms = onboardingData.connectedPlatforms || [];
-  const { location, prayerSettings, devices, adhanPreferences } =
-    onboardingData;
-
   return (
-    <div className="min-h-screen bg-slate-950 py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        <Logo className="mb-8" />
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background via-background to-muted p-6">
+      <Logo className="mb-6" />
+      <ProgressIndicator currentStep={6} totalSteps={6} />
 
-        <ProgressIndicator currentStep={6} totalSteps={6} />
-
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
-          <h1 className="text-white mb-4">Review</h1>
-          <p className="text-slate-300 mb-8">
-            Review your setup before we enable the Adhan automation.
+      <div className="w-full max-w-3xl mt-6 space-y-6">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center gap-2">
+            <PartyPopper className="w-6 h-6" />
+            <h1 className="text-3xl font-bold">Setup Complete</h1>
+            <Badge variant="secondary">Ready</Badge>
+          </div>
+          <p className="text-muted-foreground">
+            Review everything below. When you click <b>Finish</b>, we’ll save your preferences to your account.
           </p>
+        </div>
 
-          {error && (
-            <div className="mb-4 text-sm text-amber-300 bg-amber-900/20 border border-amber-700 rounded-md px-3 py-2">
-              {error}
-            </div>
-          )}
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-          <div className="space-y-6 mb-8">
-            {/* Platforms & Accounts */}
-            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
-              <h2 className="text-white mb-4">Platforms & Accounts</h2>
-              <div className="space-y-2">
-                {selectedPlatforms.map((platform: string) => (
-                  <div
-                    key={platform}
-                    className="flex items-center justify-between"
-                  >
-                    <span className="text-slate-300">
-                      {platformNames[platform]}
-                    </span>
-                    {connectedPlatforms.includes(platform) ? (
-                      <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Connected
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-slate-700 text-slate-400 border-slate-600">
-                        <XCircle className="w-3 h-3 mr-1" />
-                        Not connected
-                      </Badge>
-                    )}
-                  </div>
-                ))}
-                {selectedPlatforms.includes("sonos") && (
-                  <p className="text-slate-500 text-sm mt-2">
-                    Sonos: Using{" "}
-                    {connectedPlatforms.includes("alexa")
-                      ? "Alexa"
-                      : "Google"}{" "}
-                    connection
-                  </p>
+        <div className="rounded-xl border bg-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold">Connected Accounts</h2>
+
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="font-medium">Amazon (Alexa)</div>
+              <div className="flex items-center gap-2">
+                {isConnected("amazon") ? (
+                  <>
+                    <CheckCircle className="w-5 h-5" />
+                    <span className="text-sm">Connected</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-5 h-5" />
+                    <span className="text-sm text-muted-foreground">Not connected</span>
+                  </>
                 )}
               </div>
             </div>
 
-            {/* Location & Timezone */}
-            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
-              <h2 className="text-white mb-4">Location & Timezone</h2>
-              <div className="space-y-1 text-slate-300">
-                <p>
-                  <span className="text-slate-500">Country:</span>{" "}
-                  {location?.country?.toUpperCase() || "Not set"}
-                </p>
-                <p>
-                  <span className="text-slate-500">City:</span>{" "}
-                  {location?.city || "Not set"}
-                </p>
-                <p>
-                  <span className="text-slate-500">Timezone:</span>{" "}
-                  {location?.timezone || "Not set"}
-                </p>
+            <div className="text-xs text-muted-foreground">
+              Not connected is OK for now — you can still use the PWA. Linking mainly helps Alexa + per-user settings.
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border bg-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold">Your Settings</h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-muted-foreground">Location</div>
+              <div className="font-medium">
+                {summary.location.city}, {summary.location.country}
+              </div>
+              <div className="text-xs text-muted-foreground">{summary.location.timezone}</div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground">Calculation Method</div>
+              <div className="font-medium">
+                {METHOD_LABEL[summary.prayer.calculationMethod] || summary.prayer.calculationMethod}
               </div>
             </div>
 
-            {/* Prayer Settings */}
-            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
-              <h2 className="text-white mb-4">Prayer Settings</h2>
-              <div className="space-y-1 text-slate-300">
-                <p>
-                  <span className="text-slate-500">Method:</span>{" "}
-                  {prayerSettings?.calculationMethod?.toUpperCase() || "ISNA"}
-                </p>
-                <p>
-                  <span className="text-slate-500">Madhab:</span>{" "}
-                  {prayerSettings?.madhab === "shia"
-                    ? "Shia (Jafari)"
-                    : "Sunni"}
-                </p>
-                <p>
-                  <span className="text-slate-500">Asr Method:</span>{" "}
-                  {prayerSettings?.asrMethod === "hanafi"
-                    ? "Hanafi"
-                    : "Standard"}
-                </p>
-                <p>
-                  <span className="text-slate-500">High-latitude:</span>{" "}
-                  {prayerSettings?.highLatitudeMode || "Automatic"}
-                </p>
+            <div>
+              <div className="text-muted-foreground">Asr (Madhhab)</div>
+              <div className="font-medium">{summary.prayer.madhhab}</div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground">Preference</div>
+              <div className="font-medium">{summary.prayer.madhab}</div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground">High Latitude Rule</div>
+              <div className="font-medium">
+                {HIGHLAT_LABEL[summary.prayer.highLatitudeMethod] || summary.prayer.highLatitudeMethod}
               </div>
             </div>
 
-            {/* Devices & Adhan */}
-            <div className="p-6 bg-slate-800/50 rounded-xl border border-slate-700">
-              <h2 className="text-white mb-4">Devices & Adhan</h2>
-              <div className="space-y-3 text-slate-300">
-                <p>
-                  <span className="text-slate-500">Devices:</span>{" "}
-                  {devices?.length || 0} device(s) selected
-                </p>
-                <p>
-                  <span className="text-slate-500">Reciter:</span>{" "}
-                  {adhanPreferences?.reciter || "Madinah"}
-                </p>
-                {adhanPreferences?.quietHoursEnabled && (
-                  <p>
-                    <span className="text-slate-500">Quiet Hours:</span>{" "}
-                    {adhanPreferences?.quietHours?.from} –{" "}
-                    {adhanPreferences?.quietHours?.to}
-                  </p>
-                )}
+            <div>
+              <div className="text-muted-foreground">Quiet Hours</div>
+              <div className="font-medium">
+                {summary.quiet.enabled ? `${summary.quiet.from} → ${summary.quiet.to}` : "Off"}
               </div>
             </div>
           </div>
+        </div>
 
-          <div className="flex gap-4">
-            <Button
-              onClick={() => navigate("/onboarding/step5")}
-              variant="outline"
-              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
-              size="lg"
-              disabled={saving}
-            >
-              Back
-            </Button>
-            <Button
-              onClick={handleConfirm}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white"
-              size="lg"
-              disabled={saving}
-            >
-              {saving ? "Saving…" : "Confirm & Enable Adhan"}
-            </Button>
-          </div>
+        <div className="flex justify-between">
+          <Button variant="outline" onClick={() => navigate("/onboarding/step5")} disabled={saving}>
+            Back
+          </Button>
+
+          <Button onClick={finish} disabled={saving}>
+            {saving ? "Saving..." : "Finish"}
+          </Button>
         </div>
       </div>
     </div>
