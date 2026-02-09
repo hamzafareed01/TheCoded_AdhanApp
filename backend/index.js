@@ -765,9 +765,12 @@ app.get("/api/user/settings", optionalAmazonAuth, (req, res) => {
 
 // Save/merge settings (works with or without Amazon token)
 // NOTE: If you want to REQUIRE Amazon login for saving, change optionalAmazonAuth -> requireAmazonAuth
+
+
+// Save/merge user settings (called by Step6Summary)
 app.post("/api/user/settings", optionalAmazonAuth, (req, res) => {
   const userKey = getUserKeyFromReq(req);
-  const settings = ensureSettings(userKey);
+  const userSettings = ensureSettings(userKey);
 
   const {
     language,
@@ -788,6 +791,7 @@ app.post("/api/user/settings", optionalAmazonAuth, (req, res) => {
     quietHours,
   } = req.body || {};
 
+  // Merge only fields that are provided
   const patch = {
     ...(language ? { language } : {}),
     ...(madhhab ? { madhhab } : {}),
@@ -799,20 +803,24 @@ app.post("/api/user/settings", optionalAmazonAuth, (req, res) => {
     ...(timezone ? { timezone } : {}),
     ...(typeof latitude === "number" ? { latitude } : {}),
     ...(typeof longitude === "number" ? { longitude } : {}),
-    ...(mosqueId ? { mosqueId } : {}),
-    ...(mosqueName ? { mosqueName } : {}),
-    ...(mosqueAddress ? { mosqueAddress } : {}),
+    ...(mosqueId !== undefined ? { mosqueId } : {}),
+    ...(mosqueName !== undefined ? { mosqueName } : {}),
+    ...(mosqueAddress !== undefined ? { mosqueAddress } : {}),
     ...(typeof mosqueLat === "number" ? { mosqueLat } : {}),
     ...(typeof mosqueLng === "number" ? { mosqueLng } : {}),
+  };
+
+  const nextSettings = {
+    ...userSettings,
+    ...patch,
     ...(quietHours
-      ? { quietHours: { ...(settings.quietHours || {}), ...quietHours } }
+      ? { quietHours: { ...(userSettings.quietHours || {}), ...quietHours } }
       : {}),
   };
 
-  const updated = { ...settings, ...patch };
-  settingsByAmazonUserId.set(userKey, updated);
+  settingsByAmazonUserId.set(userKey, nextSettings);
 
-  res.json({ ok: true, userKey, settings: updated });
+  return res.json({ ok: true, userKey, settings: nextSettings });
 });
 
 
