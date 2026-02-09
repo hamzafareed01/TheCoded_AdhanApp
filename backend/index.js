@@ -9,7 +9,15 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 
-const duas = require("./data/duas.json");
+// --- Data (safe-load in case deploy misses data files) ---
+let duas = [];
+try {
+  duas = require("./data/duas.json");
+} catch (e) {
+  console.warn("[startup] duas.json not found or failed to load:", e?.message || e);
+  duas = [];
+}
+
 
 const QURAN_API_BASE = "https://api.alquran.cloud/v1";
 const ALADHAN_BASE = "https://api.aladhan.com/v1";
@@ -38,7 +46,6 @@ const envOrigins = (process.env.CORS_ORIGINS || "")
   .filter(Boolean);
 
 const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envOrigins])];
-
 
 const corsOptions = {
   origin: (origin, callback) => {
@@ -751,78 +758,29 @@ app.post("/api/integrations/alexa/disconnect", requireAmazonAuth, (req, res) => 
   res.json({ success: true, alexa: status.alexa, userKey });
 });
 
-
 // -------------------
 // User settings (per Amazon user)
 // -------------------
-
-// Get settings (works with or without Amazon token)
 app.get("/api/user/settings", optionalAmazonAuth, (req, res) => {
   const userKey = getUserKeyFromReq(req);
   const settings = ensureSettings(userKey);
   res.json({ userKey, settings });
 });
 
-// Save/merge settings (works with or without Amazon token)
-// NOTE: If you want to REQUIRE Amazon login for saving, change optionalAmazonAuth -> requireAmazonAuth
-
-
-// Save/merge user settings (called by Step6Summary)
-app.post("/api/user/settings", optionalAmazonAuth, (req, res) => {
+app.post("/api/user/settings", requireAmazonAuth, (req, res) => {
   const userKey = getUserKeyFromReq(req);
-  const userSettings = ensureSettings(userKey);
+  const existing = ensureSettings(userKey);
+  const patch = req.body || {};
 
-  const {
-    language,
-    madhhab,
-    shia,
-    calculationMethod,
-    highLatitudeMethod,
-    country,
-    city,
-    timezone,
-    latitude,
-    longitude,
-    mosqueId,
-    mosqueName,
-    mosqueAddress,
-    mosqueLat,
-    mosqueLng,
-    quietHours,
-  } = req.body || {};
-
-  // Merge only fields that are provided
-  const patch = {
-    ...(language ? { language } : {}),
-    ...(madhhab ? { madhhab } : {}),
-    ...(typeof shia === "boolean" ? { shia } : {}),
-    ...(calculationMethod ? { calculationMethod } : {}),
-    ...(highLatitudeMethod ? { highLatitudeMethod } : {}),
-    ...(country ? { country } : {}),
-    ...(city ? { city } : {}),
-    ...(timezone ? { timezone } : {}),
-    ...(typeof latitude === "number" ? { latitude } : {}),
-    ...(typeof longitude === "number" ? { longitude } : {}),
-    ...(mosqueId !== undefined ? { mosqueId } : {}),
-    ...(mosqueName !== undefined ? { mosqueName } : {}),
-    ...(mosqueAddress !== undefined ? { mosqueAddress } : {}),
-    ...(typeof mosqueLat === "number" ? { mosqueLat } : {}),
-    ...(typeof mosqueLng === "number" ? { mosqueLng } : {}),
-  };
-
-  const nextSettings = {
-    ...userSettings,
+  const merged = {
+    ...existing,
     ...patch,
-    ...(quietHours
-      ? { quietHours: { ...(userSettings.quietHours || {}), ...quietHours } }
-      : {}),
+    quietHours: patch.quietHours ? { ...existing.quietHours, ...patch.quietHours } : existing.quietHours,
   };
 
-  settingsByAmazonUserId.set(userKey, nextSettings);
-
-  return res.json({ ok: true, userKey, settings: nextSettings });
+  settingsByAmazonUserId.set(userKey, merged);
+  res.json({ ok: true, userKey, settings: merged });
 });
-
 
 // -------------------
 // Prayer Times (timezone-correct via AlAdhan)
