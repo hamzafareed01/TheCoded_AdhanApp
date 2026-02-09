@@ -493,9 +493,23 @@ function isWithinQuietHours(now, quietHours) {
   return currentMinutes >= fromMinutes || currentMinutes < toMinutes;
 }
 
+
+
+
 // -------------------
 // BASIC ROUTES
 // -------------------
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  });
+});
+
+
+
+
 app.get("/", (_req, res) => res.status(200).send("OK"));
 app.get("/health", (_req, res) => res.status(200).send("ok"));
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() }));
