@@ -1,256 +1,322 @@
-import { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Logo } from "../shared/Logo";
-import { ProgressIndicator } from "../shared/ProgressIndicator";
+
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import { CheckCircle } from "lucide-react";
-import { AlexaIcon, GoogleIcon, AppleIcon, SamsungIcon, SonosIcon } from "../shared/BrandIcons";
+import { Logo } from "../shared/Logo";
+import { ProgressIndicator } from "../shared/ProgressIndicator";
+import { AlexaIcon, GoogleIcon, AppleIcon } from "../shared/BrandIcons";
 import { apiFetch } from "../../lib/api";
 
-const platformIconMap: any = {
-  alexa: AlexaIcon,
-  google: GoogleIcon,
-  apple: AppleIcon,
-  samsung: SamsungIcon,
-  sonos: SonosIcon,
-};
+declare global {
+  interface Window {
+    amazon?: any;
+  }
+}
 
-const platformDetails: any = {
-  alexa: { name: "Amazon Alexa", buttonText: "Login with Amazon" },
-  google: { name: "Google Assistant", buttonText: "Connect Google" },
-  apple: { name: "Apple Home", buttonText: "Show HomeKit setup code" },
-  samsung: { name: "Samsung SmartThings", buttonText: "Connect SmartThings" },
-  sonos: {
-    name: "Sonos",
-    buttonText: "Connected via Alexa/Google",
-    helper: "Sonos will use your Alexa or Google connection",
-  },
-};
+type PlatformKey = "alexa" | "google" | "apple";
+
+interface OnboardingData {
+  connectedPlatforms?: PlatformKey[];
+  tokens?: Record<string, string>;
+}
+
+interface Props {
+  onboardingData?: OnboardingData;
+  setOnboardingData?: (data: OnboardingData) => void;
+}
+
+const LS_CONNECTED = "adhan_connected_platforms";
+const LS_TOKENS = "adhan_tokens";
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(key: string, value: unknown) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function loadAmazonSDK(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (window.amazon?.Login) return resolve();
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[src="https://assets.loginwithamazon.com/sdk/na/login1.js"]'
+    );
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => reject(new Error("Amazon SDK load error")));
+      return;
+    }
+
+    const s = document.createElement("script");
+    s.src = "https://assets.loginwithamazon.com/sdk/na/login1.js";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Amazon SDK load error"));
+    document.head.appendChild(s);
+  });
+}
 
 function getAmazonClientId(): string {
-  return ((import.meta as any).env?.VITE_AMAZON_CLIENT_ID || "").trim();
+  return (
+    import.meta.env.VITE_AMAZON_CLIENT_ID ||
+    import.meta.env.VITE_LWA_CLIENT_ID ||
+    ""
+  );
 }
 
 function getReturnUrl(): string {
-  const envUrl = ((import.meta as any).env?.VITE_AMAZON_RETURN_URL || "").trim();
-  return envUrl || `${window.location.origin}/onboarding/step2`;
+  // Prefer explicit env vars, otherwise fall back to your Step2 route
+  const env =
+    import.meta.env.VITE_AMAZON_RETURN_URL ||
+    import.meta.env.VITE_AMAZON_REDIRECT_URI ||
+    "";
+  if (env) return env;
+
+  return `${window.location.origin}/onboarding/step2`;
 }
 
-function randomState(len = 24) {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let out = "";
-  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
-}
-
-function parseHashParams(hash: string) {
-  const clean = hash.replace(/^#/, "");
-  return new URLSearchParams(clean);
-}
-
-export default function Step2ConnectAccounts({ onboardingData, setOnboardingData }: any) {
+export default function Step2ConnectAccounts({ onboardingData, setOnboardingData }: Props) {
   const navigate = useNavigate();
-  const selectedPlatforms = onboardingData.selectedPlatforms || [];
 
-  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([]);
-  const [connecting, setConnecting] = useState<string | null>(null);
+  const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const markConnected = (platformId: string) => {
-    setConnectedPlatforms((prev) => (prev.includes(platformId) ? prev : [...prev, platformId]));
+  const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(() =>
+    readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
+  );
+
+  const [tokens, setTokens] = useState<Record<string, string>>(() =>
+    readJson<Record<string, string>>(LS_TOKENS, onboardingData?.tokens ?? {})
+  );
+
+  useEffect(() => {
+    writeJson(LS_CONNECTED, connectedPlatforms);
+  }, [connectedPlatforms]);
+
+  useEffect(() => {
+    writeJson(LS_TOKENS, tokens);
+  }, [tokens]);
+
+  const platforms = useMemo(
+    () => [
+      {
+        key: "alexa" as const,
+        name: "Amazon Alexa",
+        desc: "Control Adhan & reminders using Alexa devices.",
+        Icon: AlexaIcon,
+        badge: "Recommended",
+      },
+      {
+        key: "google" as const,
+        name: "Google",
+        desc: "Calendar + reminders (coming soon).",
+        Icon: GoogleIcon,
+        badge: "Soon",
+      },
+      {
+        key: "apple" as const,
+        name: "Apple",
+        desc: "iOS notifications (coming soon).",
+        Icon: AppleIcon,
+        badge: "Soon",
+      },
+    ],
+    []
+  );
+
+  const isConnected = (key: PlatformKey) => connectedPlatforms.includes(key);
+
+  const markConnected = (key: PlatformKey) => {
+    setConnectedPlatforms((prev) => (prev.includes(key) ? prev : [...prev, key]));
   };
 
-  // 1) On page load, handle Amazon redirect callback (access_token is in URL hash)
-  useEffect(() => {
-    (async () => {
-      try {
-        if (!window.location.hash?.includes("access_token=") && !window.location.hash?.includes("error=")) {
-          return;
-        }
+  const markDisconnected = (key: PlatformKey) => {
+    setConnectedPlatforms((prev) => prev.filter((p) => p !== key));
+    setTokens((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
 
-        setConnecting("alexa");
-
-        const params = parseHashParams(window.location.hash);
-        const accessToken = params.get("access_token");
-        const returnedState = params.get("state");
-        const errorParam = params.get("error");
-        const errorDesc = params.get("error_description");
-
-        // Clean URL immediately (prevents re-trigger on refresh)
-        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-
-        if (errorParam) {
-          setError(errorDesc || `Amazon login error: ${errorParam}`);
-          setConnecting(null);
-          return;
-        }
-
-        const expectedState = sessionStorage.getItem("lwa_state");
-        sessionStorage.removeItem("lwa_state");
-
-        if (expectedState && returnedState && expectedState !== returnedState) {
-          setError("Amazon login failed (state mismatch). Please try again.");
-          setConnecting(null);
-          return;
-        }
-
-        if (!accessToken) {
-          setError("Amazon did not return an access token. Check Return URL settings in Amazon Security Profile.");
-          setConnecting(null);
-          return;
-        }
-
-        // ✅ Send token to backend. Backend can fetch profile server-side (avoids CORS/mobile issues).
-        const r = await apiFetch("/api/integrations/alexa/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accessToken }),
-        });
-
-        if (!r.ok) {
-          const msg = await r.text().catch(() => "");
-          throw new Error(`Backend /api/integrations/alexa/login failed: ${r.status} ${msg}`);
-        }
-
-        markConnected("alexa");
-        setConnecting(null);
-      } catch (e: any) {
-        console.error(e);
-        setError(e?.message || "Amazon login succeeded, but saving failed.");
-        setConnecting(null);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const connectAmazonRedirect = async () => {
+  async function connectAlexa() {
     setError(null);
+    setLoadingKey("alexa");
 
     const clientId = getAmazonClientId();
+    const redirectUri = getReturnUrl();
+
     if (!clientId) {
-      setError("Missing VITE_AMAZON_CLIENT_ID in frontend env.");
+      setLoadingKey(null);
+      setError("Missing VITE_AMAZON_CLIENT_ID in your frontend env vars.");
       return;
     }
 
-    setConnecting("alexa");
+    try {
+      await loadAmazonSDK();
 
-    const returnUrl = getReturnUrl();
-    const state = randomState(24);
-    sessionStorage.setItem("lwa_state", state);
+      // Popup-based implicit grant
+      const options = {
+        scope: "profile",
+        response_type: "token",
+        redirect_uri: redirectUri,
+        popup: true,
+        state: `adhan_${Date.now()}`,
+      };
 
-    // ✅ Most reliable flow for mobile/PWA: manual redirect to Amazon OAuth
-    const authUrl = new URL("https://www.amazon.com/ap/oa");
-    authUrl.searchParams.set("client_id", clientId);
-    authUrl.searchParams.set("scope", "profile");
-    authUrl.searchParams.set("response_type", "token"); // implicit
-    authUrl.searchParams.set("redirect_uri", returnUrl);
-    authUrl.searchParams.set("state", state);
+      const tokenResp: any = await new Promise((resolve, reject) => {
+        window.amazon.Login.authorize(options, (res: any) => {
+          if (!res) return reject(new Error("No response from Amazon login."));
+          if (res.error) return reject(new Error(res.error_description || res.error));
+          resolve(res);
+        });
+      });
 
-    window.location.assign(authUrl.toString());
-  };
+      const accessToken: string | undefined = tokenResp?.access_token;
+      if (!accessToken) throw new Error("Amazon did not return an access token.");
 
-  const handleConnect = async (platformId: string) => {
+      // Tell YOUR backend we linked Alexa (store status server-side)
+      // (We send the token; your backend can verify it if you choose later.)
+      const r = await apiFetch("/api/integrations/alexa/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken }),
+      });
+
+      if (!r.ok) {
+        const msg = await r.text().catch(() => "");
+        throw new Error(`Backend link failed (${r.status}). ${msg}`);
+      }
+
+      setTokens((prev) => ({ ...prev, alexa: accessToken }));
+      markConnected("alexa");
+    } catch (e: any) {
+      setError(e?.message || "Alexa connection failed.");
+    } finally {
+      setLoadingKey(null);
+    }
+  }
+
+  async function disconnectAlexa() {
     setError(null);
-    if (platformId === "alexa") {
-      await connectAmazonRedirect();
-      return;
+    setLoadingKey("alexa");
+
+    try {
+      // Best-effort server-side disconnect (your backend route exists)
+      await apiFetch("/api/integrations/alexa/disconnect", { method: "POST" }).catch(() => {});
+      // Best-effort client logout (won't always be necessary)
+      try {
+        window.amazon?.Login?.logout?.();
+      } catch {}
+
+      markDisconnected("alexa");
+    } finally {
+      setLoadingKey(null);
     }
-    markConnected(platformId);
-  };
+  }
 
-  const handleNext = () => {
-    setOnboardingData({ ...onboardingData, connectedPlatforms });
+  async function handleConnect(key: PlatformKey) {
+    if (key === "alexa") return connectAlexa();
+    // For now: just mark as "not available"
+    setError(`${key.toUpperCase()} integration is coming soon.`);
+  }
+
+  async function handleDisconnect(key: PlatformKey) {
+    if (key === "alexa") return disconnectAlexa();
+    markDisconnected(key);
+  }
+
+  function handleContinue() {
+    setOnboardingData?.({
+      ...(onboardingData || {}),
+      connectedPlatforms,
+      tokens,
+    });
     navigate("/onboarding/step3");
-  };
-
-  const isBusy = connecting === "alexa";
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        <Logo className="mb-8" />
-        <ProgressIndicator currentStep={2} totalSteps={6} />
+    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
+      <div className="mx-auto max-w-3xl px-6 py-10">
+        <div className="flex items-center justify-between">
+          <Logo />
+          <ProgressIndicator currentStep={2} totalSteps={6} />
+        </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
-          <h1 className="text-white mb-4">Connect your accounts</h1>
-          <p className="text-slate-300 mb-4">
-            Connect your smart home accounts so we can discover your devices and schedule Adhan safely.
+        <div className="mt-8">
+          <h1 className="text-2xl font-semibold">Connect your accounts</h1>
+          <p className="mt-2 text-muted-foreground">
+            Linking Alexa lets your settings follow you across devices and enables voice experiences.
           </p>
+        </div>
 
-          {error && (
-            <div className="mb-4 text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-md px-3 py-2">
-              {error}
-            </div>
-          )}
+        {error && (
+          <div className="mt-6 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm">
+            {error}
+          </div>
+        )}
 
-          <div className="space-y-4 mb-8">
-            {selectedPlatforms.map((platformId: string) => {
-              const platform = platformDetails[platformId];
-              const isConnected = connectedPlatforms.includes(platformId);
-              const IconComponent = platformIconMap[platformId];
+        <div className="mt-8 space-y-4">
+          {platforms.map((p) => {
+            const connected = isConnected(p.key);
+            const busy = loadingKey === p.key;
 
-              return (
-                <div key={platformId} className="p-6 bg-slate-800/50 border border-slate-700 rounded-xl">
-                  <div className="flex items-center justify-between gap-4 flex-wrap">
-                    <div className="flex items-center gap-3">
-                      <IconComponent className="w-12 h-12" />
-                      <div>
-                        <div className="text-white mb-1">{platform.name}</div>
-
-                        {isConnected ? (
-                          <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                            <CheckCircle className="w-3 h-3 mr-1" />
-                            Connected
-                          </Badge>
-                        ) : (
-                          <div className="text-slate-400 text-sm">
-                            {platformId === "alexa" && isBusy ? "Redirecting to Amazon login…" : "Not connected"}
-                          </div>
-                        )}
-
-                        {platform.helper && <div className="text-slate-500 text-sm mt-1">{platform.helper}</div>}
-                      </div>
+            return (
+              <div
+                key={p.key}
+                className="flex items-center justify-between rounded-xl border bg-card p-5 shadow-sm"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="grid h-11 w-11 place-items-center rounded-lg bg-muted">
+                    <p.Icon className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="font-medium">{p.name}</div>
+                      {p.badge && <Badge variant="secondary">{p.badge}</Badge>}
+                      {connected && <Badge>Connected</Badge>}
                     </div>
-
-                    <div>
-                      <Button
-                        onClick={() => handleConnect(platformId)}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                        size="sm"
-                        disabled={(platformId === "alexa" && isBusy) || platformId === "sonos"}
-                      >
-                        {platformId === "alexa" && isBusy ? "Connecting…" : platform.buttonText}
-                      </Button>
-                    </div>
+                    <div className="text-sm text-muted-foreground">{p.desc}</div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
 
-          <div className="flex gap-4">
-            <Button
-              onClick={() => navigate("/onboarding/step1")}
-              variant="outline"
-              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
-              size="lg"
-            >
-              Back
-            </Button>
+                <div className="flex items-center gap-2">
+                  {!connected ? (
+                    <Button
+                      onClick={() => handleConnect(p.key)}
+                      disabled={busy}
+                      variant={p.key === "alexa" ? "default" : "secondary"}
+                    >
+                      {busy ? "Connecting..." : "Connect"}
+                    </Button>
+                  ) : (
+                    <Button onClick={() => handleDisconnect(p.key)} disabled={busy} variant="outline">
+                      {busy ? "Disconnecting..." : "Disconnect"}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
-            <Button
-              onClick={handleNext}
-              disabled={connectedPlatforms.length === 0}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white"
-              size="lg"
-            >
-              Next
-            </Button>
-          </div>
+        <div className="mt-10 flex items-center justify-between">
+          <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>
+            Back
+          </Button>
+
+          <Button onClick={handleContinue}>Continue</Button>
         </div>
       </div>
     </div>
   );
 }
-
