@@ -11,9 +11,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@prisma/adapter-mssql": "^7.4.0",
     "adhan": "^4.4.3",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "mssql": "^12.2.0"
   }
 }

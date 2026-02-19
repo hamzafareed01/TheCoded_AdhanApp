@@ -9,15 +9,10 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 
-// --- Data (safe-load in case deploy misses data files) ---
-let duas = [];
-try {
-  duas = require("./data/duas.json");
-} catch (e) {
-  console.warn("[startup] duas.json not found or failed to load:", e?.message || e);
-  duas = [];
-}
+// Prisma (Azure SQL)
+const { prisma } = require("./db/prisma");
 
+const duas = require("./data/duas.json");
 
 const QURAN_API_BASE = "https://api.alquran.cloud/v1";
 const ALADHAN_BASE = "https://api.aladhan.com/v1";
@@ -71,35 +66,48 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions)); // preflight for all routes (Express 5 safe)
 app.use(express.json({ limit: "1mb" }));
 
 // Serve audio files (if present in your deployment)
 app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "audio")));
 
 // -------------------
-// In-memory stores (MVP)
+// In-memory stores (only for non-auth/demo + non-prayer features)
+// NOTE: Prayer Settings (sect/method/offsets/per-prayer quiet) are persisted in Azure SQL via Prisma.
 // -------------------
 const DEFAULT_SETTINGS = {
   language: "en",
   madhhab: "hanafi",
   shia: false,
+  sect: "sunni",
+  accountEnabled: false,
+
+  // kept for backward-compat with older UI; DB is source of truth for authenticated users
+  timingOffsets: { fajr: 0, sunrise: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 },
+
   calculationMethod: "isna",
-  highLatitudeMethod: "automatic", // automatic | middle_of_the_night | one_seventh | angle_based
+  highLatitudeMethod: "automatic",
+
   country: "US",
   city: "Chicago",
   timezone: "America/Chicago",
   latitude: 41.8781,
   longitude: -87.6298,
+
+  // Mosque selector (not yet persisted in DB in this milestone)
   mosqueId: null,
   mosqueName: null,
   mosqueAddress: null,
   mosqueLat: null,
   mosqueLng: null,
+
+  // Legacy global quiet hours used by /api/test-adhan; per-prayer quiet hours are stored in DB
   quietHours: { enabled: true, from: "22:00", to: "07:00", muteFajr: true },
 };
 
-const settingsByAmazonUserId = new Map(); // amazon_user_id -> settings
-const integrationsByAmazonUserId = new Map(); // amazon_user_id -> integration status
+const settingsByAmazonUserId = new Map(); // demo-only or anon
+const integrationsByAmazonUserId = new Map(); // integration status (still in-memory for now)
 
 const DEMO_USER_KEY = "demo";
 
@@ -168,6 +176,110 @@ async function requireAmazonAuth(req, res, next) {
 
 function getUserKeyFromReq(req) {
   return req.amazonUser?.user_id || DEMO_USER_KEY;
+}
+
+// -------------------
+// DB: user bootstrap (creates profile + 5 prayer rows once)
+// -------------------
+async function getOrCreateUserByAmazonId(amazonUserId) {
+  return prisma.user.upsert({
+    where: { amazonUserId },
+    update: {},
+    create: {
+      amazonUserId,
+      profile: { create: {} },
+      prayers: {
+        create: ["fajr", "dhuhr", "asr", "maghrib", "isha"].map((p) => ({ prayerName: p })),
+      },
+    },
+    include: { profile: true, prayers: true },
+  });
+}
+
+// -------------------
+// Small helpers
+// -------------------
+function pickDefined(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+function isHHMM(s) {
+  return typeof s === "string" && /^\d{2}:\d{2}$/.test(s);
+}
+
+function addMinutesHHMM(hhmm, delta) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+  let t = h * 60 + m + (delta || 0);
+  t = ((t % 1440) + 1440) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+function inQuietHours(nowHHMM, fromHHMM, toHHMM) {
+  if (!isHHMM(nowHHMM) || !isHHMM(fromHHMM) || !isHHMM(toHHMM)) return false;
+  const toMin = (s) => {
+    const [h, m] = s.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const n = toMin(nowHHMM), f = toMin(fromHHMM), t = toMin(toHHMM);
+  // handles overnight windows
+  return f <= t ? (n >= f && n <= t) : (n >= f || n <= t);
+}
+
+function nowHHMMInLocalTZ(timezone) {
+  // Minimal/cheap: use server local time if timezone is not set.
+  // (Later we can use a TZ library if needed.)
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+async function getEffectiveSettings(req) {
+  // If Amazon authenticated, pull from DB and merge onto DEFAULT_SETTINGS for compatibility.
+  if (req.amazonUser?.user_id) {
+    const user = await getOrCreateUserByAmazonId(req.amazonUser.user_id);
+    const p = user.profile || {};
+
+    const globalOffsets = {
+      fajr: p.globalOffsetFajr ?? 0,
+      sunrise: 0,
+      dhuhr: p.globalOffsetDhuhr ?? 0,
+      asr: p.globalOffsetAsr ?? 0,
+      maghrib: p.globalOffsetMaghrib ?? 0,
+      isha: p.globalOffsetIsha ?? 0,
+    };
+
+    const prayerByName = Object.fromEntries(
+      (user.prayers || []).map((x) => [String(x.prayerName || "").toLowerCase(), x])
+    );
+
+    return {
+      user,
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        sect: String(p.sect || "SUNNI").toLowerCase(), // "sunni" | "shia"
+        shia: String(p.sect || "").toUpperCase() === "SHIA",
+        madhhab: String(p.madhhab || DEFAULT_SETTINGS.madhhab).toLowerCase(),
+        calculationMethod: String(p.calculationMethod || DEFAULT_SETTINGS.calculationMethod),
+        highLatitudeMethod: String(p.highLatitudeMethod || DEFAULT_SETTINGS.highLatitudeMethod),
+        country: p.country || DEFAULT_SETTINGS.country,
+        city: p.city || DEFAULT_SETTINGS.city,
+        timezone: p.timezone || DEFAULT_SETTINGS.timezone,
+        latitude: typeof p.latitude === "number" ? p.latitude : DEFAULT_SETTINGS.latitude,
+        longitude: typeof p.longitude === "number" ? p.longitude : DEFAULT_SETTINGS.longitude,
+        accountEnabled: !!p.accountEnabled,
+        timingOffsets: globalOffsets,
+      },
+      prayerByName,
+      globalOffsets,
+    };
+  }
+
+  const userKey = getUserKeyFromReq(req);
+  return { user: null, settings: ensureSettings(userKey), prayerByName: null, globalOffsets: null };
 }
 
 // -------------------
@@ -372,7 +484,7 @@ function to12h(hhmm) {
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
-// Map your stored method keys to AlAdhan method numbers (enough for US/PK + common)
+// Map your stored method keys to AlAdhan method numbers
 function aladhanMethodNumber(methodLike, fallback) {
   if (typeof methodLike === "string" && /^\d+$/.test(methodLike.trim())) return Number(methodLike.trim());
   if (typeof methodLike === "number" && Number.isFinite(methodLike)) return methodLike;
@@ -445,74 +557,66 @@ async function aladhanCalendarByCoords(lat, lng, year, month, methodNum, madhhab
   if (!resp.ok) throw new Error(`AlAdhan calendar HTTP ${resp.status}`);
   const json = await resp.json();
   const days = Array.isArray(json?.data) ? json.data : [];
-  return days.map((d) => {
-    const iso = d?.date?.gregorian?.date
-      ? (() => {
-          // "DD-MM-YYYY" -> "YYYY-MM-DD"
-          const [dd, mm, yy] = String(d.date.gregorian.date).split("-");
-          return `${yy}-${mm}-${dd}`;
-        })()
-      : null;
+  return days
+    .map((d) => {
+      const iso = d?.date?.gregorian?.date
+        ? (() => {
+            const [dd, mm, yy] = String(d.date.gregorian.date).split("-");
+            return `${yy}-${mm}-${dd}`;
+          })()
+        : null;
 
-    const t = d?.timings || {};
-    return {
-      date: iso,
-      prayers: {
-        fajr: to12h(t.Fajr),
-        sunrise: to12h(t.Sunrise),
-        dhuhr: to12h(t.Dhuhr),
-        asr: to12h(t.Asr),
-        maghrib: to12h(t.Maghrib),
-        isha: to12h(t.Isha),
-      },
-    };
-  }).filter((x) => x.date);
+      const t = d?.timings || {};
+      return {
+        date: iso,
+        prayers: {
+          fajr: to12h(t.Fajr),
+          sunrise: to12h(t.Sunrise),
+          dhuhr: to12h(t.Dhuhr),
+          asr: to12h(t.Asr),
+          maghrib: to12h(t.Maghrib),
+          isha: to12h(t.Isha),
+        },
+      };
+    })
+    .filter((x) => x.date);
 }
-
-// -------------------
-// Quiet hours helper
-// -------------------
-function isWithinQuietHours(now, quietHours) {
-  if (!quietHours || !quietHours.enabled) return false;
-  const { from, to } = quietHours;
-  if (!from || !to) return false;
-
-  const [fromH, fromM] = from.split(":").map(Number);
-  const [toH, toM] = to.split(":").map(Number);
-
-  if ([fromH, fromM, toH, toM].some((n) => Number.isNaN(n))) return false;
-
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const fromMinutes = fromH * 60 + fromM;
-  const toMinutes = toH * 60 + toM;
-
-  if (fromMinutes === toMinutes) return true;
-
-  if (fromMinutes < toMinutes) return currentMinutes >= fromMinutes && currentMinutes < toMinutes;
-
-  return currentMinutes >= fromMinutes || currentMinutes < toMinutes;
-}
-
-
-
 
 // -------------------
 // BASIC ROUTES
 // -------------------
-app.get("/api/health", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    uptime: process.uptime(),
-    timestamp: Date.now(),
-  });
+app.get("/", (_req, res) => res.status(200).send("OK"));
+app.get("/health", (_req, res) => res.status(200).send("ok"));
+app.get("/api/health", (_req, res) =>
+  res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() })
+);
+
+// -------------------
+// Endppoint for DB SQL
+const { getPool } = require("./db/sql");
+
+app.get("/api/db-test", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const r = await pool.request().query(`
+      SELECT
+        DB_NAME() AS db_name,
+        SUSER_SNAME() AS login_name,
+        SYSDATETIMEOFFSET() AS now_utc
+    `);
+    res.json({ ok: true, result: r.recordset[0] });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e.message,
+      code: e.code,
+      number: e.number,
+    });
+  }
 });
 
 
 
-
-app.get("/", (_req, res) => res.status(200).send("OK"));
-app.get("/health", (_req, res) => res.status(200).send("ok"));
-app.get("/api/health", (_req, res) => res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() }));
 
 // -------------------
 // Geocoding
@@ -587,7 +691,7 @@ app.get("/api/geocode", async (req, res) => {
 // -------------------
 // DUA endpoints
 // -------------------
-app.get("/api/duas/categories", (req, res) => {
+app.get("/api/duas/categories", (_req, res) => {
   const counts = {};
   for (const d of (duas || [])) {
     const cat = String(d.category || "Other");
@@ -716,6 +820,7 @@ app.get("/api/integrations", (req, res) => {
   res.json(ensureIntegration(userKey));
 });
 
+// Legacy mock link kept for local UI testing
 app.post("/api/integrations/alexa/mock-link", (req, res) => {
   const userKey = DEMO_USER_KEY;
   const now = new Date().toISOString();
@@ -752,8 +857,11 @@ app.post("/api/integrations/alexa/login", async (req, res) => {
 
     integrationsByAmazonUserId.set(userKey, status);
 
-    // ensure settings bucket exists
+    // ensure demo settings bucket exists (non-DB things)
     ensureSettings(userKey);
+
+    // Bootstrap DB user row too (production)
+    await getOrCreateUserByAmazonId(userKey);
 
     return res.json({ success: true, profile, alexa: status.alexa, userKey });
   } catch (err) {
@@ -773,31 +881,86 @@ app.post("/api/integrations/alexa/disconnect", requireAmazonAuth, (req, res) => 
 });
 
 // -------------------
-// User settings (per Amazon user)
+// User settings (DB-backed for authenticated users)
 // -------------------
-app.get("/api/user/settings", optionalAmazonAuth, (req, res) => {
-  const userKey = getUserKeyFromReq(req);
-  const settings = ensureSettings(userKey);
-  res.json({ userKey, settings });
+app.get("/api/user/settings", requireAmazonAuth, async (req, res) => {
+  const amazonUserId = req.amazonUser.user_id;
+  const user = await getOrCreateUserByAmazonId(amazonUserId);
+
+  res.json({
+    userKey: amazonUserId,
+    profile: user.profile,
+    prayers: (user.prayers || [])
+      .map((p) => ({
+        id: p.id,
+        prayerName: p.prayerName,
+        enabled: p.enabled,
+        offsetMin: p.offsetMin,
+        quietEnabled: p.quietEnabled,
+        quietFrom: p.quietFrom,
+        quietTo: p.quietTo,
+      }))
+      .sort((a, b) => a.prayerName.localeCompare(b.prayerName)),
+  });
 });
 
-app.post("/api/user/settings", requireAmazonAuth, (req, res) => {
-  const userKey = getUserKeyFromReq(req);
-  const existing = ensureSettings(userKey);
-  const patch = req.body || {};
+app.put("/api/user/settings", requireAmazonAuth, async (req, res) => {
+  const amazonUserId = req.amazonUser.user_id;
+  const user = await getOrCreateUserByAmazonId(amazonUserId);
 
-  const merged = {
-    ...existing,
-    ...patch,
-    quietHours: patch.quietHours ? { ...existing.quietHours, ...patch.quietHours } : existing.quietHours,
-  };
+  const body = req.body || {};
 
-  settingsByAmazonUserId.set(userKey, merged);
-  res.json({ ok: true, userKey, settings: merged });
+  if (body.profile) {
+    const d = pickDefined({
+      sect: body.profile.sect,
+      calculationMethod: body.profile.calculationMethod,
+      madhhab: body.profile.madhhab,
+      highLatitudeMethod: body.profile.highLatitudeMethod,
+      timezone: body.profile.timezone,
+      country: body.profile.country,
+      city: body.profile.city,
+      latitude: body.profile.latitude,
+      longitude: body.profile.longitude,
+      accountEnabled: body.profile.accountEnabled,
+      globalOffsetFajr: body.profile.globalOffsetFajr,
+      globalOffsetDhuhr: body.profile.globalOffsetDhuhr,
+      globalOffsetAsr: body.profile.globalOffsetAsr,
+      globalOffsetMaghrib: body.profile.globalOffsetMaghrib,
+      globalOffsetIsha: body.profile.globalOffsetIsha,
+    });
+
+    await prisma.userProfile.update({
+      where: { userId: user.id },
+      data: d,
+    });
+  }
+
+  if (Array.isArray(body.prayers)) {
+    for (const p of body.prayers) {
+      const d = pickDefined({
+        enabled: p.enabled,
+        offsetMin: p.offsetMin,
+        quietEnabled: p.quietEnabled,
+        quietFrom: p.quietFrom,
+        quietTo: p.quietTo,
+      });
+
+      // basic validation to avoid garbage rows
+      if (d.quietFrom && !isHHMM(d.quietFrom)) return res.status(400).json({ error: "quietFrom must be HH:MM" });
+      if (d.quietTo && !isHHMM(d.quietTo)) return res.status(400).json({ error: "quietTo must be HH:MM" });
+
+      await prisma.prayerConfig.update({
+        where: { id: p.id },
+        data: d,
+      });
+    }
+  }
+
+  res.json({ ok: true });
 });
 
 // -------------------
-// Prayer Times (timezone-correct via AlAdhan)
+// Prayer Times (timezone-correct via AlAdhan) + DB offsets + per-prayer quiet/enabled
 // -------------------
 app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
   try {
@@ -806,8 +969,7 @@ app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
         ? req.query.date
         : new Date().toISOString().slice(0, 10);
 
-    const userKey = getUserKeyFromReq(req);
-    const settings = ensureSettings(userKey);
+    const { user, settings, prayerByName, globalOffsets } = await getEffectiveSettings(req);
 
     // allow query overrides but keep settings as default
     const effective = {
@@ -821,7 +983,6 @@ app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
     };
 
     const coords = resolveCoordsFromSettings(effective, { city: effective.city, country: effective.country });
-
     const methodNum = aladhanMethodNumber(effective.calculationMethod, PRAYER_METHOD_DEFAULT);
 
     const timings = await aladhanTimingsByCoords(coords.lat, coords.lon, isoDate, methodNum, effective.madhhab);
@@ -830,29 +991,71 @@ app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
     const tomorrowISO = addDaysISO(isoDate, 1);
     const tomorrow = await aladhanTimingsByCoords(coords.lat, coords.lon, tomorrowISO, methodNum, effective.madhhab);
 
+    // Apply DB offsets if authenticated
+    let prayers24 = { ...timings.prayers24 };
+    if (user && prayerByName && globalOffsets) {
+      const names = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+      for (const n of names) {
+        const per = prayerByName[n];
+        const perOffset = per?.offsetMin ?? 0;
+        const gOff = globalOffsets[n] ?? 0;
+        prayers24[n] = addMinutesHHMM(prayers24[n], gOff + perOffset);
+      }
+    }
+
+    const prayers = {
+      fajr: to12h(prayers24.fajr),
+      sunrise: to12h(prayers24.sunrise),
+      dhuhr: to12h(prayers24.dhuhr),
+      asr: to12h(prayers24.asr),
+      maghrib: to12h(prayers24.maghrib),
+      isha: to12h(prayers24.isha),
+    };
+
+    // playAllowed: based on enabled + per-prayer quiet
+    let playAllowed = null;
+    if (user && prayerByName) {
+      const nowHHMM = nowHHMMInLocalTZ(effective.timezone);
+      playAllowed = {};
+      for (const n of ["fajr", "dhuhr", "asr", "maghrib", "isha"]) {
+        const cfg = prayerByName[n];
+        const enabled = cfg?.enabled !== false;
+        const quiet =
+          !!cfg?.quietEnabled && inQuietHours(nowHHMM, cfg?.quietFrom || "00:00", cfg?.quietTo || "00:00");
+        playAllowed[n] = enabled && !quiet;
+      }
+    }
+
     return res.json({
       date: isoDate,
       location: { city: effective.city, country: effective.country, timezone: timings.timezone || effective.timezone },
       source: coords.source,
-      mosque: coords.source === "mosque"
-        ? {
-            id: effective.mosqueId,
-            name: effective.mosqueName,
-            address: effective.mosqueAddress,
-            location: { lat: effective.mosqueLat, lng: effective.mosqueLng },
-          }
-        : null,
+      mosque:
+        coords.source === "mosque"
+          ? {
+              id: effective.mosqueId,
+              name: effective.mosqueName,
+              address: effective.mosqueAddress,
+              location: { lat: effective.mosqueLat, lng: effective.mosqueLng },
+            }
+          : null,
       settingsUsed: {
         method: effective.calculationMethod,
         madhhab: effective.madhhab,
         shia: !!effective.shia,
         highLatitudeMethod: effective.highLatitudeMethod,
       },
-      prayers: timings.prayers,
-      prayers24: timings.prayers24,
+      prayers,
+      prayers24,
+      playAllowed,
       nextFajr: tomorrow?.prayers?.fajr || null,
       nextFajrDate: tomorrowISO,
-      meta: { provider: "aladhan", method: methodNum, school: String(effective.madhhab).toLowerCase() === "hanafi" ? 1 : 0 },
+      meta: {
+        provider: "aladhan",
+        method: methodNum,
+        school: String(effective.madhhab).toLowerCase() === "hanafi" ? 1 : 0,
+        dbBacked: !!user,
+      },
     });
   } catch (err) {
     console.error("Error in /api/prayer-times/today:", err);
@@ -862,8 +1065,7 @@ app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
 
 app.get("/api/prayer-times/month", optionalAmazonAuth, async (req, res) => {
   try {
-    const userKey = getUserKeyFromReq(req);
-    const settings = ensureSettings(userKey);
+    const { settings } = await getEffectiveSettings(req);
 
     const monthParam = String(req.query.month || "").trim(); // "YYYY-MM"
     let year, month;
@@ -907,16 +1109,9 @@ app.get("/api/prayer-times/month", optionalAmazonAuth, async (req, res) => {
 // Mosque search
 // -------------------
 app.get("/api/mosques", optionalAmazonAuth, async (req, res) => {
-  const userKey = getUserKeyFromReq(req);
-  const settings = ensureSettings(userKey);
+  const { settings } = await getEffectiveSettings(req);
 
-  const {
-    query = "",
-    city = "",
-    bias = "user",
-    radiusKm = "15",
-    country = "",
-  } = req.query;
+  const { query = "", city = "", bias = "user", radiusKm = "15", country = "" } = req.query;
 
   const q = String(query || city || "").trim();
   const radiusMeters = Math.max(1, Number(radiusKm) || 15) * 1000;
@@ -986,11 +1181,15 @@ app.get("/api/mosques", optionalAmazonAuth, async (req, res) => {
       centerLon = coords.lon;
     } else {
       const hintCountry =
-        String(country).toLowerCase() === "us" ? "us" :
-        String(country).toLowerCase() === "pk" ? "pk" :
-        String(settings.country || "").toLowerCase() === "pk" ? "pk" :
-        String(settings.country || "").toLowerCase() === "us" ? "us" :
-        undefined;
+        String(country).toLowerCase() === "us"
+          ? "us"
+          : String(country).toLowerCase() === "pk"
+            ? "pk"
+            : String(settings.country || "").toLowerCase() === "pk"
+              ? "pk"
+              : String(settings.country || "").toLowerCase() === "us"
+                ? "us"
+                : undefined;
 
       const hit = await nominatimSearch(q || `${settings.city}, ${settings.country}`, hintCountry);
       if (!hit) return res.json({ count: 0, mosques: [] });
@@ -1009,8 +1208,7 @@ app.get("/api/mosques", optionalAmazonAuth, async (req, res) => {
 
 app.get("/api/mosques/:placeId/times", optionalAmazonAuth, async (req, res) => {
   try {
-    const userKey = getUserKeyFromReq(req);
-    const settings = ensureSettings(userKey);
+    const { settings } = await getEffectiveSettings(req);
 
     const { placeId } = req.params;
     const dateStr =
@@ -1090,15 +1288,51 @@ app.get("/api/mosques/:placeId/times", optionalAmazonAuth, async (req, res) => {
 // -------------------
 // Test adhan (quiet hours)
 // -------------------
-app.post("/api/test-adhan", optionalAmazonAuth, (req, res) => {
+// For authenticated users you can pass ?prayer=fajr|dhuhr|asr|maghrib|isha to enforce per-prayer quiet hours.
+app.post("/api/test-adhan", optionalAmazonAuth, async (req, res) => {
+  const prayer = String(req.query.prayer || "fajr").toLowerCase();
+  const { user, settings, prayerByName } = await getEffectiveSettings(req);
+
+  if (user && prayerByName && prayerByName[prayer]) {
+    const cfg = prayerByName[prayer];
+    const nowHHMM = nowHHMMInLocalTZ(settings.timezone);
+
+    const quiet =
+      !!cfg.quietEnabled && inQuietHours(nowHHMM, cfg.quietFrom || "00:00", cfg.quietTo || "00:00");
+
+    if (!cfg.enabled) {
+      return res.json({ success: true, played: false, reason: "disabled", message: `${prayer} is disabled.` });
+    }
+    if (quiet) {
+      return res.json({ success: true, played: false, reason: "quiet-hours", message: "Muted due to quiet hours." });
+    }
+    return res.json({ success: true, played: true, reason: "ok", message: "Test Adhan triggered (db-backed)." });
+  }
+
+  // fallback legacy global quiet hours
   const userKey = getUserKeyFromReq(req);
-  const settings = ensureSettings(userKey);
-
+  const legacy = ensureSettings(userKey);
   const now = new Date();
-  const quiet = settings.quietHours || {};
-  const inQuiet = isWithinQuietHours(now, quiet);
+  const quiet = legacy.quietHours || {};
+  const inQ = (() => {
+    if (!quiet || !quiet.enabled) return false;
+    const { from, to } = quiet;
+    if (!from || !to) return false;
 
-  if (inQuiet) {
+    const [fromH, fromM] = from.split(":").map(Number);
+    const [toH, toM] = to.split(":").map(Number);
+    if ([fromH, fromM, toH, toM].some((n) => Number.isNaN(n))) return false;
+
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const fromMinutes = fromH * 60 + fromM;
+    const toMinutes = toH * 60 + toM;
+
+    if (fromMinutes === toMinutes) return true;
+    if (fromMinutes < toMinutes) return currentMinutes >= fromMinutes && currentMinutes < toMinutes;
+    return currentMinutes >= fromMinutes || currentMinutes < toMinutes;
+  })();
+
+  if (inQ) {
     return res.json({
       success: true,
       played: false,
@@ -1113,7 +1347,7 @@ app.post("/api/test-adhan", optionalAmazonAuth, (req, res) => {
     played: true,
     reason: "ok",
     quietHours: quiet,
-    message: "Test Adhan triggered (demo)",
+    message: "Test Adhan triggered (legacy demo)",
   });
 });
 
@@ -1172,8 +1406,23 @@ app.get("/api/qiblah", (req, res) => {
 });
 
 // -------------------
-// Start server
+// Start server + graceful shutdown
 // -------------------
 const PORT = process.env.PORT || 8080;
 const server = app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
 server.on("error", (err) => console.error("[server error]", err));
+
+async function shutdown(signal) {
+  try {
+    console.log(`[shutdown] ${signal} received`);
+    server.close(() => console.log("[shutdown] http server closed"));
+    await prisma.$disconnect();
+  } catch (e) {
+    console.error("[shutdown] error", e);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
