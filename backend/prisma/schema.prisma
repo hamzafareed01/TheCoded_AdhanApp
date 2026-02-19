@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  amazonUserId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile UserProfile?
+  prayers PrayerConfig[]
+}
+
+model UserProfile {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sect               String?  // "SUNNI" | "SHIA"
+  calculationMethod  String?
+  madhhab            String?
+  highLatitudeMethod String?
+
+  timezone  String?
+  country   String?
+  city      String?
+  latitude  Float?
+  longitude Float?
+
+  accountEnabled Boolean @default(false)
+
+  globalOffsetFajr    Int @default(0)
+  globalOffsetDhuhr   Int @default(0)
+  globalOffsetAsr     Int @default(0)
+  globalOffsetMaghrib Int @default(0)
+  globalOffsetIsha    Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PrayerConfig {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  prayerName String   // fajr/dhuhr/asr/maghrib/isha
+  enabled    Boolean  @default(true)
+  offsetMin  Int      @default(0)
+
+  quietEnabled Boolean @default(false)
+  quietFrom    String? // "HH:MM"
+  quietTo      String? // "HH:MM"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, prayerName])
+}
