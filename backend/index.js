@@ -7,7 +7,7 @@ process.on("uncaughtException", (err) => console.error("[uncaughtException]", er
 
 const express = require("express");
 const cors = require("cors");
-const { getPool } = require("./db/sql");
+const { getPool, closePool } = require("./db/sql");
 const path = require("path");
 // Prisma (Azure SQL)
 const { prisma } = require("./db/prisma");
@@ -54,7 +54,7 @@ const corsOptions = {
     try {
       const u = new URL(origin);
       if (u.hostname.endsWith("azurestaticapps.net")) return callback(null, true);
-    } catch (_) {}
+    } catch (_) { }
 
     return callback(null, false);
   },
@@ -113,7 +113,7 @@ const settingsByAmazonUserId = new Map(); // demo-only or anon
 const integrationsByAmazonUserId = new Map(); // integration status (still in-memory for now)
 
 const DEMO_USER_KEY = "demo";
-      
+
 // -------------------
 // Amazon helpers
 // -------------------
@@ -128,7 +128,7 @@ async function fetchAmazonProfile(accessToken) {
   // returns: { user_id, name, email }
   return resp.json();
 }
-      
+
 function ensureSettings(userKey) {
   if (!settingsByAmazonUserId.has(userKey)) {
     settingsByAmazonUserId.set(userKey, structuredClone(DEFAULT_SETTINGS));
@@ -564,9 +564,9 @@ async function aladhanCalendarByCoords(lat, lng, year, month, methodNum, madhhab
     .map((d) => {
       const iso = d?.date?.gregorian?.date
         ? (() => {
-            const [dd, mm, yy] = String(d.date.gregorian.date).split("-");
-            return `${yy}-${mm}-${dd}`;
-          })()
+          const [dd, mm, yy] = String(d.date.gregorian.date).split("-");
+          return `${yy}-${mm}-${dd}`;
+        })()
         : null;
 
       const t = d?.timings || {};
@@ -597,6 +597,15 @@ app.get("/api/health", (_req, res) =>
 // -------------------
 // Endppoint for DB SQL
 app.get("/api/db-test", async (req, res) => {
+  if (
+    !process.env.DB_SERVER ||
+    !process.env.DB_NAME ||
+    !process.env.DB_USER ||
+    !process.env.DB_PASSWORD
+  ) {
+    return res.status(503).json({ ok: false, error: "DB env vars missing" });
+  }
+
   try {
     const pool = await getPool();
     const r = await pool.request().query(`
@@ -776,7 +785,7 @@ app.get("/api/quran/surahs/:id", async (req, res) => {
     try {
       const translitRes = await fetch(`${QURAN_API_BASE}/surah/${surahId}/en.transliteration`);
       if (translitRes.ok) transliterationData = (await translitRes.json()).data;
-    } catch (_) {}
+    } catch (_) { }
 
     const s = audioJson.data;
     const t = translationJson.data;
@@ -1034,11 +1043,11 @@ app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
       mosque:
         coords.source === "mosque"
           ? {
-              id: effective.mosqueId,
-              name: effective.mosqueName,
-              address: effective.mosqueAddress,
-              location: { lat: effective.mosqueLat, lng: effective.mosqueLng },
-            }
+            id: effective.mosqueId,
+            name: effective.mosqueName,
+            address: effective.mosqueAddress,
+            location: { lat: effective.mosqueLat, lng: effective.mosqueLng },
+          }
           : null,
       settingsUsed: {
         method: effective.calculationMethod,
@@ -1409,17 +1418,29 @@ app.get("/api/qiblah", (req, res) => {
 // -------------------
 // Start server + graceful shutdown (Azure App Service)
 // -------------------
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT) || 8080;
+
 const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Backend listening on `);
+  console.log(`Backend listening on ${PORT}`);
 });
 
-function shutdown(signal) {
-  console.log(`[shutdown]  received`);
-  server.close(() => {
+async function shutdown(signal) {
+  console.log(`[shutdown] received ${signal}`);
+
+  // stop accepting new connections
+  server.close(async () => {
+    try {
+      await closePool();
+      console.log("[shutdown] db pool closed");
+    } catch (e) {
+      console.error("[shutdown] closePool failed:", e);
+    }
     console.log("[shutdown] http server closed");
     process.exit(0);
   });
+
+  // hard-exit if stuck
+  setTimeout(() => process.exit(1), 10_000).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
