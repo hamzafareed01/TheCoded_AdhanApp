@@ -22,6 +22,13 @@ jobs:
       - name: Build And Deploy
         id: builddeploy
         uses: Azure/static-web-apps-deploy@v1
+        
+        env:
+          VITE_AMAZON_CLIENT_ID: ${{ vars.VITE_AMAZON_CLIENT_ID }}
+          VITE_AMAZON_RETURN_URL: ${{ vars.VITE_AMAZON_RETURN_URL }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+
+          
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_NICE_GROUND_009684610 }}
           repo_token: ${{ secrets.GITHUB_TOKEN }} # Used for Github integrations (i.e. PR comments)
