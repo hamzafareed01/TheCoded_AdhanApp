@@ -7,8 +7,8 @@ process.on("uncaughtException", (err) => console.error("[uncaughtException]", er
 
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
 const { getPool } = require("./db/sql");
+const path = require("path");
 // Prisma (Azure SQL)
 const { prisma } = require("./db/prisma");
 
@@ -74,19 +74,6 @@ app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "aud
 
 
 
-app.get("/api/db-test", async (req, res) => {
-  try {
-    const pool = await getPool();
-    const r = await pool.request().query(`
-      SELECT DB_NAME() AS db_name,
-             SUSER_SNAME() AS login_name,
-             SYSDATETIMEOFFSET() AS now_utc
-    `);
-    res.json({ ok: true, result: r.recordset[0] });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message, code: e.code, number: e.number });
-  }
-});
 
 // -------------------
 // In-memory stores (only for non-auth/demo + non-prayer features)
@@ -609,8 +596,6 @@ app.get("/api/health", (_req, res) =>
 
 // -------------------
 // Endppoint for DB SQL
-const { getPool } = require("./db/sql");
-
 app.get("/api/db-test", async (req, res) => {
   try {
     const pool = await getPool();
@@ -1422,22 +1407,19 @@ app.get("/api/qiblah", (req, res) => {
 });
 
 // -------------------
-// Start server + graceful shutdown
+// Start server + graceful shutdown (Azure App Service)
 // -------------------
 const PORT = process.env.PORT || 8080;
-app.get("/api/health", (req, res) => res.json({ status: "ok" }));
-app.listen(PORT, "0.0.0.0", () => console.log(`Backend listening on ${PORT}`));
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Backend listening on `);
+});
 
-async function shutdown(signal) {
-  try {
-    console.log(`[shutdown] ${signal} received`);
-    server.close(() => console.log("[shutdown] http server closed"));
-    await prisma.$disconnect();
-  } catch (e) {
-    console.error("[shutdown] error", e);
-  } finally {
+function shutdown(signal) {
+  console.log(`[shutdown]  received`);
+  server.close(() => {
+    console.log("[shutdown] http server closed");
     process.exit(0);
-  }
+  });
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
