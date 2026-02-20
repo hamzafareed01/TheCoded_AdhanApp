@@ -8,7 +8,7 @@ process.on("uncaughtException", (err) => console.error("[uncaughtException]", er
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-
+const { getPool } = require("./db/sql");
 // Prisma (Azure SQL)
 const { prisma } = require("./db/prisma");
 
@@ -72,6 +72,22 @@ app.use(express.json({ limit: "1mb" }));
 // Serve audio files (if present in your deployment)
 app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "audio")));
 
+
+
+app.get("/api/db-test", async (req, res) => {
+  try {
+    const pool = await getPool();
+    const r = await pool.request().query(`
+      SELECT DB_NAME() AS db_name,
+             SUSER_SNAME() AS login_name,
+             SYSDATETIMEOFFSET() AS now_utc
+    `);
+    res.json({ ok: true, result: r.recordset[0] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, code: e.code, number: e.number });
+  }
+});
+
 // -------------------
 // In-memory stores (only for non-auth/demo + non-prayer features)
 // NOTE: Prayer Settings (sect/method/offsets/per-prayer quiet) are persisted in Azure SQL via Prisma.
@@ -110,7 +126,7 @@ const settingsByAmazonUserId = new Map(); // demo-only or anon
 const integrationsByAmazonUserId = new Map(); // integration status (still in-memory for now)
 
 const DEMO_USER_KEY = "demo";
-
+      
 // -------------------
 // Amazon helpers
 // -------------------
@@ -125,7 +141,7 @@ async function fetchAmazonProfile(accessToken) {
   // returns: { user_id, name, email }
   return resp.json();
 }
-
+      
 function ensureSettings(userKey) {
   if (!settingsByAmazonUserId.has(userKey)) {
     settingsByAmazonUserId.set(userKey, structuredClone(DEFAULT_SETTINGS));
@@ -1409,8 +1425,8 @@ app.get("/api/qiblah", (req, res) => {
 // Start server + graceful shutdown
 // -------------------
 const PORT = process.env.PORT || 8080;
-const server = app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
-server.on("error", (err) => console.error("[server error]", err));
+app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+app.listen(PORT, "0.0.0.0", () => console.log(`Backend listening on ${PORT}`));
 
 async function shutdown(signal) {
   try {
