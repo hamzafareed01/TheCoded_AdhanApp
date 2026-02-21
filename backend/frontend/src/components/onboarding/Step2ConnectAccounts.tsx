@@ -26,8 +26,17 @@ interface Props {
   setOnboardingData?: (data: OnboardingData) => void;
 }
 
+// server integration shape from GET /api/integrations
+type IntegrationStatus = {
+  userKey: string;
+  alexa: { connected: boolean; linkedAt: string | null; displayName: string | null; accountId: string | null };
+  google: { connected: boolean; linkedAt: string | null };
+  apple: { connected: boolean; linkedAt: string | null };
+};
+
 const LS_CONNECTED = "adhan_connected_platforms";
 const LS_TOKENS = "adhan_tokens";
+const LS_AMAZON_ACCESS = "amazon_access_token";
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -66,18 +75,13 @@ function loadAmazonSDK(): Promise<void> {
 }
 
 function getAmazonClientId(): string {
-  return (
-    import.meta.env.VITE_AMAZON_CLIENT_ID ||
-    import.meta.env.VITE_LWA_CLIENT_ID ||
-    ""
-  );
+  return (import.meta as any).env?.VITE_AMAZON_CLIENT_ID || (import.meta as any).env?.VITE_LWA_CLIENT_ID || "";
 }
 
 function getReturnUrl(): string {
-  // Prefer explicit env vars, otherwise fall back to your Step2 route
   const env =
-    import.meta.env.VITE_AMAZON_RETURN_URL ||
-    import.meta.env.VITE_AMAZON_REDIRECT_URI ||
+    (import.meta as any).env?.VITE_AMAZON_RETURN_URL ||
+    (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI ||
     "";
   if (env) return env;
 
@@ -89,6 +93,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
 
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
 
   const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(() =>
     readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
@@ -98,13 +103,8 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     readJson<Record<string, string>>(LS_TOKENS, onboardingData?.tokens ?? {})
   );
 
-  useEffect(() => {
-    writeJson(LS_CONNECTED, connectedPlatforms);
-  }, [connectedPlatforms]);
-
-  useEffect(() => {
-    writeJson(LS_TOKENS, tokens);
-  }, [tokens]);
+  useEffect(() => writeJson(LS_CONNECTED, connectedPlatforms), [connectedPlatforms]);
+  useEffect(() => writeJson(LS_TOKENS, tokens), [tokens]);
 
   const platforms = useMemo(
     () => [
@@ -115,20 +115,8 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         Icon: AlexaIcon,
         badge: "Recommended",
       },
-      {
-        key: "google" as const,
-        name: "Google",
-        desc: "Calendar + reminders (coming soon).",
-        Icon: GoogleIcon,
-        badge: "Soon",
-      },
-      {
-        key: "apple" as const,
-        name: "Apple",
-        desc: "iOS notifications (coming soon).",
-        Icon: AppleIcon,
-        badge: "Soon",
-      },
+      { key: "google" as const, name: "Google", desc: "Calendar + reminders (coming soon).", Icon: GoogleIcon, badge: "Soon" },
+      { key: "apple" as const, name: "Apple", desc: "iOS notifications (coming soon).", Icon: AppleIcon, badge: "Soon" },
     ],
     []
   );
@@ -148,6 +136,21 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     });
   };
 
+  async function refreshServerStatus() {
+    try {
+      const resp = await apiFetch("/api/integrations");
+      if (!resp.ok) return;
+      const data = (await resp.json()) as IntegrationStatus;
+      setServerStatus(data);
+    } catch {
+      // ignore (UI should still work offline-ish)
+    }
+  }
+
+  useEffect(() => {
+    refreshServerStatus();
+  }, []);
+
   async function connectAlexa() {
     setError(null);
     setLoadingKey("alexa");
@@ -157,14 +160,15 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
 
     if (!clientId) {
       setLoadingKey(null);
-      setError("Missing VITE_AMAZON_CLIENT_ID in your frontend env vars.");
+      setError(
+        "Missing VITE_AMAZON_CLIENT_ID in the frontend build. Add it to GitHub Actions (Repository Variable/Secret) and redeploy the Static Web App."
+      );
       return;
     }
 
     try {
       await loadAmazonSDK();
 
-      // Popup-based implicit grant
       const options = {
         scope: "profile",
         response_type: "token",
@@ -184,8 +188,9 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
       const accessToken: string | undefined = tokenResp?.access_token;
       if (!accessToken) throw new Error("Amazon did not return an access token.");
 
-      // Tell YOUR backend we linked Alexa (store status server-side)
-      // (We send the token; your backend can verify it if you choose later.)
+      // store for api.ts Authorization auto-attach
+      localStorage.setItem(LS_AMAZON_ACCESS, accessToken);
+
       const r = await apiFetch("/api/integrations/alexa/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -199,6 +204,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
 
       setTokens((prev) => ({ ...prev, alexa: accessToken }));
       markConnected("alexa");
+      await refreshServerStatus();
     } catch (e: any) {
       setError(e?.message || "Alexa connection failed.");
     } finally {
@@ -211,14 +217,15 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     setLoadingKey("alexa");
 
     try {
-      // Best-effort server-side disconnect (your backend route exists)
       await apiFetch("/api/integrations/alexa/disconnect", { method: "POST" }).catch(() => {});
-      // Best-effort client logout (won't always be necessary)
       try {
         window.amazon?.Login?.logout?.();
       } catch {}
 
+      localStorage.removeItem(LS_AMAZON_ACCESS);
+
       markDisconnected("alexa");
+      await refreshServerStatus();
     } finally {
       setLoadingKey(null);
     }
@@ -226,7 +233,6 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
 
   async function handleConnect(key: PlatformKey) {
     if (key === "alexa") return connectAlexa();
-    // For now: just mark as "not available"
     setError(`${key.toUpperCase()} integration is coming soon.`);
   }
 
@@ -270,6 +276,9 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
             const connected = isConnected(p.key);
             const busy = loadingKey === p.key;
 
+            const serverConnected =
+              p.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
+
             return (
               <div
                 key={p.key}
@@ -284,6 +293,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
                       <div className="font-medium">{p.name}</div>
                       {p.badge && <Badge variant="secondary">{p.badge}</Badge>}
                       {connected && <Badge>Connected</Badge>}
+                      {serverConnected && <Badge variant="outline">Server linked</Badge>}
                     </div>
                     <div className="text-sm text-muted-foreground">{p.desc}</div>
                   </div>
