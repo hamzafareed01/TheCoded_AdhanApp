@@ -1,4 +1,4 @@
-import type { LoggedInUser } from '../auth/LoginView';
+import type { AppUser } from "../../types/AppUser";
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import TestAdhanButton from './TestAdhanButton';
@@ -44,9 +44,8 @@ const platformNames: any = {
 
 type DashboardProps = {
   onboardingData: any;
-  user: LoggedInUser;
+  user?: AppUser | null;
 };
-
 type PrayerMap = {
   [key: string]: string;
 };
@@ -102,7 +101,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         setTodayData(data);
       } catch (err) {
         console.error('Failed to load today prayer times:', err);
-        setTodayError('Could not load prayer times, showing demo values.');
+        setTodayError('Could not load prayer times.');
       } finally {
         setLoadingToday(false);
       }

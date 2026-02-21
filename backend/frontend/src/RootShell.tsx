@@ -16,11 +16,11 @@ import DuaQuranView from './components/dua-quran/DuaQuranView';
 import QiblahFinder from './components/qiblah/QiblahFinder';
 import AlexaSetup from './components/alexa/AlexaSetup';
 
-import type { LoggedInUser } from './components/auth/LoginView';
+import type { AppUser } from "./types/AppUser";
 import { apiFetch } from "./lib/api";
 
 type RootShellProps = {
-    user: LoggedInUser;
+    user?: AppUser | null;
     onLogout: () => void;
 };
 
@@ -154,10 +154,7 @@ export default function RootShell({ user, onLogout }: RootShellProps) {
                         }
                     />
 
-                    <Route
-                        path="/dashboard"
-                        element={<Dashboard onboardingData={onboardingData} user={user} />}
-                    />
+                    <Route path="/dashboard" element={<Dashboard onboardingData={onboardingData} user={user} />} />
 
                     <Route
                         path="/mosque"
