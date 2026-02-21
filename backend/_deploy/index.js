@@ -1,34 +1,342 @@
 // backend/index.js
-require('dotenv').config();
+require("dotenv").config();
 
-// --- Crash visibility (prevents silent exit during dev) ---
-process.on('unhandledRejection', (reason) => {
-  console.error('[unhandledRejection]', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err);
-});
+// --- Crash visibility ---
+process.on("unhandledRejection", (reason) => console.error("[unhandledRejection]", reason));
+process.on("uncaughtException", (err) => console.error("[uncaughtException]", err));
 
 const express = require("express");
 const cors = require("cors");
-const adhan = require("adhan");
+const { getPool, closePool } = require("./db/sql");
 const path = require("path");
-const GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
+// Prisma (Azure SQL)
+const { prisma } = require("./db/prisma");
+
 const duas = require("./data/duas.json");
 
-
-// Node 18+ has global fetch built in (Node 22 in your case).
-// If you ever run on Node < 18, install node-fetch and require it here.
 const QURAN_API_BASE = "https://api.alquran.cloud/v1";
 const ALADHAN_BASE = "https://api.aladhan.com/v1";
 
-// ------------------------------
-// Fallback providers (no API keys)
-// ------------------------------
-// Nominatim (OpenStreetMap) geocoding: requires a User-Agent.
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 const OVERPASS_BASE = "https://overpass-api.de/api/interpreter";
 
+const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || "";
+const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY || "";
+const PRAYER_METHOD_DEFAULT = Number(process.env.PRAYER_METHOD_DEFAULT || 2);
+
+// -------------------
+// App + CORS
+// -------------------
+const app = express();
+
+const defaultAllowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "https://nice-ground-009684610.1.azurestaticapps.net",
+];
+
+const envOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envOrigins])];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Server-to-server (Alexa) calls often have no Origin header
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // Optional: allow other Azure Static Apps preview domains without breaking CORS
+    // Comment this out if you want strict allow-list only.
+    try {
+      const u = new URL(origin);
+      if (u.hostname.endsWith("azurestaticapps.net")) return callback(null, true);
+    } catch (_) { }
+
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+  maxAge: 86400,
+};
+
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions)); // preflight for all routes (Express 5 safe)
+app.use(express.json({ limit: "1mb" }));
+
+// Serve audio files (if present in your deployment)
+app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "audio")));
+
+
+
+
+// -------------------
+// In-memory stores (only for non-auth/demo + non-prayer features)
+// NOTE: Prayer Settings (sect/method/offsets/per-prayer quiet) are persisted in Azure SQL via Prisma.
+// -------------------
+const DEFAULT_SETTINGS = {
+  language: "en",
+  madhhab: "hanafi",
+  shia: false,
+  sect: "sunni",
+  accountEnabled: false,
+
+  // kept for backward-compat with older UI; DB is source of truth for authenticated users
+  timingOffsets: { fajr: 0, sunrise: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 },
+
+  calculationMethod: "isna",
+  highLatitudeMethod: "automatic",
+
+  country: "US",
+  city: "Chicago",
+  timezone: "America/Chicago",
+  latitude: 41.8781,
+  longitude: -87.6298,
+
+  // Mosque selector (not yet persisted in DB in this milestone)
+  mosqueId: null,
+  mosqueName: null,
+  mosqueAddress: null,
+  mosqueLat: null,
+  mosqueLng: null,
+
+  // Legacy global quiet hours used by /api/test-adhan; per-prayer quiet hours are stored in DB
+  quietHours: { enabled: true, from: "22:00", to: "07:00", muteFajr: true },
+};
+
+const settingsByAmazonUserId = new Map(); // demo-only or anon
+const integrationsByAmazonUserId = new Map(); // integration status (still in-memory for now)
+
+const DEMO_USER_KEY = "demo";
+
+// -------------------
+// Amazon helpers
+// -------------------
+async function fetchAmazonProfile(accessToken) {
+  const resp = await fetch("https://api.amazon.com/user/profile", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) {
+    const msg = await resp.text().catch(() => "");
+    throw new Error(`Amazon profile failed: ${resp.status} ${msg}`);
+  }
+  // returns: { user_id, name, email }
+  return resp.json();
+}
+
+function ensureSettings(userKey) {
+  if (!settingsByAmazonUserId.has(userKey)) {
+    settingsByAmazonUserId.set(userKey, structuredClone(DEFAULT_SETTINGS));
+  }
+  return settingsByAmazonUserId.get(userKey);
+}
+
+function ensureIntegration(userKey) {
+  if (!integrationsByAmazonUserId.has(userKey)) {
+    integrationsByAmazonUserId.set(userKey, {
+      userKey,
+      alexa: { connected: false, linkedAt: null, displayName: null, accountId: null },
+      google: { connected: false, linkedAt: null },
+      apple: { connected: false, linkedAt: null },
+    });
+  }
+  return integrationsByAmazonUserId.get(userKey);
+}
+
+async function optionalAmazonAuth(req, _res, next) {
+  const auth = req.headers.authorization || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return next();
+
+  try {
+    const profile = await fetchAmazonProfile(m[1]);
+    req.amazonUser = profile; // { user_id, name, email }
+  } catch (e) {
+    // don’t hard-fail globally; some routes allow anonymous
+    req.amazonUser = null;
+  }
+  next();
+}
+
+async function requireAmazonAuth(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return res.status(401).json({ error: "Missing Bearer token" });
+
+  try {
+    const profile = await fetchAmazonProfile(m[1]);
+    req.amazonUser = profile;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "Invalid/expired Amazon token" });
+  }
+}
+
+function getUserKeyFromReq(req) {
+  return req.amazonUser?.user_id || DEMO_USER_KEY;
+}
+
+// -------------------
+// DB: user bootstrap (creates profile + 5 prayer rows once)
+// -------------------
+async function getOrCreateUserByAmazonId(amazonUserId) {
+  return prisma.user.upsert({
+    where: { amazonUserId },
+    update: {},
+    create: {
+      amazonUserId,
+      profile: { create: {} },
+      prayers: {
+        create: ["fajr", "dhuhr", "asr", "maghrib", "isha"].map((p) => ({ prayerName: p })),
+      },
+    },
+    include: { profile: true, prayers: true },
+  });
+}
+
+// -------------------
+// Small helpers
+// -------------------
+function pickDefined(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+function isHHMM(s) {
+  return typeof s === "string" && /^\d{2}:\d{2}$/.test(s);
+}
+
+function addMinutesHHMM(hhmm, delta) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+  let t = h * 60 + m + (delta || 0);
+  t = ((t % 1440) + 1440) % 1440;
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+function inQuietHours(nowHHMM, fromHHMM, toHHMM) {
+  if (!isHHMM(nowHHMM) || !isHHMM(fromHHMM) || !isHHMM(toHHMM)) return false;
+  const toMin = (s) => {
+    const [h, m] = s.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const n = toMin(nowHHMM), f = toMin(fromHHMM), t = toMin(toHHMM);
+  // handles overnight windows
+  return f <= t ? (n >= f && n <= t) : (n >= f || n <= t);
+}
+
+function nowHHMMInLocalTZ(timezone) {
+  // Minimal/cheap: use server local time if timezone is not set.
+  // (Later we can use a TZ library if needed.)
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+async function getEffectiveSettings(req) {
+  // If Amazon authenticated, pull from DB and merge onto DEFAULT_SETTINGS for compatibility.
+  if (req.amazonUser?.user_id) {
+    const user = await getOrCreateUserByAmazonId(req.amazonUser.user_id);
+    const p = user.profile || {};
+
+    const globalOffsets = {
+      fajr: p.globalOffsetFajr ?? 0,
+      sunrise: 0,
+      dhuhr: p.globalOffsetDhuhr ?? 0,
+      asr: p.globalOffsetAsr ?? 0,
+      maghrib: p.globalOffsetMaghrib ?? 0,
+      isha: p.globalOffsetIsha ?? 0,
+    };
+
+    const prayerByName = Object.fromEntries(
+      (user.prayers || []).map((x) => [String(x.prayerName || "").toLowerCase(), x])
+    );
+
+    return {
+      user,
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        sect: String(p.sect || "SUNNI").toLowerCase(), // "sunni" | "shia"
+        shia: String(p.sect || "").toUpperCase() === "SHIA",
+        madhhab: String(p.madhhab || DEFAULT_SETTINGS.madhhab).toLowerCase(),
+        calculationMethod: String(p.calculationMethod || DEFAULT_SETTINGS.calculationMethod),
+        highLatitudeMethod: String(p.highLatitudeMethod || DEFAULT_SETTINGS.highLatitudeMethod),
+        country: p.country || DEFAULT_SETTINGS.country,
+        city: p.city || DEFAULT_SETTINGS.city,
+        timezone: p.timezone || DEFAULT_SETTINGS.timezone,
+        latitude: typeof p.latitude === "number" ? p.latitude : DEFAULT_SETTINGS.latitude,
+        longitude: typeof p.longitude === "number" ? p.longitude : DEFAULT_SETTINGS.longitude,
+        accountEnabled: !!p.accountEnabled,
+        timingOffsets: globalOffsets,
+      },
+      prayerByName,
+      globalOffsets,
+    };
+  }
+
+  const userKey = getUserKeyFromReq(req);
+  return { user: null, settings: ensureSettings(userKey), prayerByName: null, globalOffsets: null };
+}
+
+// -------------------
+// Location helpers
+// -------------------
+const KNOWN_CITY_COORDS = {
+  "us:chicago": { lat: 41.8781, lon: -87.6298, timezone: "America/Chicago", city: "Chicago", country: "US" },
+  "pk:karachi": { lat: 24.8607, lon: 67.0011, timezone: "Asia/Karachi", city: "Karachi", country: "PK" },
+  "pk:lahore": { lat: 31.5204, lon: 74.3587, timezone: "Asia/Karachi", city: "Lahore", country: "PK" },
+  "pk:islamabad": { lat: 33.6844, lon: 73.0479, timezone: "Asia/Karachi", city: "Islamabad", country: "PK" },
+};
+
+function resolveCoordsFromSettings(settings, { city, country } = {}) {
+  // Mosque selected
+  if (
+    settings?.mosqueId &&
+    typeof settings?.mosqueLat === "number" &&
+    typeof settings?.mosqueLng === "number"
+  ) {
+    return {
+      lat: settings.mosqueLat,
+      lon: settings.mosqueLng,
+      timezone: settings.timezone || "America/Chicago",
+      city: settings.city || "Chicago",
+      country: settings.country || "US",
+      source: "mosque",
+    };
+  }
+
+  // Explicit lat/lon chosen
+  if (typeof settings?.latitude === "number" && typeof settings?.longitude === "number") {
+    return {
+      lat: settings.latitude,
+      lon: settings.longitude,
+      timezone: settings.timezone || "America/Chicago",
+      city: settings.city || "Chicago",
+      country: settings.country || "US",
+      source: "coords",
+    };
+  }
+
+  const normalizedCity = String(city || settings?.city || "Chicago").trim().toLowerCase();
+  const normalizedCountry = String(country || settings?.country || "US").trim().toLowerCase();
+
+  const key = `${normalizedCountry}:${normalizedCity}`;
+  if (KNOWN_CITY_COORDS[key]) return { ...KNOWN_CITY_COORDS[key], source: "known" };
+
+  if (normalizedCountry === "pk") return { ...KNOWN_CITY_COORDS["pk:karachi"], source: "known" };
+  return { ...KNOWN_CITY_COORDS["us:chicago"], source: "known" };
+}
+
+// -------------------
+// Nominatim + Overpass (fallback, no keys)
+// -------------------
 async function nominatimSearch(query, countrycodes) {
   const url = new URL(`${NOMINATIM_BASE}/search`);
   url.searchParams.set("q", query);
@@ -38,18 +346,14 @@ async function nominatimSearch(query, countrycodes) {
   if (countrycodes) url.searchParams.set("countrycodes", countrycodes);
 
   const resp = await fetch(url.toString(), {
-    headers: { "User-Agent": "TheCodedAdhanApp/1.0" },
+    headers: { "User-Agent": "AdhanHome/1.0 (contact: dev)" },
   });
   if (!resp.ok) throw new Error(`Nominatim HTTP ${resp.status}`);
   const data = await resp.json();
   if (!Array.isArray(data) || data.length === 0) return null;
+
   const item = data[0];
-  return {
-    lat: Number(item.lat),
-    lon: Number(item.lon),
-    displayName: item.display_name,
-    address: item.address || {},
-  };
+  return { lat: Number(item.lat), lon: Number(item.lon), displayName: item.display_name, address: item.address || {} };
 }
 
 function osmAddressFromTags(tags) {
@@ -69,7 +373,6 @@ function osmAddressFromTags(tags) {
   if (state) out.push(state);
   if (postcode) out.push(postcode);
   if (country) out.push(country);
-
   return out.join(", ");
 }
 
@@ -87,14 +390,15 @@ out center tags;
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      "User-Agent": "TheCodedAdhanApp/1.0",
+      "User-Agent": "AdhanHome/1.0 (contact: dev)",
     },
     body: "data=" + encodeURIComponent(query),
   });
+
   if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`);
   const json = await resp.json();
-
   const elements = Array.isArray(json.elements) ? json.elements : [];
+
   const mapped = elements
     .map((el) => {
       const tags = el.tags || {};
@@ -103,155 +407,123 @@ out center tags;
       const centerLat = el.lat ?? el.center?.lat;
       const centerLon = el.lon ?? el.center?.lon;
       if (typeof centerLat !== "number" || typeof centerLon !== "number") return null;
-
-      const address = osmAddressFromTags(tags);
       return {
         placeId,
         name,
-        address,
+        address: osmAddressFromTags(tags),
         location: { lat: centerLat, lng: centerLon },
         source: "osm",
       };
     })
     .filter(Boolean);
 
-  // Basic limit to keep payload small
   return mapped.slice(0, limit);
 }
 
 async function overpassLookupByPlaceId(placeId) {
-  // placeId format: osm:node:123 or osm:way:456 or osm:relation:789
   const parts = String(placeId || "").split(":");
   if (parts.length !== 3 || parts[0] !== "osm") return null;
+
   const type = parts[1];
   const id = parts[2];
+
   const query = `
 [out:json][timeout:25];
 ${type}(${id});
 out center tags;
 `;
+
   const resp = await fetch(OVERPASS_BASE, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      "User-Agent": "TheCodedAdhanApp/1.0",
+      "User-Agent": "AdhanHome/1.0 (contact: dev)",
     },
     body: "data=" + encodeURIComponent(query),
   });
+
   if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`);
   const json = await resp.json();
   const el = Array.isArray(json.elements) ? json.elements[0] : null;
   if (!el) return null;
+
   const tags = el.tags || {};
-  const name = tags.name || "Mosque";
   const centerLat = el.lat ?? el.center?.lat;
   const centerLon = el.lon ?? el.center?.lon;
   if (typeof centerLat !== "number" || typeof centerLon !== "number") return null;
+
   return {
     placeId: `osm:${el.type}:${el.id}`,
-    name,
+    name: tags.name || "Mosque",
     address: osmAddressFromTags(tags),
     location: { lat: centerLat, lng: centerLon },
     source: "osm",
   };
 }
-// CORS setup
-const app = express();
-app.get("/", (req, res) => res.status(200).send("OK"));
-app.get("/api/health", (req, res) => res.status(200).json({ ok: true }));
 
-const defaultAllowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:4173",
-  // Add your SWA default hostname here (recommended as a fallback)
-  "https://nice-ground-009684610.1.azurestaticapps.net",
-];
-
-const envOrigins = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envOrigins])];
-
-// IMPORTANT: allow preflight to succeed fast
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow server-to-server / curl / health checks (no Origin header)
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-
-      // Don't throw an Error() here; browsers treat it as a network failure.
-      return callback(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    optionsSuccessStatus: 204,
-    maxAge: 86400, // cache preflight 24h
-  })
-);
-
-// Handle OPTIONS preflight explicitly (important on some setups)
-app.options("*", cors());
-
-
-// ------------------------------
-// Helpers for AlAdhan timings
-// ------------------------------
+// -------------------
+// Prayer times helpers (AlAdhan)
+// -------------------
 function toDDMMYYYY(isoDate) {
   const [y, m, d] = String(isoDate).split("-");
   return `${d}-${m}-${y}`;
 }
-
 function addDaysISO(isoDate, days) {
   const dt = new Date(`${isoDate}T12:00:00`);
   dt.setDate(dt.getDate() + days);
   return dt.toISOString().slice(0, 10);
 }
-
-// AlAdhan may return "05:12 (CST)" — keep only "05:12"
 function stripAladhanTime(v) {
   return String(v ?? "").trim().split(" ")[0];
 }
+function to12h(hhmm) {
+  const s = stripAladhanTime(hhmm);
+  const [hStr, mStr] = s.split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return s;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
 
-// Map your stored method ("isna"/"karachi") to AlAdhan method numbers.
-// (You only care about US + PK for now)
+// Map your stored method keys to AlAdhan method numbers
 function aladhanMethodNumber(methodLike, fallback) {
-  // numeric string like "2"
-  if (typeof methodLike === "string" && /^\d+$/.test(methodLike.trim())) {
-    return Number(methodLike.trim());
-  }
-  if (typeof methodLike === "number" && Number.isFinite(methodLike)) {
-    return methodLike;
-  }
+  if (typeof methodLike === "string" && /^\d+$/.test(methodLike.trim())) return Number(methodLike.trim());
+  if (typeof methodLike === "number" && Number.isFinite(methodLike)) return methodLike;
 
   const s = String(methodLike ?? "").toLowerCase().trim();
   if (s === "karachi") return 1;
   if (s === "isna") return 2;
+  if (s === "mwl") return 3;
+  if (s === "umm-al-qura" || s === "umm_al_qura" || s === "makkah") return 4;
+  if (s === "egypt") return 5;
+  if (s === "tehran") return 7;
+  if (s === "jafari") return 0;
 
   return Number(fallback || 2);
 }
 
-async function aladhanTimingsByCoords(lat, lng, isoDate, methodNum) {
+async function aladhanTimingsByCoords(lat, lng, isoDate, methodNum, madhhab) {
   const dateParam = toDDMMYYYY(isoDate);
+  const school = String(madhhab || "shafi").toLowerCase() === "hanafi" ? 1 : 0;
 
   const url =
     `${ALADHAN_BASE}/timings/${dateParam}` +
     `?latitude=${encodeURIComponent(lat)}` +
     `&longitude=${encodeURIComponent(lng)}` +
-    `&method=${encodeURIComponent(methodNum)}`;
+    `&method=${encodeURIComponent(methodNum)}` +
+    `&school=${encodeURIComponent(school)}`;
 
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`AlAdhan HTTP ${resp.status}`);
-
   const json = await resp.json();
+
   const t = json?.data?.timings;
+  const tz = json?.data?.meta?.timezone || null;
   if (!t) return null;
 
-  return {
+  const prayers24 = {
     fajr: stripAladhanTime(t.Fajr),
     sunrise: stripAladhanTime(t.Sunrise),
     dhuhr: stripAladhanTime(t.Dhuhr),
@@ -259,459 +531,113 @@ async function aladhanTimingsByCoords(lat, lng, isoDate, methodNum) {
     maghrib: stripAladhanTime(t.Maghrib),
     isha: stripAladhanTime(t.Isha),
   };
-}
-
-
-
-// const PORT = process.env.PORT || 4000;
-
-const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
-const GOOGLE_PLACES_SEARCH_URL =
-  'https://places.googleapis.com/v1/places:searchText';
-const PRAYER_METHOD_DEFAULT = Number(process.env.PRAYER_METHOD_DEFAULT || 2);
-const OPENCAGE_API_KEY = process.env.OPENCAGE_API_KEY;
-console.log('OPENCAGE_API_KEY present?', !!OPENCAGE_API_KEY);
-
-// Serve audio files (Adhan, Duas, etc.)
-app.use("/audio", express.static(path.join(__dirname, "frontend", "public", "audio")));
-
-
-// --------------------------------------
-// MOCK DATA FOR MVP (no database yet)
-// --------------------------------------
-
-// simple in-memory "user"
-const MOCK_USER_ID = "demo-user-1";
-
-// --- Mock users for login (MVP: no real DB, no JWT) ---
-const mockUsers = [
-  {
-    id: MOCK_USER_ID,
-    email: "demo@adhan.app",
-    password: "password123", // DEMO ONLY
-    name: "Demo User",
-  },
-];
-
-// Single in-memory user (for now)
-let userSettings = {
-  userId: 'demo-user-1',
-
-  // fiqh + calc preferences
-  language: 'en',
-  madhhab: 'hanafi',            // 'hanafi' or 'shafi'
-  shia: false,
-  calculationMethod: 'isna',    // 'isna' (US) or 'karachi' (PK) etc.
-  highLatitudeMethod: 'middle_of_the_night',
-
-  // location
-  country: 'US',                // 'US' or 'PK'
-  city: 'Chicago',
-  timezone: 'America/Chicago',  // or 'Asia/Karachi'
-  latitude: 41.8781,            // Chicago by default
-  longitude: -87.6298,
-
-  // selected mosque (from Google Places)
-  mosqueId: null,
-  mosqueName: null,
-  mosqueAddress: null,
-  mosqueLat: null,
-  mosqueLng: null,
-
-  // quiet hours
-  quietHours: {
-    enabled: true,
-    from: '22:00',
-    to: '07:00',
-    muteFajr: true,
-  },
-};
-
-// --------------------------------------
-// Minimal real coordinates for cities we support
-// (no fake timetables – just real lat/lon + timezone)
-// --------------------------------------
-const KNOWN_CITY_COORDS = {
-  "us:chicago": {
-    lat: 41.8781,
-    lon: -87.6298,
-    timezone: "America/Chicago",
-    city: "Chicago",
-    country: "US",
-  },
-  "pk:karachi": {
-    lat: 24.8607,
-    lon: 67.0011,
-    timezone: "Asia/Karachi",
-    city: "Karachi",
-    country: "PK",
-  },
-  "pk:lahore": {
-    lat: 31.5204,
-    lon: 74.3587,
-    timezone: "Asia/Karachi",
-    city: "Lahore",
-    country: "PK",
-  },
-  "pk:islamabad": {
-    lat: 33.6844,
-    lon: 73.0479,
-    timezone: "Asia/Karachi",
-    city: "Islamabad",
-    country: "PK",
-  },
-};
-
-function resolveCoordinatesFromSettings({ city, country }) {
-  // 1) If we already have explicit coordinates (e.g. from a mosque),
-  //    use those and respect the stored timezone.
-  if (
-    typeof userSettings.latitude === "number" &&
-    typeof userSettings.longitude === "number"
-  ) {
-    return {
-      lat: userSettings.latitude,
-      lon: userSettings.longitude,
-      timezone: userSettings.timezone || "America/Chicago",
-      city: userSettings.city || "Chicago",
-      country: userSettings.country || "US",
-    };
-  }
-
-  const normalizedCity = (city || userSettings.city || "")
-    .trim()
-    .toLowerCase();
-  const normalizedCountry = (country || userSettings.country || "US")
-    .trim()
-    .toLowerCase();
-
-  const key = `${normalizedCountry}:${normalizedCity}`;
-  const entry = KNOWN_CITY_COORDS[key];
-
-  if (entry) {
-    return entry;
-  }
-
-  // Fallback: Pakistan but unknown city → Karachi
-  if (normalizedCountry === "pk") {
-    return KNOWN_CITY_COORDS["pk:karachi"];
-  }
-
-  // Default → Chicago, US
-  return KNOWN_CITY_COORDS["us:chicago"];
-}
-
-
-// tiny mock mosque list (legacy – UI will use Google-based routes instead)
-const mockMosques = [
-  {
-    id: "mosque-1",
-    name: "Downtown Islamic Center",
-    city: "Chicago, IL",
-    madhhab: "hanafi",
-    hasRamadanTimetable: true,
-  },
-  {
-    id: "mosque-2",
-    name: "Muslim Community Center",
-    city: "Chicago, IL",
-    madhhab: "hanafi",
-    hasRamadanTimetable: false,
-  },
-  {
-    id: "mosque-3",
-    name: "Masjid Al-Farooq",
-    city: "New York, NY",
-    madhhab: "shafi",
-    hasRamadanTimetable: true,
-  },
-];
-
-// mock mosque-specific timetables (legacy / fallback)
-const mockMosqueTimetables = [];
-
-// --------------------------------------
-// BASIC LOCATION → COORDINATES MAPPING (DEMO)
-// --------------------------------------
-
-const CITY_COORDS = {
-  "60607": { lat: 41.8781, lon: -87.6298 },
-  chicago: { lat: 41.8781, lon: -87.6298 },
-};
-
-function getCoordinatesForLocation(city, country) {
-  if (!city) return CITY_COORDS["chicago"];
-
-  const key = String(city).toLowerCase().trim();
-  if (CITY_COORDS[key]) return CITY_COORDS[key];
-
-  if (CITY_COORDS[String(city)]) return CITY_COORDS[String(city)];
-
-  return CITY_COORDS["chicago"];
-}
-
-function normaliseTimeZone(tz) {
-  if (!tz) return "America/Chicago";
-  const lower = String(tz).toLowerCase();
-  if (lower === "america/chicago") return "America/Chicago";
-  return tz;
-}
-
-function formatTimeWithTz(dateObj, timezone) {
-  const tz = normaliseTimeZone(timezone);
-  return dateObj.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: tz,
-  });
-}
-
-// --------------------------------------
-// Qiblah calculation helpers
-// --------------------------------------
-const KAABA_COORDS = {
-  lat: 21.4225,
-  lon: 39.8262,
-};
-
-function toRadians(deg) {
-  return (deg * Math.PI) / 180;
-}
-
-function toDegrees(rad) {
-  let deg = (rad * 180) / Math.PI;
-  if (deg < 0) deg += 360;
-  return deg;
-}
-
-function calculateQiblahBearing(lat, lon) {
-  const lat1 = toRadians(lat);
-  const lon1 = toRadians(lon);
-  const lat2 = toRadians(KAABA_COORDS.lat);
-  const lon2 = toRadians(KAABA_COORDS.lon);
-  const dLon = lon2 - lon1;
-
-  const y = Math.sin(dLon) * Math.cos(lat2);
-  const x =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-
-  const theta = Math.atan2(y, x);
-  return toDegrees(theta); // 0–360
-}
-
-function bearingToDirection(bearing) {
-  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"];
-  const idx = Math.round(bearing / 45);
-  return dirs[idx];
-}
-
-// helper: find mosque timings for given mosque + date (mock table)
-function findMosqueTimes(mosqueId, date) {
-  return null;
-}
-
-// --------------------------------------
-// Build prayer times with adhan-js
-// --------------------------------------
-function getCalculationParams(methodKey) {
-  // You can expand this later (makkah, egypt, etc.)
-  switch ((methodKey || '').toLowerCase()) {
-    case 'karachi': // Pakistan
-      return adhan.CalculationMethod.Karachi();
-    case 'isna':    // North America
-    default:
-      return adhan.CalculationMethod.NorthAmerica();
-  }
-}
-
-// --------------------------------------
-// Build prayer times for a single day
-// --------------------------------------
-function buildPrayerTimesForDate({
-  date,
-  city,
-  country,
-  method,
-  madhhab,
-  shia,
-  mosqueId, // kept for future but not used for any fake timetables
-  timezone,
-}) {
-  // 1) Resolve coordinates (US or Pakistan, or mosque coordinates)
-  const {
-    lat,
-    lon,
-    timezone: resolvedTz,
-    city: resolvedCity,
-    country: resolvedCountry,
-  } = resolveCoordinatesFromSettings({ city, country });
-
-  const coordinates = new adhan.Coordinates(lat, lon);
-
-  // 2) Calculation method
-  const methodToUse = method || userSettings.calculationMethod || "isna";
-
-  let params;
-  switch (methodToUse) {
-    case "makkah":
-      params = adhan.CalculationMethod.Makkah();
-      break;
-    case "egypt":
-      params = adhan.CalculationMethod.Egyptian();
-      break;
-    case "karachi":
-      params = adhan.CalculationMethod.Karachi();
-      break;
-    case "mwl":
-      params = adhan.CalculationMethod.MuslimWorldLeague();
-      break;
-    case "isna":
-    default:
-      params = adhan.CalculationMethod.NorthAmerica();
-      break;
-  }
-
-  // 3) Madhhab
-  const madhhabToUse = madhhab || userSettings.madhhab || "shafi";
-  params.madhab =
-    madhhabToUse === "hanafi"
-      ? adhan.Madhab.Hanafi
-      : adhan.Madhab.Shafi;
-
-  // 4) High latitude rule based on user setting
-  const highLatSetting =
-    userSettings.highLatitudeMethod || "automatic";
-
-  switch (highLatSetting) {
-    case "middle_of_the_night":
-      params.highLatitudeRule = adhan.HighLatitudeRule.MiddleOfTheNight;
-      break;
-    case "one_seventh":
-      params.highLatitudeRule = adhan.HighLatitudeRule.SeventhOfTheNight;
-      break;
-    case "angle_based":
-      params.highLatitudeRule = adhan.HighLatitudeRule.TwilightAngle;
-      break;
-    case "automatic":
-    default:
-      // keep library default
-      break;
-  }
-
-  // 5) Create a Date for that calendar day (server timezone is OK;
-  //    the adhan library mainly needs the calendar date).
-  const dateForCalc = new Date(`${date}T12:00:00`);
-
-  const prayerTimes = new adhan.PrayerTimes(
-    coordinates,
-    dateForCalc,
-    params
-  );
-
-  function formatTime(d) {
-    return d.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  }
 
   const prayers = {
-    fajr: formatTime(prayerTimes.fajr),
-    sunrise: formatTime(prayerTimes.sunrise),
-    dhuhr: formatTime(prayerTimes.dhuhr),
-    asr: formatTime(prayerTimes.asr),
-    maghrib: formatTime(prayerTimes.maghrib),
-    isha: formatTime(prayerTimes.isha),
+    fajr: to12h(prayers24.fajr),
+    sunrise: to12h(prayers24.sunrise),
+    dhuhr: to12h(prayers24.dhuhr),
+    asr: to12h(prayers24.asr),
+    maghrib: to12h(prayers24.maghrib),
+    isha: to12h(prayers24.isha),
   };
 
-  return {
-    date,
-    location: {
-      city: resolvedCity,
-      country: resolvedCountry,
-    },
-    // 🔴 Important: NO fake mosque timetables. Everything is calculated.
-    source: "calculation",
-    mosque: null,
-    settingsUsed: {
-      method: methodToUse,
-      madhhab: madhhabToUse,
-      shia: !!shia,
-      highLatitudeMethod: highLatSetting,
-    },
-    prayers,
-  };
+  return { prayers, prayers24, timezone: tz, meta: json?.data?.meta || null };
 }
 
+async function aladhanCalendarByCoords(lat, lng, year, month, methodNum, madhhab) {
+  const school = String(madhhab || "shafi").toLowerCase() === "hanafi" ? 1 : 0;
 
-// --------------------------------------
-// Quiet hours helper
-// --------------------------------------
-function isWithinQuietHours(now, quietHours) {
-  if (!quietHours || !quietHours.enabled) return false;
+  const url =
+    `${ALADHAN_BASE}/calendar` +
+    `?latitude=${encodeURIComponent(lat)}` +
+    `&longitude=${encodeURIComponent(lng)}` +
+    `&method=${encodeURIComponent(methodNum)}` +
+    `&school=${encodeURIComponent(school)}` +
+    `&month=${encodeURIComponent(month)}` +
+    `&year=${encodeURIComponent(year)}`;
 
-  const { from, to } = quietHours;
-  if (!from || !to) return false;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`AlAdhan calendar HTTP ${resp.status}`);
+  const json = await resp.json();
+  const days = Array.isArray(json?.data) ? json.data : [];
+  return days
+    .map((d) => {
+      const iso = d?.date?.gregorian?.date
+        ? (() => {
+          const [dd, mm, yy] = String(d.date.gregorian.date).split("-");
+          return `${yy}-${mm}-${dd}`;
+        })()
+        : null;
 
-  const [fromH, fromM] = from.split(":").map(Number);
-  const [toH, toM] = to.split(":").map(Number);
-
-  if (
-    Number.isNaN(fromH) ||
-    Number.isNaN(fromM) ||
-    Number.isNaN(toH) ||
-    Number.isNaN(toM)
-  ) {
-    return false;
-  }
-
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const fromMinutes = fromH * 60 + fromM;
-  const toMinutes = toH * 60 + toM;
-
-  if (fromMinutes === toMinutes) {
-    return true;
-  }
-
-  if (fromMinutes < toMinutes) {
-    return currentMinutes >= fromMinutes && currentMinutes < toMinutes;
-  }
-
-  return currentMinutes >= fromMinutes || currentMinutes < toMinutes;
+      const t = d?.timings || {};
+      return {
+        date: iso,
+        prayers: {
+          fajr: to12h(t.Fajr),
+          sunrise: to12h(t.Sunrise),
+          dhuhr: to12h(t.Dhuhr),
+          asr: to12h(t.Asr),
+          maghrib: to12h(t.Maghrib),
+          isha: to12h(t.Isha),
+        },
+      };
+    })
+    .filter((x) => x.date);
 }
 
-// --------------------------------------
+// -------------------
 // BASIC ROUTES
-// --------------------------------------
-app.get("/", (req, res) => {
-  res.send("Adhan backend is running. Try /api/health");
-});
+// -------------------
+app.get("/", (_req, res) => res.status(200).send("OK"));
+app.get("/health", (_req, res) => res.status(200).send("ok"));
+app.get("/api/health", (_req, res) =>
+  res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() })
+);
 
-app.get("/health", (req, res) => res.status(200).send("ok"));
-
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true, service: "adhanhome-backend", ts: new Date().toISOString() });
-});
-
-// ---------------------------------------------------------------------------
-// Geocoding: turn "city + country" into lat/lng + timezone (US / PK)
-// ---------------------------------------------------------------------------
-// -------------------------------------------------------------
-// Geocoding: look up lat/lng + timezone for a city in US/PK
-// -------------------------------------------------------------
-app.get("/api/geocode", async (req, res) => {
-  const { city, country } = req.query; // country: "US" or "PK"
-
-  if (!city || !country) {
-    return res.status(400).json({ error: "city and country are required" });
+// -------------------
+// Endppoint for DB SQL
+app.get("/api/db-test", async (req, res) => {
+  if (
+    !process.env.DB_SERVER ||
+    !process.env.DB_NAME ||
+    !process.env.DB_USER ||
+    !process.env.DB_PASSWORD
+  ) {
+    return res.status(503).json({ ok: false, error: "DB env vars missing" });
   }
+
+  try {
+    const pool = await getPool();
+    const r = await pool.request().query(`
+      SELECT
+        DB_NAME() AS db_name,
+        SUSER_SNAME() AS login_name,
+        SYSDATETIMEOFFSET() AS now_utc
+    `);
+    res.json({ ok: true, result: r.recordset[0] });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e.message,
+      code: e.code,
+      number: e.number,
+    });
+  }
+});
+
+
+
+
+// -------------------
+// Geocoding
+// -------------------
+app.get("/api/geocode", async (req, res) => {
+  const { city, country } = req.query;
+  if (!city || !country) return res.status(400).json({ error: "city and country are required" });
 
   const q = `${city}, ${country}`;
 
-  // Preferred: OpenCage (includes timezone if you request it)
+  // Preferred: OpenCage
   if (OPENCAGE_API_KEY) {
     try {
       const url =
@@ -722,14 +648,11 @@ app.get("/api/geocode", async (req, res) => {
         `&limit=1`;
 
       const resp = await fetch(url);
-      if (!resp.ok) {
-        return res.status(502).json({ error: "Geocoding provider error" });
-      }
+      if (!resp.ok) return res.status(502).json({ error: "Geocoding provider error" });
+
       const data = await resp.json();
       const r = data?.results?.[0];
-      if (!r?.geometry) {
-        return res.status(404).json({ error: "Location not found" });
-      }
+      if (!r?.geometry) return res.status(404).json({ error: "Location not found" });
 
       const tz = r?.annotations?.timezone?.name || null;
 
@@ -748,7 +671,7 @@ app.get("/api/geocode", async (req, res) => {
     }
   }
 
-  // Fallback: Nominatim (no timezone)
+  // Fallback: Nominatim
   try {
     const cc =
       String(country).toLowerCase() === "us"
@@ -775,203 +698,10 @@ app.get("/api/geocode", async (req, res) => {
   }
 });
 
-
-
-app.post("/api/test-adhan", (req, res) => {
-  const { prayerCode } = req.body || {};
-  const now = new Date();
-  const quiet = userSettings.quietHours || {};
-
-  const inQuiet = isWithinQuietHours(now, quiet);
-
-  if (inQuiet) {
-    console.log(
-      "Test Adhan request blocked due to quiet hours:",
-      quiet.from,
-      "–",
-      quiet.to
-    );
-
-    return res.json({
-      success: true,
-      played: false,
-      reason: "quiet-hours",
-      quietHours: quiet,
-      message: "Adhan muted because it is within quiet hours.",
-    });
-  }
-
-  console.log("Test Adhan triggered for demo (not in quiet hours)");
-  return res.json({
-    success: true,
-    played: true,
-    reason: "ok",
-    quietHours: quiet,
-    message: "Test Adhan triggered (demo)",
-  });
-});
-
-
-// --------------------------------------
-// DUA (Daily Duas - no Azkar)
-// --------------------------------------
-const DAILY_DUAS = [
-  {
-    id: "dua-eat-before",
-    category: "Food",
-    title: "Before Eating",
-    textArabic: "بِسْمِ اللَّهِ",
-    textTransliteration: "Bismillāh",
-    textTranslation: "In the name of Allah.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-eat-after",
-    category: "Food",
-    title: "After Eating",
-    textArabic:
-      "الْحَمْدُ لِلَّهِ الَّذِي أَطْعَمَنِي هَذَا وَرَزَقَنِيهِ مِنْ غَيْرِ حَوْلٍ مِنِّي وَلَا قُوَّةٍ",
-    textTransliteration:
-      "Alhamdu lillāhil-ladhī aṭ‘amanī hādhā wa razaqanīhi min ghayri ḥawlin minnī wa lā quwwah",
-    textTranslation:
-      "All praise is for Allah who fed me this and provided it for me without any strength or power from me.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-home-enter",
-    category: "Home",
-    title: "Entering Home",
-    textArabic:
-      "بِسْمِ اللَّهِ وَلَجْنَا، وَبِسْمِ اللَّهِ خَرَجْنَا، وَعَلَى رَبِّنَا تَوَكَّلْنَا",
-    textTransliteration:
-      "Bismillāhi walajnā, wa bismillāhi kharajnā, wa ‘alā rabbinā tawakkalnā",
-    textTranslation:
-      "In the name of Allah we enter, in the name of Allah we leave, and upon our Lord we rely.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-home-leave",
-    category: "Home",
-    title: "Leaving Home",
-    textArabic:
-      "بِسْمِ اللَّهِ، تَوَكَّلْتُ عَلَى اللَّهِ، وَلَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ",
-    textTransliteration:
-      "Bismillāh, tawakkaltu ‘alā Allāh, wa lā ḥawla wa lā quwwata illā billāh",
-    textTranslation:
-      "In the name of Allah, I rely upon Allah, and there is no power nor strength except with Allah.",
-    audioUrl: null,
-    tags: ["Daily", "Protection"],
-  },
-  {
-    id: "dua-bathroom-enter",
-    category: "Bathroom",
-    title: "Entering Bathroom",
-    textArabic: "اللَّهُمَّ إِنِّي أَعُوذُ بِكَ مِنَ الْخُبُثِ وَالْخَبَائِثِ",
-    textTransliteration: "Allāhumma innī a‘ūdhu bika minal-khubthi wal-khabā’ith",
-    textTranslation:
-      "O Allah, I seek refuge in You from male and female devils (evil).",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-bathroom-leave",
-    category: "Bathroom",
-    title: "Leaving Bathroom",
-    textArabic: "غُفْرَانَكَ",
-    textTransliteration: "Ghufrānak",
-    textTranslation: "I seek Your forgiveness.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-sleep",
-    category: "Sleep",
-    title: "Before Sleeping",
-    textArabic: "بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا",
-    textTransliteration: "Bismika Allāhumma amūtu wa aḥyā",
-    textTranslation: "In Your name, O Allah, I die and I live.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-wake",
-    category: "Morning",
-    title: "After Waking Up",
-    textArabic:
-      "الْحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا وَإِلَيْهِ النُّشُورُ",
-    textTransliteration:
-      "Alhamdu lillāhil-ladhī aḥyānā ba‘da mā amātanā wa ilayhin-nushūr",
-    textTranslation:
-      "All praise is for Allah who gave us life after causing us to die, and to Him is the resurrection.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-sneeze",
-    category: "Etiquette",
-    title: "When You Sneeze",
-    textArabic: "الْحَمْدُ لِلَّهِ",
-    textTransliteration: "Alhamdulillāh",
-    textTranslation: "All praise is for Allah.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-sneeze-response",
-    category: "Etiquette",
-    title: "Reply to Someone Who Sneezes",
-    textArabic: "يَرْحَمُكَ اللَّهُ",
-    textTransliteration: "Yarḥamukallāh",
-    textTranslation: "May Allah have mercy on you.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-sneeze-reply-back",
-    category: "Etiquette",
-    title: "Reply Back (After 'Yarhamukallah')",
-    textArabic: "يَهْدِيكُمُ اللَّهُ وَيُصْلِحُ بَالَكُمْ",
-    textTransliteration: "Yahdīkumullāh wa yuṣliḥu bālakum",
-    textTranslation: "May Allah guide you and set your affairs right.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-travel-short",
-    category: "Travel",
-    title: "Travel Dua (Short)",
-    textArabic: "سُبْحَانَ الَّذِي سَخَّرَ لَنَا هَذَا وَمَا كُنَّا لَهُ مُقْرِنِينَ",
-    textTransliteration:
-      "Subḥānal-ladhī sakhkhara lanā hādhā wa mā kunnā lahu muqrinīn",
-    textTranslation:
-      "Glory be to the One who has subjected this to us, and we could not have done so by ourselves.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-  {
-    id: "dua-wudu-after",
-    category: "Wudu",
-    title: "After Wudu",
-    textArabic:
-      "أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، وَأَشْهَدُ أَنَّ مُحَمَّدًا عَبْدُهُ وَرَسُولُهُ",
-    textTransliteration:
-      "Ashhadu an lā ilāha illallāhu waḥdahu lā sharīka lah, wa ashhadu anna Muḥammadan ‘abduhu wa rasūluh",
-    textTranslation:
-      "I testify that there is no god except Allah alone with no partner, and I testify that Muhammad is His servant and messenger.",
-    audioUrl: null,
-    tags: ["Daily"],
-  },
-];
-
-// --------------------------------------
-// DUA (Daily routine duas - from data/duas.json)
-// --------------------------------------
-
-// Categories derived from local duas.json
-app.get("/api/duas/categories", (req, res) => {
+// -------------------
+// DUA endpoints
+// -------------------
+app.get("/api/duas/categories", (_req, res) => {
   const counts = {};
   for (const d of (duas || [])) {
     const cat = String(d.category || "Other");
@@ -991,18 +721,14 @@ app.get("/api/duas/categories", (req, res) => {
 });
 
 app.get("/api/duas", (req, res) => {
-  // Support both old query params and simple ones
   const category = String(req.query.category || req.query.categoryId || "").trim().toLowerCase();
   const search = String(req.query.search || req.query.q || "").trim().toLowerCase();
 
   const results = (duas || []).filter((d) => {
     const matchCategory = !category || String(d.category || "").toLowerCase() === category;
-
     const haystack =
       `${d.title || ""} ${d.textArabic || ""} ${d.textTransliteration || ""} ${d.textTranslation || ""}`.toLowerCase();
-
     const matchSearch = !search || haystack.includes(search);
-
     return matchCategory && matchSearch;
   });
 
@@ -1015,23 +741,15 @@ app.get("/api/duas/:id", (req, res) => {
   res.json(dua);
 });
 
-
-
-
-// --------------------------------------
-// QUR'AN (real API via AlQuran Cloud)
-// --------------------------------------
-app.get("/api/quran/surahs", async (req, res) => {
+// -------------------
+// Qur'an endpoints
+// -------------------
+app.get("/api/quran/surahs", async (_req, res) => {
   try {
     const apiRes = await fetch(`${QURAN_API_BASE}/surah`);
-    if (!apiRes.ok) {
-      return res
-        .status(502)
-        .json({ error: "Failed to fetch surahs from Qur'an API" });
-    }
+    if (!apiRes.ok) return res.status(502).json({ error: "Failed to fetch surahs from Qur'an API" });
 
     const body = await apiRes.json();
-
     const surahs = (body.data || []).map((s) => ({
       id: s.number,
       number: s.number,
@@ -1049,62 +767,33 @@ app.get("/api/quran/surahs", async (req, res) => {
   }
 });
 
-// --------------------------------------
-// QUR'AN (real API via AlQuran Cloud)
-// --------------------------------------
 app.get("/api/quran/surahs/:id", async (req, res) => {
   const surahId = req.params.id;
-
   try {
-    // 1) Arabic + audio (Mishary Al-Afasy)
-    // 2) English translation (Sahih International)
-    // 3) English transliteration (en.transliteration) – optional
     const [audioRes, translationRes] = await Promise.all([
       fetch(`${QURAN_API_BASE}/surah/${surahId}/ar.alafasy`),
       fetch(`${QURAN_API_BASE}/surah/${surahId}/en.sahih`),
     ]);
 
-    if (!audioRes.ok) {
-      return res
-        .status(502)
-        .json({ error: "Failed to fetch surah audio from Qur'an API" });
-    }
-    if (!translationRes.ok) {
-      return res
-        .status(502)
-        .json({ error: "Failed to fetch surah translation from Qur'an API" });
-    }
+    if (!audioRes.ok) return res.status(502).json({ error: "Failed to fetch surah audio from Qur'an API" });
+    if (!translationRes.ok) return res.status(502).json({ error: "Failed to fetch surah translation from Qur'an API" });
 
     const audioJson = await audioRes.json();
     const translationJson = await translationRes.json();
 
-    // Try to fetch transliteration, but don't break if it fails
     let transliterationData = null;
     try {
-      const translitRes = await fetch(
-        `${QURAN_API_BASE}/surah/${surahId}/en.transliteration`
-      );
-      if (translitRes.ok) {
-        const translitJson = await translitRes.json();
-        transliterationData = translitJson.data;
-      } else {
-        console.warn(
-          "Transliteration request failed with status:",
-          translitRes.status
-        );
-      }
-    } catch (e) {
-      console.warn("Error fetching transliteration:", e);
-    }
+      const translitRes = await fetch(`${QURAN_API_BASE}/surah/${surahId}/en.transliteration`);
+      if (translitRes.ok) transliterationData = (await translitRes.json()).data;
+    } catch (_) { }
 
-    const s = audioJson.data; // Arabic + audio
-    const t = translationJson.data; // English translation
-    const tr = transliterationData; // English transliteration (may be null)
+    const s = audioJson.data;
+    const t = translationJson.data;
+    const tr = transliterationData;
 
     const verses = (s.ayahs || []).map((a, idx) => {
       const tAyah = t.ayahs && t.ayahs[idx];
       const trAyah = tr && tr.ayahs && tr.ayahs[idx];
-
       return {
         numberInSurah: a.numberInSurah,
         textArabic: a.text,
@@ -1115,7 +804,7 @@ app.get("/api/quran/surahs/:id", async (req, res) => {
       };
     });
 
-    const result = {
+    res.json({
       id: s.number,
       number: s.number,
       nameArabic: s.name,
@@ -1123,305 +812,316 @@ app.get("/api/quran/surahs/:id", async (req, res) => {
       englishNameTranslation: s.englishNameTranslation,
       ayahCount: s.numberOfAyahs,
       revelationType: s.revelationType,
-      surahAudioUrl: null, // we’re doing per-ayah audio instead
       verses,
-    };
-
-    res.json(result);
+    });
   } catch (err) {
     console.error("Error fetching surah detail:", err);
     res.status(500).json({ error: "Internal error fetching surah detail" });
   }
 });
 
-
-// --------------------------------------
-// INTEGRATIONS (Alexa / Google / Apple)
-// --------------------------------------
-let integrationStatus = {
-  userId: MOCK_USER_ID,
-  alexa: {
-    connected: false,
-    linkedAt: null,
-    displayName: null,
-    accountId: null,
-  },
-  google: {
-    connected: false,
-    linkedAt: null,
-  },
-  apple: {
-    connected: false,
-    linkedAt: null,
-  },
-};
+// -------------------
+// Integrations (Amazon / Alexa)
+// -------------------
+app.use("/api/integrations", optionalAmazonAuth);
 
 app.get("/api/integrations", (req, res) => {
-  res.json(integrationStatus);
+  const userKey = getUserKeyFromReq(req);
+  res.json(ensureIntegration(userKey));
 });
 
+// Legacy mock link kept for local UI testing
 app.post("/api/integrations/alexa/mock-link", (req, res) => {
+  const userKey = DEMO_USER_KEY;
   const now = new Date().toISOString();
+  const status = ensureIntegration(userKey);
 
-  integrationStatus = {
-    ...integrationStatus,
-    alexa: {
+  status.alexa = {
+    connected: true,
+    linkedAt: now,
+    displayName: "demo-user@amazon.com",
+    accountId: "amazon-demo-account-123",
+  };
+
+  integrationsByAmazonUserId.set(userKey, status);
+  res.json({ success: true, alexa: status.alexa, userKey });
+});
+
+app.post("/api/integrations/alexa/login", async (req, res) => {
+  const { accessToken } = req.body || {};
+  if (!accessToken) return res.status(400).json({ error: "Missing accessToken" });
+
+  try {
+    const profile = await fetchAmazonProfile(accessToken);
+    const userKey = profile.user_id;
+
+    const now = new Date().toISOString();
+    const status = ensureIntegration(userKey);
+
+    status.alexa = {
       connected: true,
       linkedAt: now,
-      displayName: "demo-user@amazon.com",
-      accountId: "amazon-demo-account-123",
-    },
-  };
+      displayName: profile.email || profile.name || "Amazon account",
+      accountId: profile.user_id,
+    };
 
-  console.log("Alexa mock-link completed:", integrationStatus.alexa);
-  res.json({ success: true, alexa: integrationStatus.alexa });
+    integrationsByAmazonUserId.set(userKey, status);
+
+    // ensure demo settings bucket exists (non-DB things)
+    ensureSettings(userKey);
+
+    // Bootstrap DB user row too (production)
+    await getOrCreateUserByAmazonId(userKey);
+
+    return res.json({ success: true, profile, alexa: status.alexa, userKey });
+  } catch (err) {
+    console.error("[alexa/login] verify failed:", err);
+    return res.status(401).json({ error: "Invalid/expired Amazon token" });
+  }
 });
 
-// Real-ish login endpoint for Alexa integration (Phase 0)
-app.post("/api/integrations/alexa/login", (req, res) => {
-  const { accessToken, profile } = req.body || {};
+app.post("/api/integrations/alexa/disconnect", requireAmazonAuth, (req, res) => {
+  const userKey = getUserKeyFromReq(req);
+  const status = ensureIntegration(userKey);
 
-  if (!accessToken) {
-    return res.status(400).json({ error: "Missing accessToken" });
-  }
+  status.alexa = { connected: false, linkedAt: null, displayName: null, accountId: null };
+  integrationsByAmazonUserId.set(userKey, status);
 
-  const now = new Date().toISOString();
-
-  const customerName =
-    profile?.name || profile?.PrimaryEmail || "Amazon account";
-  const customerId = profile?.CustomerId || null;
-  const primaryEmail = profile?.PrimaryEmail || null;
-
-  integrationStatus = {
-    ...integrationStatus,
-    alexa: {
-      connected: true,
-      linkedAt: now,
-      displayName: primaryEmail || customerName,
-      accountId: customerId,
-    },
-  };
-
-  console.log("Alexa linked via Login with Amazon:", integrationStatus.alexa);
-
-  return res.json({
-    success: true,
-    alexa: integrationStatus.alexa,
-  });
+  res.json({ success: true, alexa: status.alexa, userKey });
 });
 
-app.post("/api/integrations/alexa/disconnect", (req, res) => {
-  integrationStatus = {
-    ...integrationStatus,
-    alexa: {
-      connected: false,
-      linkedAt: null,
-      displayName: null,
-      accountId: null,
-    },
-  };
-
-  console.log("Alexa disconnected");
-  res.json({ success: true, alexa: integrationStatus.alexa });
-});
-
-// --------------------------------------
-// AUTH (MVP – simple fake login)
-// --------------------------------------
-app.post("/api/auth/login", (req, res) => {
-  const { email, password } = req.body || {};
-
-  if (!email || !password) {
-    return res
-      .status(400)
-      .json({ error: "Email and password are required" });
-  }
-
-  const user = mockUsers.find((u) => u.email === email);
-  if (!user || user.password !== password) {
-    return res.status(401).json({ error: "Invalid email or password" });
-  }
-
-  userSettings.userId = user.id;
+// -------------------
+// User settings (DB-backed for authenticated users)
+// -------------------
+app.get("/api/user/settings", requireAmazonAuth, async (req, res) => {
+  const amazonUserId = req.amazonUser.user_id;
+  const user = await getOrCreateUserByAmazonId(amazonUserId);
 
   res.json({
-    userId: user.id,
-    email: user.email,
-    name: user.name,
+    userKey: amazonUserId,
+    profile: user.profile,
+    prayers: (user.prayers || [])
+      .map((p) => ({
+        id: p.id,
+        prayerName: p.prayerName,
+        enabled: p.enabled,
+        offsetMin: p.offsetMin,
+        quietEnabled: p.quietEnabled,
+        quietFrom: p.quietFrom,
+        quietTo: p.quietTo,
+      }))
+      .sort((a, b) => a.prayerName.localeCompare(b.prayerName)),
   });
 });
 
-// --------------------------------------
-// PRAYER TIMES
-// --------------------------------------
-app.get("/api/prayer-times/today", async (req, res) => {
+app.put("/api/user/settings", requireAmazonAuth, async (req, res) => {
+  const amazonUserId = req.amazonUser.user_id;
+  const user = await getOrCreateUserByAmazonId(amazonUserId);
+
+  const body = req.body || {};
+
+  if (body.profile) {
+    const d = pickDefined({
+      sect: body.profile.sect,
+      calculationMethod: body.profile.calculationMethod,
+      madhhab: body.profile.madhhab,
+      highLatitudeMethod: body.profile.highLatitudeMethod,
+      timezone: body.profile.timezone,
+      country: body.profile.country,
+      city: body.profile.city,
+      latitude: body.profile.latitude,
+      longitude: body.profile.longitude,
+      accountEnabled: body.profile.accountEnabled,
+      globalOffsetFajr: body.profile.globalOffsetFajr,
+      globalOffsetDhuhr: body.profile.globalOffsetDhuhr,
+      globalOffsetAsr: body.profile.globalOffsetAsr,
+      globalOffsetMaghrib: body.profile.globalOffsetMaghrib,
+      globalOffsetIsha: body.profile.globalOffsetIsha,
+    });
+
+    await prisma.userProfile.update({
+      where: { userId: user.id },
+      data: d,
+    });
+  }
+
+  if (Array.isArray(body.prayers)) {
+    for (const p of body.prayers) {
+      const d = pickDefined({
+        enabled: p.enabled,
+        offsetMin: p.offsetMin,
+        quietEnabled: p.quietEnabled,
+        quietFrom: p.quietFrom,
+        quietTo: p.quietTo,
+      });
+
+      // basic validation to avoid garbage rows
+      if (d.quietFrom && !isHHMM(d.quietFrom)) return res.status(400).json({ error: "quietFrom must be HH:MM" });
+      if (d.quietTo && !isHHMM(d.quietTo)) return res.status(400).json({ error: "quietTo must be HH:MM" });
+
+      await prisma.prayerConfig.update({
+        where: { id: p.id },
+        data: d,
+      });
+    }
+  }
+
+  res.json({ ok: true });
+});
+
+// -------------------
+// Prayer Times (timezone-correct via AlAdhan) + DB offsets + per-prayer quiet/enabled
+// -------------------
+app.get("/api/prayer-times/today", optionalAmazonAuth, async (req, res) => {
   try {
     const isoDate =
       typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
         ? req.query.date
         : new Date().toISOString().slice(0, 10);
 
-    const normalizedShia =
-      req.query.shia === "true" || req.query.shia === true || userSettings.shia === true;
+    const { user, settings, prayerByName, globalOffsets } = await getEffectiveSettings(req);
 
-    // If a mosque is selected AND has coords, return mosque-based timings (Naperville etc.)
-    const hasSelectedMosqueCoords =
-      !!userSettings.mosqueId &&
-      typeof userSettings.mosqueLat === "number" &&
-      typeof userSettings.mosqueLng === "number";
+    // allow query overrides but keep settings as default
+    const effective = {
+      ...settings,
+      city: req.query.city || settings.city,
+      country: req.query.country || settings.country,
+      calculationMethod: req.query.method || settings.calculationMethod,
+      madhhab: req.query.madhhab || settings.madhhab,
+      shia: req.query.shia === "true" ? true : settings.shia,
+      timezone: req.query.timezone || settings.timezone,
+    };
 
-    const methodNum = aladhanMethodNumber(
-      req.query.method ?? userSettings.calculationMethod,
-      PRAYER_METHOD_DEFAULT
-    );
+    const coords = resolveCoordsFromSettings(effective, { city: effective.city, country: effective.country });
+    const methodNum = aladhanMethodNumber(effective.calculationMethod, PRAYER_METHOD_DEFAULT);
 
-    // --------------------------
-    // 1) MOSQUE MODE (SYNC DASHBOARD TO SELECTED MOSQUE)
-    // --------------------------
-    if (hasSelectedMosqueCoords) {
-      const prayers = await aladhanTimingsByCoords(
-        userSettings.mosqueLat,
-        userSettings.mosqueLng,
-        isoDate,
-        methodNum
-      );
+    const timings = await aladhanTimingsByCoords(coords.lat, coords.lon, isoDate, methodNum, effective.madhhab);
+    if (!timings) return res.status(502).json({ error: "Failed to fetch timings" });
 
-      // tomorrow fajr used by dashboard for "after isha" next prayer display
-      const tomorrowISO = addDaysISO(isoDate, 1);
-      const tomorrowPrayers = await aladhanTimingsByCoords(
-        userSettings.mosqueLat,
-        userSettings.mosqueLng,
-        tomorrowISO,
-        methodNum
-      );
+    const tomorrowISO = addDaysISO(isoDate, 1);
+    const tomorrow = await aladhanTimingsByCoords(coords.lat, coords.lon, tomorrowISO, methodNum, effective.madhhab);
 
-      if (prayers) {
-        return res.json({
-          date: isoDate,
-          location: {
-            city: userSettings.city,
-            country: userSettings.country,
-            timezone: userSettings.timezone,
-          },
-          source: "mosque",
-          mosque: {
-            id: userSettings.mosqueId,
-            name: userSettings.mosqueName,
-            address: userSettings.mosqueAddress,
-            location: { lat: userSettings.mosqueLat, lng: userSettings.mosqueLng },
-          },
-          settingsUsed: {
-            method: userSettings.calculationMethod,
-            madhhab: userSettings.madhhab,
-            shia: !!normalizedShia,
-            highLatitudeMethod: userSettings.highLatitudeMethod,
-          },
-          prayers,
-          nextFajr: tomorrowPrayers?.fajr ?? null,
-          nextFajrDate: tomorrowISO,
-          meta: {
-            provider: "aladhan",
-            method: methodNum,
-          },
-        });
+    // Apply DB offsets if authenticated
+    let prayers24 = { ...timings.prayers24 };
+    if (user && prayerByName && globalOffsets) {
+      const names = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+      for (const n of names) {
+        const per = prayerByName[n];
+        const perOffset = per?.offsetMin ?? 0;
+        const gOff = globalOffsets[n] ?? 0;
+        prayers24[n] = addMinutesHHMM(prayers24[n], gOff + perOffset);
       }
-
-      console.warn("AlAdhan returned no timings; falling back to calculation.");
     }
 
-    // --------------------------
-    // 2) FALLBACK MODE (CITY/CALCULATION)
-    // --------------------------
-    const {
-      city = userSettings.city,
-      country = userSettings.country,
-      method = userSettings.calculationMethod,
-      madhhab = userSettings.madhhab,
-      timezone = userSettings.timezone,
-    } = req.query;
+    const prayers = {
+      fajr: to12h(prayers24.fajr),
+      sunrise: to12h(prayers24.sunrise),
+      dhuhr: to12h(prayers24.dhuhr),
+      asr: to12h(prayers24.asr),
+      maghrib: to12h(prayers24.maghrib),
+      isha: to12h(prayers24.isha),
+    };
 
-    const result = buildPrayerTimesForDate({
+    // playAllowed: based on enabled + per-prayer quiet
+    let playAllowed = null;
+    if (user && prayerByName) {
+      const nowHHMM = nowHHMMInLocalTZ(effective.timezone);
+      playAllowed = {};
+      for (const n of ["fajr", "dhuhr", "asr", "maghrib", "isha"]) {
+        const cfg = prayerByName[n];
+        const enabled = cfg?.enabled !== false;
+        const quiet =
+          !!cfg?.quietEnabled && inQuietHours(nowHHMM, cfg?.quietFrom || "00:00", cfg?.quietTo || "00:00");
+        playAllowed[n] = enabled && !quiet;
+      }
+    }
+
+    return res.json({
       date: isoDate,
-      city,
-      country,
-      method,
-      madhhab,
-      shia: normalizedShia,
-      mosqueId: req.query.mosqueId,
-      timezone,
+      location: { city: effective.city, country: effective.country, timezone: timings.timezone || effective.timezone },
+      source: coords.source,
+      mosque:
+        coords.source === "mosque"
+          ? {
+            id: effective.mosqueId,
+            name: effective.mosqueName,
+            address: effective.mosqueAddress,
+            location: { lat: effective.mosqueLat, lng: effective.mosqueLng },
+          }
+          : null,
+      settingsUsed: {
+        method: effective.calculationMethod,
+        madhhab: effective.madhhab,
+        shia: !!effective.shia,
+        highLatitudeMethod: effective.highLatitudeMethod,
+      },
+      prayers,
+      prayers24,
+      playAllowed,
+      nextFajr: tomorrow?.prayers?.fajr || null,
+      nextFajrDate: tomorrowISO,
+      meta: {
+        provider: "aladhan",
+        method: methodNum,
+        school: String(effective.madhhab).toLowerCase() === "hanafi" ? 1 : 0,
+        dbBacked: !!user,
+      },
     });
-
-    return res.json(result);
   } catch (err) {
     console.error("Error in /api/prayer-times/today:", err);
     return res.status(500).json({ error: "Failed to compute today's prayer times." });
   }
 });
 
-app.get("/api/prayer-times/month", (req, res) => {
-  const {
-    city = userSettings.city,
-    country = userSettings.country,
-    method = userSettings.calculationMethod,
-    madhhab = userSettings.madhhab,
-    shia = userSettings.shia,
-    mosqueId: queryMosqueId,
-    month: monthParam,
-    timezone = userSettings.timezone,
-  } = req.query;
+app.get("/api/prayer-times/month", optionalAmazonAuth, async (req, res) => {
+  try {
+    const { settings } = await getEffectiveSettings(req);
 
-  let year, month;
-  if (typeof monthParam === "string" && /^\d{4}-\d{2}$/.test(monthParam)) {
-    const parts = monthParam.split("-");
-    year = parseInt(parts[0], 10);
-    month = parseInt(parts[1], 10);
-  } else {
-    const now = new Date();
-    year = now.getFullYear();
-    month = now.getMonth() + 1;
-  }
+    const monthParam = String(req.query.month || "").trim(); // "YYYY-MM"
+    let year, month;
+    if (/^\d{4}-\d{2}$/.test(monthParam)) {
+      year = Number(monthParam.slice(0, 4));
+      month = Number(monthParam.slice(5, 7));
+    } else {
+      const now = new Date();
+      year = now.getFullYear();
+      month = now.getMonth() + 1;
+    }
 
-  const normalizedShia = shia === "true" || shia === true;
-  const monthStr = String(month).padStart(2, "0");
-  const daysInMonth = new Date(year, month, 0).getDate();
+    const effective = {
+      ...settings,
+      city: req.query.city || settings.city,
+      country: req.query.country || settings.country,
+      calculationMethod: req.query.method || settings.calculationMethod,
+      madhhab: req.query.madhhab || settings.madhhab,
+      shia: req.query.shia === "true" ? true : settings.shia,
+    };
 
-  const days = [];
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dayStr = String(day).padStart(2, "0");
-    const dateStr = `${year}-${monthStr}-${dayStr}`;
+    const coords = resolveCoordsFromSettings(effective, { city: effective.city, country: effective.country });
+    const methodNum = aladhanMethodNumber(effective.calculationMethod, PRAYER_METHOD_DEFAULT);
 
-    const dayResult = buildPrayerTimesForDate({
-      date: dateStr,
-      city,
-      country,
-      method,
-      madhhab,
-      shia: normalizedShia,
-      mosqueId: queryMosqueId,
-      timezone,
+    const days = await aladhanCalendarByCoords(coords.lat, coords.lon, year, month, methodNum, effective.madhhab);
+
+    return res.json({
+      location: { city: effective.city, country: effective.country },
+      month: `${year}-${String(month).padStart(2, "0")}`,
+      source: coords.source,
+      days,
+      meta: { provider: "aladhan", method: methodNum },
     });
-
-    days.push(dayResult);
+  } catch (err) {
+    console.error("Error in /api/prayer-times/month:", err);
+    return res.status(500).json({ error: "Failed to fetch monthly prayer times." });
   }
-
-  res.json({
-    location: { city, country },
-    month: `${year}-${monthStr}`,
-    days,
-  });
 });
 
-// --------------------------------------
-// MOSQUE SEARCH – legacy mock route
-// --------------------------------------
-app.get("/api/mosques", async (req, res) => {
-  const {
-    query = "",
-    city = "",
-    bias = "user", // "user" or "none"
-    radiusKm = "15",
-    country = "", // optional hint for nominatim fallback
-  } = req.query;
+// -------------------
+// Mosque search
+// -------------------
+app.get("/api/mosques", optionalAmazonAuth, async (req, res) => {
+  const { settings } = await getEffectiveSettings(req);
+
+  const { query = "", city = "", bias = "user", radiusKm = "15", country = "" } = req.query;
 
   const q = String(query || city || "").trim();
   const radiusMeters = Math.max(1, Number(radiusKm) || 15) * 1000;
@@ -1429,16 +1129,11 @@ app.get("/api/mosques", async (req, res) => {
   // Preferred: Google Places
   if (GOOGLE_PLACES_API_KEY) {
     try {
-      const region = (userSettings.country || "US").toLowerCase();
+      const region = String(settings.country || "US").toLowerCase();
       let url = "";
 
       if (bias === "user") {
-        // Nearby Search: around user location
-        const coords = resolveCoordinatesFromSettings({
-          city: userSettings.city,
-          country: userSettings.country,
-        });
-
+        const coords = resolveCoordsFromSettings(settings);
         url =
           `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
           `?location=${coords.lat},${coords.lon}` +
@@ -1447,8 +1142,7 @@ app.get("/api/mosques", async (req, res) => {
           `&keyword=${encodeURIComponent(q || "mosque")}` +
           `&key=${GOOGLE_PLACES_API_KEY}`;
       } else {
-        // Text Search: mosques in a typed area
-        const text = `mosque in ${q || userSettings.city || "your area"}`;
+        const text = `mosque in ${q || settings.city || "your area"}`;
         url =
           `https://maps.googleapis.com/maps/api/place/textsearch/json` +
           `?query=${encodeURIComponent(text)}` +
@@ -1458,12 +1152,9 @@ app.get("/api/mosques", async (req, res) => {
       }
 
       const resp = await fetch(url);
-      if (!resp.ok) {
-        return res.status(502).json({ error: "Failed to fetch mosques" });
-      }
+      if (!resp.ok) return res.status(502).json({ error: "Failed to fetch mosques" });
 
       const data = await resp.json();
-
       if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
         return res.status(502).json({
           error: "Unexpected response from Google Places",
@@ -1478,9 +1169,7 @@ app.get("/api/mosques", async (req, res) => {
         address: m.vicinity || m.formatted_address || "",
         rating: m.rating ?? null,
         userRatingsTotal: m.user_ratings_total ?? null,
-        location: m.geometry?.location
-          ? { lat: m.geometry.location.lat, lng: m.geometry.location.lng }
-          : null,
+        location: m.geometry?.location ? { lat: m.geometry.location.lat, lng: m.geometry.location.lng } : null,
         source: "google",
       }));
 
@@ -1491,35 +1180,30 @@ app.get("/api/mosques", async (req, res) => {
     }
   }
 
-  // Fallback: OpenStreetMap (Nominatim + Overpass)
+  // Fallback: OSM
   try {
     let centerLat = null;
     let centerLon = null;
 
     if (bias === "user") {
-      const coords = resolveCoordinatesFromSettings({
-        city: userSettings.city,
-        country: userSettings.country,
-      });
+      const coords = resolveCoordsFromSettings(settings);
       centerLat = coords.lat;
       centerLon = coords.lon;
     } else {
-      // Determine a center from the query (city/zip/neighborhood)
       const hintCountry =
         String(country).toLowerCase() === "us"
           ? "us"
           : String(country).toLowerCase() === "pk"
             ? "pk"
-            : (userSettings.country || "").toLowerCase() === "pk"
+            : String(settings.country || "").toLowerCase() === "pk"
               ? "pk"
-              : (userSettings.country || "").toLowerCase() === "us"
+              : String(settings.country || "").toLowerCase() === "us"
                 ? "us"
                 : undefined;
 
-      const hit = await nominatimSearch(q || `${userSettings.city}, ${userSettings.country}`, hintCountry);
-      if (!hit) {
-        return res.json({ count: 0, mosques: [] });
-      }
+      const hit = await nominatimSearch(q || `${settings.city}, ${settings.country}`, hintCountry);
+      if (!hit) return res.json({ count: 0, mosques: [] });
+
       centerLat = hit.lat;
       centerLon = hit.lon;
     }
@@ -1532,86 +1216,66 @@ app.get("/api/mosques", async (req, res) => {
   }
 });
 
+app.get("/api/mosques/:placeId/times", optionalAmazonAuth, async (req, res) => {
+  try {
+    const { settings } = await getEffectiveSettings(req);
 
-app.get("/api/mosques/:placeId/times", async (req, res) => {
-  const { placeId } = req.params;
-  const { date } = req.query;
+    const { placeId } = req.params;
+    const dateStr =
+      typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : new Date().toISOString().slice(0, 10);
 
-  const dateStr =
-    typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
-      ? date
-      : new Date().toISOString().slice(0, 10);
+    const methodNum = aladhanMethodNumber(settings.calculationMethod, PRAYER_METHOD_DEFAULT);
 
-  // If it's an OSM placeId, resolve it via Overpass
-  if (String(placeId).startsWith("osm:")) {
-    try {
+    // OSM lookup
+    if (String(placeId).startsWith("osm:")) {
       const details = await overpassLookupByPlaceId(placeId);
-      if (!details) return res.status(404).json({ error: "Mosque not found" });
+      if (!details?.location) return res.status(404).json({ error: "Mosque not found" });
 
-      const dayResult = buildPrayerTimesForDate({
-        date: dateStr,
-        city: userSettings.city,
-        country: userSettings.country,
-        method: userSettings.calculationMethod,
-        madhhab: userSettings.madhhab,
-        shia: userSettings.shia,
-        mosqueId: null,
-        timezone: userSettings.timezone,
-      });
+      const timings = await aladhanTimingsByCoords(
+        details.location.lat,
+        details.location.lng,
+        dateStr,
+        methodNum,
+        settings.madhhab
+      );
 
-      // Override resolved coordinates with mosque coordinates (so the times are for the mosque area)
-      // We'll reuse the prayer calculation by calling buildPrayerTimesForDate with a temporary city/country,
-      // but using the nearest-city coords isn't perfect. For now, we include mosque coords in response
-      // and rely on the same dayResult (calculation-based).
       return res.json({
         date: dateStr,
         mosque: details,
-        prayers: dayResult.prayers,
-        source: "calculation",
+        prayers: timings?.prayers || null,
+        source: "aladhan",
       });
-    } catch (err) {
-      console.error("[mosque times] OSM error:", err);
-      return res.status(502).json({ error: "Failed to compute mosque times" });
     }
-  }
 
-  // Google Place details path
-  if (!GOOGLE_PLACES_API_KEY) {
-    return res.status(500).json({
-      error:
-        "Mosque times by Google Place ID require GOOGLE_PLACES_API_KEY. Configure it or use OSM results.",
-    });
-  }
+    // Google place details
+    if (!GOOGLE_PLACES_API_KEY) {
+      return res.status(500).json({
+        error: "Mosque times by Google Place ID require GOOGLE_PLACES_API_KEY. Configure it or use OSM results.",
+      });
+    }
 
-  try {
     const detailsUrl =
       `https://maps.googleapis.com/maps/api/place/details/json` +
       `?place_id=${encodeURIComponent(placeId)}` +
-      "&fields=name,formatted_address,geometry" +
+      `&fields=name,formatted_address,geometry` +
       `&key=${GOOGLE_PLACES_API_KEY}`;
 
     const detailsResp = await fetch(detailsUrl);
-    if (!detailsResp.ok) {
-      return res.status(502).json({ error: "Failed to fetch mosque details" });
-    }
+    if (!detailsResp.ok) return res.status(502).json({ error: "Failed to fetch mosque details" });
 
     const detailsData = await detailsResp.json();
     const result = detailsData.result;
+    if (!result?.geometry?.location) return res.status(404).json({ error: "Mosque location not found" });
 
-    if (!result?.geometry?.location) {
-      return res.status(404).json({ error: "Mosque location not found" });
-    }
-
-    const dayResult = buildPrayerTimesForDate({
-      date: dateStr,
-      city: userSettings.city,
-      country: userSettings.country,
-      method: userSettings.calculationMethod,
-      madhhab: userSettings.madhhab,
-      shia: userSettings.shia,
-      mosqueId: null,
-      timezone: userSettings.timezone,
-    });
+    const timings = await aladhanTimingsByCoords(
+      result.geometry.location.lat,
+      result.geometry.location.lng,
+      dateStr,
+      methodNum,
+      settings.madhhab
+    );
 
     return res.json({
       date: dateStr,
@@ -1619,14 +1283,11 @@ app.get("/api/mosques/:placeId/times", async (req, res) => {
         placeId,
         name: result.name,
         address: result.formatted_address,
-        location: {
-          lat: result.geometry.location.lat,
-          lng: result.geometry.location.lng,
-        },
+        location: { lat: result.geometry.location.lat, lng: result.geometry.location.lng },
         source: "google",
       },
-      prayers: dayResult.prayers,
-      source: "calculation",
+      prayers: timings?.prayers || null,
+      source: "aladhan",
     });
   } catch (err) {
     console.error("[mosque times] error:", err);
@@ -1634,72 +1295,110 @@ app.get("/api/mosques/:placeId/times", async (req, res) => {
   }
 });
 
+// -------------------
+// Test adhan (quiet hours)
+// -------------------
+// For authenticated users you can pass ?prayer=fajr|dhuhr|asr|maghrib|isha to enforce per-prayer quiet hours.
+app.post("/api/test-adhan", optionalAmazonAuth, async (req, res) => {
+  const prayer = String(req.query.prayer || "fajr").toLowerCase();
+  const { user, settings, prayerByName } = await getEffectiveSettings(req);
 
-app.get("/api/user/settings", (req, res) => {
-  res.json(userSettings);
+  if (user && prayerByName && prayerByName[prayer]) {
+    const cfg = prayerByName[prayer];
+    const nowHHMM = nowHHMMInLocalTZ(settings.timezone);
+
+    const quiet =
+      !!cfg.quietEnabled && inQuietHours(nowHHMM, cfg.quietFrom || "00:00", cfg.quietTo || "00:00");
+
+    if (!cfg.enabled) {
+      return res.json({ success: true, played: false, reason: "disabled", message: `${prayer} is disabled.` });
+    }
+    if (quiet) {
+      return res.json({ success: true, played: false, reason: "quiet-hours", message: "Muted due to quiet hours." });
+    }
+    return res.json({ success: true, played: true, reason: "ok", message: "Test Adhan triggered (db-backed)." });
+  }
+
+  // fallback legacy global quiet hours
+  const userKey = getUserKeyFromReq(req);
+  const legacy = ensureSettings(userKey);
+  const now = new Date();
+  const quiet = legacy.quietHours || {};
+  const inQ = (() => {
+    if (!quiet || !quiet.enabled) return false;
+    const { from, to } = quiet;
+    if (!from || !to) return false;
+
+    const [fromH, fromM] = from.split(":").map(Number);
+    const [toH, toM] = to.split(":").map(Number);
+    if ([fromH, fromM, toH, toM].some((n) => Number.isNaN(n))) return false;
+
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const fromMinutes = fromH * 60 + fromM;
+    const toMinutes = toH * 60 + toM;
+
+    if (fromMinutes === toMinutes) return true;
+    if (fromMinutes < toMinutes) return currentMinutes >= fromMinutes && currentMinutes < toMinutes;
+    return currentMinutes >= fromMinutes || currentMinutes < toMinutes;
+  })();
+
+  if (inQ) {
+    return res.json({
+      success: true,
+      played: false,
+      reason: "quiet-hours",
+      quietHours: quiet,
+      message: "Adhan muted because it is within quiet hours.",
+    });
+  }
+
+  return res.json({
+    success: true,
+    played: true,
+    reason: "ok",
+    quietHours: quiet,
+    message: "Test Adhan triggered (legacy demo)",
+  });
 });
 
-app.post('/api/user/settings', (req, res) => {
-  const {
-    language,
-    madhhab,
-    shia,
-    calculationMethod,
-    highLatitudeMethod,
-    country,
-    city,
-    timezone,
-    latitude,
-    longitude,
-    mosqueId,
-    mosqueName,
-    mosqueAddress,
-    mosqueLat,
-    mosqueLng,
-    quietHours,
-  } = req.body || {};
+// -------------------
+// Qiblah
+// -------------------
+const KAABA_COORDS = { lat: 21.4225, lon: 39.8262 };
+function toRadians(deg) { return (deg * Math.PI) / 180; }
+function toDegrees(rad) {
+  let deg = (rad * 180) / Math.PI;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+function calculateQiblahBearing(lat, lon) {
+  const lat1 = toRadians(lat);
+  const lon1 = toRadians(lon);
+  const lat2 = toRadians(KAABA_COORDS.lat);
+  const lon2 = toRadians(KAABA_COORDS.lon);
+  const dLon = lon2 - lon1;
 
-  // Merge only fields that are provided
-  userSettings = {
-    ...userSettings,
-    ...(language && { language }),
-    ...(madhhab && { madhhab }),
-    ...(typeof shia === 'boolean' && { shia }),
-    ...(calculationMethod && { calculationMethod }),
-    ...(highLatitudeMethod && { highLatitudeMethod }),
-    ...(country && { country }),
-    ...(city && { city }),
-    ...(timezone && { timezone }),
-    ...(typeof latitude === 'number' && { latitude }),
-    ...(typeof longitude === 'number' && { longitude }),
-    ...(mosqueId && { mosqueId }),
-    ...(mosqueName && { mosqueName }),
-    ...(mosqueAddress && { mosqueAddress }),
-    ...(typeof mosqueLat === 'number' && { mosqueLat }),
-    ...(typeof mosqueLng === 'number' && { mosqueLng }),
-    ...(quietHours && {
-      quietHours: {
-        ...userSettings.quietHours,
-        ...quietHours,
-      },
-    }),
-  };
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
 
-  res.json({ ok: true, settings: userSettings });
-});
-// --------------------------------------
-// QIBLAH
-// --------------------------------------
+  return toDegrees(Math.atan2(y, x));
+}
+function bearingToDirection(bearing) {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"];
+  const idx = Math.round(bearing / 45);
+  return dirs[idx];
+}
+
 app.get("/api/qiblah", (req, res) => {
   const { lat, lng } = req.query;
-
   const latitude = parseFloat(lat);
   const longitude = parseFloat(lng);
 
   if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
     return res.status(400).json({
-      error:
-        "Please provide lat and lng as query parameters, e.g. /api/qiblah?lat=41.8781&lng=-87.6298",
+      error: "Provide lat & lng, e.g. /api/qiblah?lat=41.8781&lng=-87.6298",
     });
   }
 
@@ -1708,22 +1407,41 @@ app.get("/api/qiblah", (req, res) => {
 
   res.json({
     location: { lat: latitude, lon: longitude },
-    kaaba: { lat: KAABA_COORDS.lat, lon: KAABA_COORDS.lon },
+    kaaba: KAABA_COORDS,
     bearing,
     direction,
     source: "formula",
     message: `Face ${Math.round(bearing)}° from true north (${direction}).`,
   });
 });
-// --------------------------------------
-// START SERVER
-// --------------------------------------
-const PORT = process.env.PORT || 8080;
 
-const server = app.listen(PORT, () => {
+// -------------------
+// Start server + graceful shutdown (Azure App Service)
+// -------------------
+const PORT = Number(process.env.PORT) || 8080;
+
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`Backend listening on ${PORT}`);
 });
 
-server.on("error", (err) => {
-  console.error("[server error]", err);
-});
+async function shutdown(signal) {
+  console.log(`[shutdown] received ${signal}`);
+
+  // stop accepting new connections
+  server.close(async () => {
+    try {
+      await closePool();
+      console.log("[shutdown] db pool closed");
+    } catch (e) {
+      console.error("[shutdown] closePool failed:", e);
+    }
+    console.log("[shutdown] http server closed");
+    process.exit(0);
+  });
+
+  // hard-exit if stuck
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
