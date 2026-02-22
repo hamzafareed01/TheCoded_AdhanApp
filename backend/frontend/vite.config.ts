@@ -12,7 +12,7 @@ export default defineConfig({
       includeAssets: [
         'favicon.ico',
         'apple-touch-icon.png',
-        'masked-icon.svg',  
+        // 'masked-icon.svg',  
       ],
       manifest: {
         name: 'Adhan Home',
