@@ -1,0 +1,23 @@
+[
+  {
+    "id": "mishary-alafasy",
+    "name": "Mishary Rashid Alafasy",
+    "country": "Kuwait",
+    "style": "Clear",
+    "type": "adhan"
+  },
+  {
+    "id": "abdulbasit",
+    "name": "Abdul Basit Abdul Samad",
+    "country": "Egypt",
+    "style": "Classic",
+    "type": "adhan"
+  },
+  {
+    "id": "sudais",
+    "name": "Abdur Rahman Al-Sudais",
+    "country": "Saudi Arabia",
+    "style": "Masjid al-Haram",
+    "type": "adhan"
+  }
+]
