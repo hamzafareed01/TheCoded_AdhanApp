@@ -47,45 +47,50 @@ export default function RootShell({ user, onLogout }: RootShellProps) {
     }, []);
 
     // 🔄 load saved user settings from backend once after login
-    useEffect(() => {
-        async function loadUserSettings() {
-            try {
-                const res = await apiFetch("/api/user/settings");
-                if (!res.ok) {
-                    console.error('Failed to load user settings', res.status);
-                    return;
-                }
+useEffect(() => {
+    async function loadUserSettings() {
+        const token = localStorage.getItem("amazon_access_token");
+        if (!token) return;
 
-                const settings = await res.json();
-
-                setOnboardingData((prev: any) => ({
-                    ...prev,
-                    location: {
-                        ...prev.location,
-                        country: settings.country ?? prev.location.country,
-                        city: settings.city ?? prev.location.city,
-                        timezone: settings.timezone ?? prev.location.timezone,
-                        // we don’t overwrite useCurrentLocation yet
-                        useCurrentLocation: prev.location?.useCurrentLocation ?? false,
-                    },
-                    prayerSettings: {
-                        ...(prev.prayerSettings || {}),
-                        madhhab: settings.madhhab ?? prev.prayerSettings?.madhhab,
-                        shia: settings.shia ?? prev.prayerSettings?.shia,
-                        calculationMethod:
-                            settings.calculationMethod ?? prev.prayerSettings?.calculationMethod,
-                        highLatitudeMethod:
-                            settings.highLatitudeMethod ?? prev.prayerSettings?.highLatitudeMethod,
-                    },
-                    // mosque, devices, etc. can be wired later if we decide to store them in backend
-                }));
-            } catch (err) {
-                console.error('Error loading user settings', err);
+        try {
+            const res = await apiFetch("/api/user/settings");
+            if (!res.ok) {
+                console.error('Failed to load user settings', res.status);
+                return;
             }
-        }
 
-        loadUserSettings();
-    }, []);
+            const payload = await res.json();
+            const settings = payload?.settings ?? payload;
+
+            setOnboardingData((prev: any) => ({
+                ...prev,
+                location: {
+                    ...prev.location,
+                    country: settings.country ?? prev.location.country,
+                    city: settings.city ?? prev.location.city,
+                    timezone: settings.timezone ?? prev.location.timezone,
+                    useCurrentLocation: prev.location?.useCurrentLocation ?? false,
+                },
+                prayerSettings: {
+                    ...(prev.prayerSettings || {}),
+                    sect: settings.sect ?? prev.prayerSettings?.sect,
+                    shia: settings.shia ?? prev.prayerSettings?.shia,
+                    madhhab: settings.madhhab ?? prev.prayerSettings?.madhhab,
+                    calculationMethod: settings.calculationMethod ?? prev.prayerSettings?.calculationMethod,
+                    highLatitudeMode: settings.highLatitudeMethod ?? prev.prayerSettings?.highLatitudeMode,
+                    offsets: settings.globalOffsets ?? prev.prayerSettings?.offsets,
+                },
+                prayerConfigs: settings.prayerConfigs ?? prev.prayerConfigs,
+                accountEnabled: settings.accountEnabled ?? prev.accountEnabled,
+            }));
+        } catch (err) {
+            console.error('Error loading user settings', err);
+        }
+    }
+
+    loadUserSettings();
+}, []);
+
 
     return (
         <Router>
