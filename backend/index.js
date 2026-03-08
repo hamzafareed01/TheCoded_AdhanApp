@@ -3,7 +3,8 @@ const cors = require("cors");
 const helmet = require("helmet");
 const dotenv = require("dotenv");
 dotenv.config();
-
+//Test-re-run Comment...remove this line later
+// thenejf;maf/;lfas;ldf
 const { getPool, sql } = require("./db/sql");
 
 const app = express();
@@ -654,3 +655,4 @@ const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
   console.log(`AdhanHome API listening on ${port}`);
 });
+
