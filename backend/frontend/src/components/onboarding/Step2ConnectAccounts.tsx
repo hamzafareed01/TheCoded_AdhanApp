@@ -33,13 +33,26 @@ interface Props {
 
 type IntegrationStatus = {
   userKey: string;
-  alexa: { connected: boolean; linkedAt: string | null; displayName: string | null; accountId?: string | null };
+  alexa: {
+    connected: boolean;
+    linkedAt: string | null;
+    displayName: string | null;
+    accountId?: string | null;
+  };
   google?: { connected: boolean; linkedAt: string | null };
   apple?: { connected: boolean; linkedAt: string | null };
 };
 
 const LS_CONNECTED = "adhan_connected_platforms";
 const LS_TOKENS = "adhan_tokens";
+
+// Public OAuth client ID is safe to ship in frontend.
+// Do NOT put client secret in frontend.
+const AMAZON_CLIENT_ID_FALLBACK =
+  "amzn1.application-oa2-client.383c219cb1ca42fdbd844e17e11aa843";
+
+const AMAZON_RETURN_URL_FALLBACK =
+  "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -62,9 +75,14 @@ function loadAmazonSDK(): Promise<void> {
     const existing = document.querySelector<HTMLScriptElement>(
       'script[src="https://assets.loginwithamazon.com/sdk/na/login1.js"]'
     );
+
     if (existing) {
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", () => reject(new Error("Amazon SDK load error")));
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("Amazon SDK load error")),
+        { once: true }
+      );
       return;
     }
 
@@ -77,29 +95,45 @@ function loadAmazonSDK(): Promise<void> {
   });
 }
 
+function normalizeEnvString(value: unknown): string {
+  const v = String(value ?? "").trim();
+  if (!v) return "";
+  if (v === "undefined" || v === "null") return "";
+  return v;
+}
+
 function getAmazonClientId(): string {
-  return (import.meta as any).env?.VITE_AMAZON_CLIENT_ID || (import.meta as any).env?.VITE_LWA_CLIENT_ID || "";
+  const envClientId = normalizeEnvString(
+    (import.meta as any).env?.VITE_AMAZON_CLIENT_ID ||
+      (import.meta as any).env?.VITE_LWA_CLIENT_ID
+  );
+
+  return envClientId || AMAZON_CLIENT_ID_FALLBACK;
 }
 
 function getReturnUrl(): string {
-  const env =
+  const envReturnUrl = normalizeEnvString(
     (import.meta as any).env?.VITE_AMAZON_RETURN_URL ||
-    (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI ||
-    "";
+      (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI
+  );
 
-  if (env) return env;
-  return `${window.location.origin}/onboarding/step2`;
+  return envReturnUrl || AMAZON_RETURN_URL_FALLBACK;
 }
 
-export default function Step2ConnectAccounts({ onboardingData, setOnboardingData }: Props) {
+export default function Step2ConnectAccounts({
+  onboardingData,
+  setOnboardingData,
+}: Props) {
   const navigate = useNavigate();
 
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
+  const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(
+    null
+  );
 
-  const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(() =>
-    readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
+  const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(
+    () => readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
   );
 
   const [tokens, setTokens] = useState<Record<string, string>>(() =>
@@ -118,8 +152,20 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         Icon: AlexaIcon,
         badge: "Required",
       },
-      { key: "google" as const, name: "Google", desc: "Calendar + reminders (coming soon).", Icon: GoogleIcon, badge: "Soon" },
-      { key: "apple" as const, name: "Apple", desc: "iOS notifications (coming soon).", Icon: AppleIcon, badge: "Soon" },
+      {
+        key: "google" as const,
+        name: "Google",
+        desc: "Calendar + reminders (coming soon).",
+        Icon: GoogleIcon,
+        badge: "Soon",
+      },
+      {
+        key: "apple" as const,
+        name: "Apple",
+        desc: "iOS notifications (coming soon).",
+        Icon: AppleIcon,
+        badge: "Soon",
+      },
     ],
     []
   );
@@ -127,7 +173,9 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
   const isConnected = (key: PlatformKey) => connectedPlatforms.includes(key);
 
   const markConnected = (key: PlatformKey) => {
-    setConnectedPlatforms((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    setConnectedPlatforms((prev) =>
+      prev.includes(key) ? prev : [...prev, key]
+    );
   };
 
   const markDisconnected = (key: PlatformKey) => {
@@ -149,8 +197,10 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     try {
       const resp = await apiFetch("/api/integrations");
       if (!resp.ok) return;
+
       const data = (await resp.json()) as IntegrationStatus;
       setServerStatus(data);
+
       if (data?.alexa?.connected) {
         markConnected("alexa");
       }
@@ -170,11 +220,9 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     const clientId = getAmazonClientId();
     const redirectUri = getReturnUrl();
 
-    if (!clientId) {
+    if (!clientId || clientId === "undefined") {
       setLoadingKey(null);
-      setError(
-        "Missing VITE_AMAZON_CLIENT_ID in the frontend build. Add it to GitHub Actions and redeploy the Static Web App."
-      );
+      setError("Amazon Client ID is missing in the frontend build.");
       return;
     }
 
@@ -184,6 +232,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
       const tokenResp: any = await new Promise((resolve, reject) => {
         window.amazon.Login.authorize(
           {
+            client_id: clientId,
             scope: "profile",
             response_type: "token",
             redirect_uri: redirectUri,
@@ -192,14 +241,18 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
           },
           (res: any) => {
             if (!res) return reject(new Error("No response from Amazon login."));
-            if (res.error) return reject(new Error(res.error_description || res.error));
+            if (res.error) {
+              return reject(new Error(res.error_description || res.error));
+            }
             resolve(res);
           }
         );
       });
 
       const accessToken: string | undefined = tokenResp?.access_token;
-      if (!accessToken) throw new Error("Amazon did not return an access token.");
+      if (!accessToken) {
+        throw new Error("Amazon did not return an access token.");
+      }
 
       setStoredAmazonToken(accessToken);
 
@@ -228,12 +281,16 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     setLoadingKey("alexa");
 
     try {
-      await apiFetch("/api/integrations/alexa/disconnect", { method: "POST" }).catch(() => {});
+      await apiFetch("/api/integrations/alexa/disconnect", {
+        method: "POST",
+      }).catch(() => {});
+
       try {
         window.amazon?.Login?.logout?.();
       } catch {
         // ignore
       }
+
       clearStoredAmazonToken();
       markDisconnected("alexa");
       setServerStatus(null);
@@ -272,7 +329,8 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         <div className="mt-8">
           <h1 className="text-2xl font-semibold">Connect your accounts</h1>
           <p className="mt-2 text-muted-foreground">
-            Amazon Alexa is required for this production build so your settings and prayer times can load from the backend.
+            Amazon Alexa is required for this production build so your settings
+            and prayer times can load from the backend.
           </p>
         </div>
 
@@ -286,7 +344,8 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
           {platforms.map((platform) => {
             const connected = isConnected(platform.key);
             const busy = loadingKey === platform.key;
-            const serverConnected = platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
+            const serverConnected =
+              platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
 
             return (
               <div
@@ -297,14 +356,22 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
                   <div className="grid h-11 w-11 place-items-center rounded-lg bg-muted">
                     <platform.Icon className="h-6 w-6" />
                   </div>
+
                   <div>
                     <div className="flex items-center gap-2">
                       <div className="font-medium">{platform.name}</div>
-                      {platform.badge && <Badge variant="secondary">{platform.badge}</Badge>}
+                      {platform.badge && (
+                        <Badge variant="secondary">{platform.badge}</Badge>
+                      )}
                       {connected && <Badge>Connected</Badge>}
-                      {serverConnected && <Badge variant="outline">Server linked</Badge>}
+                      {serverConnected && (
+                        <Badge variant="outline">Server linked</Badge>
+                      )}
                     </div>
-                    <div className="text-sm text-muted-foreground">{platform.desc}</div>
+
+                    <div className="text-sm text-muted-foreground">
+                      {platform.desc}
+                    </div>
                   </div>
                 </div>
 
@@ -318,7 +385,11 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
                       {busy ? "Connecting..." : "Connect"}
                     </Button>
                   ) : (
-                    <Button onClick={() => handleDisconnect(platform.key)} disabled={busy} variant="outline">
+                    <Button
+                      onClick={() => handleDisconnect(platform.key)}
+                      disabled={busy}
+                      variant="outline"
+                    >
                       {busy ? "Disconnecting..." : "Disconnect"}
                     </Button>
                   )}
@@ -329,7 +400,10 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         </div>
 
         <div className="mt-10 flex items-center justify-between">
-          <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/onboarding/step1")}
+          >
             Back
           </Button>
 
