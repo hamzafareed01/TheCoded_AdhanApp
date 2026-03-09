@@ -12,6 +12,11 @@ import {
   getStoredAmazonToken,
   setStoredAmazonToken,
 } from "../../lib/api";
+import {
+  ensureAmazonSdk,
+  getAmazonClientId,
+  getAmazonReturnUrl,
+} from "../../lib/amazonLogin";
 
 declare global {
   interface Window {
@@ -46,14 +51,6 @@ type IntegrationStatus = {
 const LS_CONNECTED = "adhan_connected_platforms";
 const LS_TOKENS = "adhan_tokens";
 
-// Public OAuth client ID is safe to ship in frontend.
-// Do NOT put client secret in frontend.
-const AMAZON_CLIENT_ID_FALLBACK =
-  "amzn1.application-oa2-client.383c219cb1ca42fdbd844e17e11aa843";
-
-const AMAZON_RETURN_URL_FALLBACK =
-  "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
-
 function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -66,58 +63,6 @@ function readJson<T>(key: string, fallback: T): T {
 
 function writeJson(key: string, value: unknown) {
   localStorage.setItem(key, JSON.stringify(value));
-}
-
-function loadAmazonSDK(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (window.amazon?.Login) return resolve();
-
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[src="https://assets.loginwithamazon.com/sdk/na/login1.js"]'
-    );
-
-    if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener(
-        "error",
-        () => reject(new Error("Amazon SDK load error")),
-        { once: true }
-      );
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://assets.loginwithamazon.com/sdk/na/login1.js";
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Amazon SDK load error"));
-    document.head.appendChild(script);
-  });
-}
-
-function normalizeEnvString(value: unknown): string {
-  const v = String(value ?? "").trim();
-  if (!v) return "";
-  if (v === "undefined" || v === "null") return "";
-  return v;
-}
-
-function getAmazonClientId(): string {
-  const envClientId = normalizeEnvString(
-    (import.meta as any).env?.VITE_AMAZON_CLIENT_ID ||
-      (import.meta as any).env?.VITE_LWA_CLIENT_ID
-  );
-
-  return envClientId || AMAZON_CLIENT_ID_FALLBACK;
-}
-
-function getReturnUrl(): string {
-  const envReturnUrl = normalizeEnvString(
-    (import.meta as any).env?.VITE_AMAZON_RETURN_URL ||
-      (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI
-  );
-
-  return envReturnUrl || AMAZON_RETURN_URL_FALLBACK;
 }
 
 export default function Step2ConnectAccounts({
@@ -133,15 +78,24 @@ export default function Step2ConnectAccounts({
   );
 
   const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(
-    () => readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
+    () =>
+      readJson<PlatformKey[]>(
+        LS_CONNECTED,
+        onboardingData?.connectedPlatforms ?? []
+      )
   );
 
   const [tokens, setTokens] = useState<Record<string, string>>(() =>
     readJson<Record<string, string>>(LS_TOKENS, onboardingData?.tokens ?? {})
   );
 
-  useEffect(() => writeJson(LS_CONNECTED, connectedPlatforms), [connectedPlatforms]);
-  useEffect(() => writeJson(LS_TOKENS, tokens), [tokens]);
+  useEffect(() => {
+    writeJson(LS_CONNECTED, connectedPlatforms);
+  }, [connectedPlatforms]);
+
+  useEffect(() => {
+    writeJson(LS_TOKENS, tokens);
+  }, [tokens]);
 
   const platforms = useMemo(
     () => [
@@ -196,7 +150,10 @@ export default function Step2ConnectAccounts({
 
     try {
       const resp = await apiFetch("/api/integrations");
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        setServerStatus(null);
+        return;
+      }
 
       const data = (await resp.json()) as IntegrationStatus;
       setServerStatus(data);
@@ -205,7 +162,7 @@ export default function Step2ConnectAccounts({
         markConnected("alexa");
       }
     } catch {
-      // ignore
+      setServerStatus(null);
     }
   }
 
@@ -218,7 +175,7 @@ export default function Step2ConnectAccounts({
     setLoadingKey("alexa");
 
     const clientId = getAmazonClientId();
-    const redirectUri = getReturnUrl();
+    const redirectUri = getAmazonReturnUrl();
 
     if (!clientId || clientId === "undefined") {
       setLoadingKey(null);
@@ -226,8 +183,14 @@ export default function Step2ConnectAccounts({
       return;
     }
 
+    if (!redirectUri || redirectUri === "undefined") {
+      setLoadingKey(null);
+      setError("Amazon Return URL is missing in the frontend build.");
+      return;
+    }
+
     try {
-      await loadAmazonSDK();
+      await ensureAmazonSdk();
 
       const tokenResp: any = await new Promise((resolve, reject) => {
         window.amazon.Login.authorize(
@@ -240,7 +203,9 @@ export default function Step2ConnectAccounts({
             state: `adhan_${Date.now()}`,
           },
           (res: any) => {
-            if (!res) return reject(new Error("No response from Amazon login."));
+            if (!res) {
+              return reject(new Error("No response from Amazon login."));
+            }
             if (res.error) {
               return reject(new Error(res.error_description || res.error));
             }
@@ -263,7 +228,9 @@ export default function Step2ConnectAccounts({
 
       if (!linkRes.ok) {
         const msg = await linkRes.text().catch(() => "");
-        throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
+        throw new Error(
+          `Backend link failed (${linkRes.status}). ${msg}`.trim()
+        );
       }
 
       setTokens((prev) => ({ ...prev, alexa: accessToken }));
@@ -288,7 +255,7 @@ export default function Step2ConnectAccounts({
       try {
         window.amazon?.Login?.logout?.();
       } catch {
-        // ignore
+        // ignore Amazon SDK logout errors
       }
 
       clearStoredAmazonToken();
@@ -345,7 +312,9 @@ export default function Step2ConnectAccounts({
             const connected = isConnected(platform.key);
             const busy = loadingKey === platform.key;
             const serverConnected =
-              platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
+              platform.key === "alexa"
+                ? !!serverStatus?.alexa?.connected
+                : false;
 
             return (
               <div
@@ -380,7 +349,9 @@ export default function Step2ConnectAccounts({
                     <Button
                       onClick={() => handleConnect(platform.key)}
                       disabled={busy}
-                      variant={platform.key === "alexa" ? "default" : "secondary"}
+                      variant={
+                        platform.key === "alexa" ? "default" : "secondary"
+                      }
                     >
                       {busy ? "Connecting..." : "Connect"}
                     </Button>
