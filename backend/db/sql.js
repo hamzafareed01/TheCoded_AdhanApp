@@ -1,59 +1,145 @@
 require("dotenv").config();
 const sql = require("mssql");
 
-let pool;
+let pool = null;
+let poolPromise = null;
 
-/**
- * Azure SQL serverless can auto-pause. First call may throw transient errors.
- * This helper retries a few times for transient conditions.
- */
-async function connectWithRetry(maxAttempts = 5) {
-  const config = {
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    server: process.env.DB_SERVER,
-    pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
+function getConfig() {
+  const server = process.env.DB_SERVER;
+  const database = process.env.DB_NAME;
+  const user = process.env.DB_USER;
+  const password = process.env.DB_PASSWORD;
+  const port = Number(process.env.DB_PORT || 1433);
+
+  if (!server || !database || !user || !password) {
+    throw new Error(
+      "Missing Azure SQL env vars: DB_SERVER/DB_NAME/DB_USER/DB_PASSWORD"
+    );
+  }
+
+  return {
+    user,
+    password,
+    server,
+    database,
+    port,
+    pool: {
+      max: 10,
+      min: 0,
+      idleTimeoutMillis: 30000,
+    },
     options: {
       encrypt: true,
       trustServerCertificate: false,
+      enableArithAbort: true,
     },
+    connectionTimeout: 30000,
+    requestTimeout: 30000,
   };
+}
 
+function isTransientSqlError(err) {
+  const msg = String(err?.message || "").toLowerCase();
+  const code = String(err?.code || "").toUpperCase();
+  const num = Number(err?.number);
+
+  return (
+    num === 40613 || // database unavailable / serverless resume
+    num === 40197 || // service encountered error
+    num === 40501 || // service busy / throttling
+    num === 49918 ||
+    num === 49919 ||
+    num === 49920 ||
+    code === "ETIMEDOUT" ||
+    code === "ESOCKET" ||
+    code === "ECONNRESET" ||
+    code === "ECONNCLOSED" ||
+    code === "ELOGIN" ||
+    /not currently available/.test(msg) ||
+    /timeout/.test(msg) ||
+    /connection is closed/.test(msg) ||
+    /socket/.test(msg) ||
+    /client with ip address .* is not allowed to access the server/.test(msg)
+  );
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function connectWithRetry(maxAttempts = 6) {
   let lastErr;
-  for (let i = 1; i <= maxAttempts; i++) {
-    try {
-      const p = await sql.connect(config);
-      return p;
-    } catch (e) {
-      lastErr = e;
-      const msg = String(e?.message || "");
-      const num = e?.number;
-      const code = e?.code;
-      const transient =
-        num === 40613 ||
-        code === "ETIMEDOUT" ||
-        /not currently available/i.test(msg) ||
-        /timeout/i.test(msg) ||
-        /ECONNRESET/i.test(msg);
 
-      if (!transient || i === maxAttempts) break;
-      const delay = 500 * (2 ** (i - 1));
-      await new Promise((r) => setTimeout(r, delay));
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const cfg = getConfig();
+      const connectionPool = new sql.ConnectionPool(cfg);
+      const connectedPool = await connectionPool.connect();
+
+      connectedPool.on("error", (err) => {
+        console.error("Azure SQL pool error:", err);
+        pool = null;
+        poolPromise = null;
+      });
+
+      return connectedPool;
+    } catch (err) {
+      lastErr = err;
+
+      if (!isTransientSqlError(err) || attempt === maxAttempts) {
+        break;
+      }
+
+      const delayMs = 750 * Math.pow(2, attempt - 1);
+      console.warn(
+        `Azure SQL connect attempt ${attempt}/${maxAttempts} failed. Retrying in ${delayMs}ms...`,
+        err?.message || err
+      );
+      await sleep(delayMs);
     }
   }
+
   throw lastErr;
 }
 
 async function getPool() {
-  if (pool) return pool;
-
-  if (!process.env.DB_SERVER || !process.env.DB_NAME || !process.env.DB_USER || !process.env.DB_PASSWORD) {
-    throw new Error("Missing Azure SQL env vars: DB_SERVER/DB_NAME/DB_USER/DB_PASSWORD");
+  if (pool?.connected) {
+    return pool;
   }
 
-  pool = await connectWithRetry();
-  return pool;
+  if (poolPromise) {
+    return poolPromise;
+  }
+
+  poolPromise = connectWithRetry()
+    .then((connectedPool) => {
+      pool = connectedPool;
+      return pool;
+    })
+    .catch((err) => {
+      pool = null;
+      poolPromise = null;
+      throw err;
+    });
+
+  return poolPromise;
 }
 
-module.exports = { sql, getPool };
+async function closePool() {
+  if (pool) {
+    try {
+      await pool.close();
+    } catch (err) {
+      console.warn("Error while closing Azure SQL pool:", err?.message || err);
+    }
+  }
+
+  pool = null;
+  poolPromise = null;
+}
+
+module.exports = {
+  sql,
+  getPool,
+  closePool,
+};
