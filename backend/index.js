@@ -283,6 +283,62 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 app.get(
+  "/api/geocode",
+  asyncHandler(async (req, res) => {
+    const city = String(req.query.city || "").trim();
+    const country = String(req.query.country || "").trim();
+
+    if (!city) {
+      return res.status(400).json({ error: "city is required" });
+    }
+
+    const apiKey = process.env.OPENCAGE_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "OPENCAGE_API_KEY is not configured" });
+    }
+
+    const countryName =
+      country === "US" ? "United States" :
+      country === "PK" ? "Pakistan" :
+      country;
+
+    const q = encodeURIComponent(`${city}, ${countryName}`);
+    const url = `https://api.opencagedata.com/geocode/v1/json?q=${q}&key=${apiKey}&limit=1&no_annotations=0`;
+
+    const upstream = await fetch(url);
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => "");
+      return res.status(502).json({
+        error: `Geocoding upstream failed (${upstream.status}) ${text}`.trim(),
+      });
+    }
+
+    const data = await upstream.json();
+    const first = data?.results?.[0];
+
+    if (!first?.geometry) {
+      return res.status(404).json({
+        error: "Could not look up coordinates for this city. Please try again.",
+      });
+    }
+
+    const lat = first.geometry.lat;
+    const lng = first.geometry.lng;
+
+    const timezone =
+      first?.annotations?.timezone?.name ||
+      (country === "PK" ? "Asia/Karachi" : "America/Chicago");
+
+    res.json({
+      lat,
+      lng,
+      timezone,
+      formatted: first.formatted || null,
+    });
+  })
+);
+
+app.get(
   "/api/integrations",
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
