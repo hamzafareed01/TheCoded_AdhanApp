@@ -1,5 +1,3 @@
-// src/lib/amazonLogin.ts
-
 declare global {
   interface Window {
     amazon?: any;
@@ -72,9 +70,7 @@ export function ensureAmazonSdk(): Promise<void> {
     };
 
     const existing = document.getElementById("amazon-login-sdk");
-    if (existing) {
-      return;
-    }
+    if (existing) return;
 
     const root = document.getElementById("amazon-root") || document.body;
     const script = document.createElement("script");
