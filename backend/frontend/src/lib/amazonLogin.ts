@@ -61,7 +61,6 @@ export function ensureAmazonSdk(): Promise<void> {
         }
 
         window.amazon.Login.setClientId(clientId);
-        window.amazon.Login.setReturnUrl(getAmazonReturnUrl());
 
         sdkLoaded = true;
         loadingPromise = null;
