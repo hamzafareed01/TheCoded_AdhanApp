@@ -27,11 +27,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install backend deps
+      - name: Install deps (backend)
         working-directory: ${{ env.WORKDIR }}
         run: npm ci
 
-      - name: Create backend deploy zip
+      - name: Create deploy zip (backend/)
         run: |
           cd ${{ env.WORKDIR }}
           zip -r ../backend_deploy.zip .
@@ -43,7 +43,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy zip to Web App
+      - name: Deploy to Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APP_NAME }}
