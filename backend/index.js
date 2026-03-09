@@ -124,7 +124,7 @@ async function requireAmazonAuth(req, res, next) {
     }
 
     const profile = await fetchAmazonProfile(token);
-    req.amazonProfile = profile; // { user_id, name, email }
+    req.amazonProfile = profile;
     req.amazonToken = token;
     next();
   } catch (e) {
@@ -209,6 +209,12 @@ function parseOffsetsFromBody(body) {
   return out;
 }
 
+function parseOptionalNumber(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function mapCalcMethodToAlAdhan(method, sect) {
   const m = String(method || "").toLowerCase();
 
@@ -221,7 +227,7 @@ function mapCalcMethodToAlAdhan(method, sect) {
   if (m.includes("egypt")) return 5;
   if (m.includes("tehran")) return 7;
 
-  return 2; // safe default: ISNA
+  return 2; // ISNA
 }
 
 function madhhabToSchool(madhhab) {
@@ -269,7 +275,87 @@ function computeQiblahBearing(lat, lon) {
     Math.sin(phi1) * Math.cos(kaabaLon - lambda1);
 
   const theta = Math.atan2(y, x);
-  return (((radToDeg(theta) % 360) + 360) % 360);
+  return ((radToDeg(theta) % 360) + 360) % 360;
+}
+
+function buildUserSettingsPayload(amazonUserId, p, prayerRows) {
+  const rows = Array.isArray(prayerRows) ? prayerRows : [];
+
+  const firstQuietRow =
+    rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) || rows[0] || {};
+
+  const quietHours = {
+    enabled: !!firstQuietRow.quiet_enabled,
+    from: firstQuietRow.quiet_from
+      ? String(firstQuietRow.quiet_from).slice(0, 5)
+      : "22:00",
+    to: firstQuietRow.quiet_to
+      ? String(firstQuietRow.quiet_to).slice(0, 5)
+      : "07:00",
+    muteFajr: true,
+  };
+
+  const prayerConfigs = rows.map((r) => {
+    let afterPayload = null;
+    try {
+      afterPayload = r.after_payload_json
+        ? JSON.parse(r.after_payload_json)
+        : null;
+    } catch {
+      afterPayload = null;
+    }
+
+    return {
+      prayerName: r.prayer_name,
+      enabled: !!r.enabled,
+      offsetMin: r.offset_min || 0,
+      quietEnabled: !!r.quiet_enabled,
+      quietFrom: r.quiet_from ? String(r.quiet_from).slice(0, 5) : "22:00",
+      quietTo: r.quiet_to ? String(r.quiet_to).slice(0, 5) : "07:00",
+      adhanReciterId: r.adhan_reciter_id || null,
+      afterAdhan: {
+        type: r.after_type || "none",
+        payload: afterPayload,
+      },
+    };
+  });
+
+  const payload = {
+    userId: amazonUserId,
+    userKey: amazonUserId,
+    sect: p.sect || "SUNNI",
+    shia: p.sect === "SHIA",
+    language: p.language || "en",
+    madhhab: p.madhhab || "hanafi",
+    madhab: p.sect === "SHIA" ? "shia" : "sunni",
+    calculationMethod: p.calculation_method || "isna",
+    method: p.calculation_method || "isna",
+    highLatitudeMethod: p.high_latitude_method || "automatic",
+    country: p.country || "US",
+    city: p.city || "Chicago",
+    timezone: p.timezone || "America/Chicago",
+    latitude: typeof p.latitude === "number" ? p.latitude : null,
+    longitude: typeof p.longitude === "number" ? p.longitude : null,
+    accountEnabled: !!p.account_enabled,
+    quietHours,
+    globalOffsets: {
+      fajr: p.offset_fajr || 0,
+      dhuhr: p.offset_dhuhr || 0,
+      asr: p.offset_asr || 0,
+      maghrib: p.offset_maghrib || 0,
+      isha: p.offset_isha || 0,
+    },
+    offsets: {
+      fajr: p.offset_fajr || 0,
+      dhuhr: p.offset_dhuhr || 0,
+      asr: p.offset_asr || 0,
+      maghrib: p.offset_maghrib || 0,
+      isha: p.offset_isha || 0,
+    },
+    prayerConfigs,
+  };
+
+  return payload;
 }
 
 // -----------------------------
@@ -378,7 +464,17 @@ app.post(
 
     const profile = await fetchAmazonProfile(accessToken);
     const pool = await getPool();
-    await ensureUser(pool, profile.user_id);
+    const userId = await ensureUser(pool, profile.user_id);
+
+    await pool.request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        UPDATE dbo.user_profiles
+        SET
+          account_enabled = 1,
+          updated_at = SYSUTCDATETIME()
+        WHERE user_id = @user_id
+      `);
 
     res.json({
       ok: true,
@@ -398,8 +494,6 @@ app.post(
 );
 
 app.post("/api/integrations/alexa/disconnect", (req, res) => {
-  // Current MVP stores no server-side session/token, so disconnect is a safe no-op.
-  // Frontend clears local token and treats the user as disconnected.
   res.json({ ok: true });
 });
 
@@ -551,52 +645,16 @@ app.get(
       `);
 
     const p = profileResult.recordset[0] || {};
+    const settings = buildUserSettingsPayload(
+      amazonUserId,
+      p,
+      prayerResult.recordset
+    );
 
     res.json({
       userKey: amazonUserId,
-      settings: {
-        sect: p.sect || "SUNNI",
-        shia: p.sect === "SHIA",
-        language: p.language || "en",
-        madhhab: p.madhhab || "hanafi",
-        calculationMethod: p.calculation_method || "isna",
-        highLatitudeMethod: p.high_latitude_method || "automatic",
-        country: p.country || "US",
-        city: p.city || "Chicago",
-        timezone: p.timezone || "America/Chicago",
-        accountEnabled: !!p.account_enabled,
-        globalOffsets: {
-          fajr: p.offset_fajr || 0,
-          dhuhr: p.offset_dhuhr || 0,
-          asr: p.offset_asr || 0,
-          maghrib: p.offset_maghrib || 0,
-          isha: p.offset_isha || 0,
-        },
-        prayerConfigs: prayerResult.recordset.map((r) => {
-          let afterPayload = null;
-          try {
-            afterPayload = r.after_payload_json
-              ? JSON.parse(r.after_payload_json)
-              : null;
-          } catch {
-            afterPayload = null;
-          }
-
-          return {
-            prayerName: r.prayer_name,
-            enabled: !!r.enabled,
-            offsetMin: r.offset_min || 0,
-            quietEnabled: !!r.quiet_enabled,
-            quietFrom: r.quiet_from ? String(r.quiet_from).slice(0, 5) : "22:00",
-            quietTo: r.quiet_to ? String(r.quiet_to).slice(0, 5) : "07:00",
-            adhanReciterId: r.adhan_reciter_id || null,
-            afterAdhan: {
-              type: r.after_type || "none",
-              payload: afterPayload,
-            },
-          };
-        }),
-      },
+      ...settings,
+      settings,
     });
   })
 );
@@ -615,6 +673,8 @@ async function handleSaveUserSettings(req, res) {
   const country = body.country;
   const city = body.city;
   const timezone = body.timezone;
+  const latitude = parseOptionalNumber(body.latitude);
+  const longitude = parseOptionalNumber(body.longitude);
   const accountEnabled = body.accountEnabled ?? body.account_enabled;
 
   const offsets = parseOffsetsFromBody(body);
@@ -645,6 +705,12 @@ async function handleSaveUserSettings(req, res) {
   if (timezone !== undefined) {
     profileReq.input("timezone", sql.NVarChar(64), String(timezone));
   }
+  if (latitude !== undefined) {
+    profileReq.input("latitude", sql.Float, latitude);
+  }
+  if (longitude !== undefined) {
+    profileReq.input("longitude", sql.Float, longitude);
+  }
   if (accountEnabled !== undefined) {
     profileReq.input("account_enabled", sql.Bit, accountEnabled ? 1 : 0);
   }
@@ -666,6 +732,8 @@ async function handleSaveUserSettings(req, res) {
       country = COALESCE(@country, country),
       city = COALESCE(@city, city),
       timezone = COALESCE(@timezone, timezone),
+      latitude = COALESCE(@latitude, latitude),
+      longitude = COALESCE(@longitude, longitude),
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -787,10 +855,22 @@ app.get(
     );
     const school = madhhabToSchool(p.madhhab || "hanafi");
 
-    const city = encodeURIComponent(p.city || "Chicago");
-    const country = encodeURIComponent(p.country || "US");
+    const hasCoords =
+      typeof p.latitude === "number" &&
+      Number.isFinite(p.latitude) &&
+      typeof p.longitude === "number" &&
+      Number.isFinite(p.longitude);
 
-    const url = `https://api.aladhan.com/v1/timingsByCity?city=${city}&country=${country}&method=${method}&school=${school}`;
+    const url = hasCoords
+      ? `https://api.aladhan.com/v1/timings?latitude=${encodeURIComponent(
+          p.latitude
+        )}&longitude=${encodeURIComponent(p.longitude)}&method=${method}&school=${school}`
+      : `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(
+          p.city || "Chicago"
+        )}&country=${encodeURIComponent(
+          p.country || "US"
+        )}&method=${method}&school=${school}`;
+
     const resp = await fetch(url);
 
     if (!resp.ok) {
@@ -840,16 +920,20 @@ app.get(
         city: p.city || "Chicago",
         country: p.country || "US",
         timezone: p.timezone || "America/Chicago",
+        latitude: hasCoords ? p.latitude : null,
+        longitude: hasCoords ? p.longitude : null,
       },
       method: {
         sect: p.sect || "SUNNI",
         calculationMethod: p.calculation_method || "isna",
         madhhab: p.madhhab || "hanafi",
       },
+      source: hasCoords ? "coordinates" : "city",
       enabled: enabledMap,
       prayers24: adjusted24,
       prayers12: adjusted12,
       date: json?.data?.date || null,
+      meta: json?.data?.meta || null,
     });
   })
 );
@@ -1043,7 +1127,7 @@ app.use((err, req, res, next) => {
     error: String(err?.message || err || "Internal server error"),
   });
 });
-//push commit comment...remove later
+
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
   console.log(`AdhanHome API listening on ${port}`);
