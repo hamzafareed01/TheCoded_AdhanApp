@@ -4,7 +4,15 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - "backend/**"
+      - "backend/index.js"
+      - "backend/db/**"
+      - "backend/scripts/**"
+      - "backend/migrations/**"
+      - "backend/data/**"
+      - "backend/library/**"
+      - "backend/audio/**"
+      - "backend/package.json"
+      - "backend/package-lock.json"
       - ".github/workflows/deploy_backend.yml"
   workflow_dispatch:
 
@@ -14,27 +22,54 @@ permissions:
 
 env:
   APP_NAME: app-adhanhome-api-prod
-  WORKDIR: backend
   NODE_VERSION: "24.x"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install deps (backend)
-        working-directory: ${{ env.WORKDIR }}
-        run: npm ci
-
-      - name: Create deploy zip (backend/)
+      - name: Stage backend package
         run: |
-          cd ${{ env.WORKDIR }}
+          rm -rf deploy
+          mkdir -p deploy
+
+          cp backend/index.js deploy/
+          cp backend/package.json deploy/
+          cp backend/package-lock.json deploy/
+
+          cp -R backend/db deploy/db
+          cp -R backend/scripts deploy/scripts
+          cp -R backend/migrations deploy/migrations
+          cp -R backend/data deploy/data
+          cp -R backend/library deploy/library
+          cp -R backend/audio deploy/audio
+
+      - name: Install production deps in staged package
+        run: |
+          cd deploy
+          npm ci --omit=dev
+
+      - name: Inspect staged package
+        run: |
+          cd deploy
+          find . -maxdepth 3 -type f | sort | grep -E 'package.json|index.js|scripts/|migrations/|db/'
+
+      - name: Create deploy zip
+        run: |
+          cd deploy
           zip -r ../backend_deploy.zip .
+
+      - name: Inspect deploy zip
+        run: unzip -l backend_deploy.zip | grep -E 'package.json|index.js|scripts/|migrations/'
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -43,7 +78,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy to Web App
+      - name: Deploy to App Service
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.APP_NAME }}
