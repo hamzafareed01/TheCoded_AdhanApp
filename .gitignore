@@ -27,3 +27,6 @@ backend-deploy.zip
 .env
 **/.env
 
+backend/_deploy/
+deploy/
+backend_deploy.zip
