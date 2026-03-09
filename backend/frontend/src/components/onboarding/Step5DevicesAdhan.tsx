@@ -9,7 +9,7 @@ import { Badge } from "../ui/badge";
 import { Switch } from "../ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
@@ -49,19 +49,14 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
   const [error, setError] = useState<string | null>(null);
 
   const [accountEnabled, setAccountEnabled] = useState<boolean>(false);
-
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
-
   const [reciters, setReciters] = useState<Reciter[]>([]);
   const [duas, setDuas] = useState<{ id: string; title: string }[]>([]);
   const [surahs, setSurahs] = useState<{ number: number; nameEnglish: string }[]>([]);
-
   const [prayerConfigs, setPrayerConfigs] = useState<PrayerConfig[]>(defaultPrayerConfigs());
 
   const canContinue = useMemo(() => {
-    // You can continue even if no devices are selected (user may add later),
-    // but we require account enabled and at least one reciter selected across prayers.
     const anyReciter = prayerConfigs.some((p) => !!p.adhanReciterId);
     return accountEnabled && anyReciter && !saving;
   }, [accountEnabled, prayerConfigs, saving]);
@@ -71,16 +66,14 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
   }
 
   function updatePrayer(prayerName: PrayerName, patch: Partial<PrayerConfig>) {
-    setPrayerConfigs((prev) =>
-      prev.map((p) => (p.prayerName === prayerName ? { ...p, ...patch } : p))
-    );
+    setPrayerConfigs((prev) => prev.map((p) => (p.prayerName === prayerName ? { ...p, ...patch } : p)));
   }
 
   async function loadAll() {
     setLoading(true);
     setError(null);
 
-    const token = localStorage.getItem("amazon_access_token");
+    const token = getStoredAmazonToken();
     if (!token) {
       setError("Please connect Amazon in Step 2 before configuring devices and Adhan.");
       setLoading(false);
@@ -88,60 +81,64 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
     }
 
     try {
-      // Load current settings to hydrate UI
       const settingsRes = await apiFetch("/api/user/settings");
       if (settingsRes.ok) {
         const payload = await settingsRes.json();
-        const s = payload?.settings ?? payload;
+        const s = payload?.settings ?? payload ?? {};
         setAccountEnabled(!!(s.accountEnabled ?? s.account_enabled ?? false));
 
         if (Array.isArray(s.prayerConfigs)) {
-          const next = defaultPrayerConfigs().map((d) => {
-            const found = s.prayerConfigs.find((x: any) => (x.prayerName || x.prayer_name) === d.prayerName);
-            if (!found) return d;
+          const next = defaultPrayerConfigs().map((defaultConfig) => {
+            const found = s.prayerConfigs.find(
+              (x: any) => (x.prayerName || x.prayer_name) === defaultConfig.prayerName
+            );
+            if (!found) return defaultConfig;
             return {
-              prayerName: d.prayerName,
+              prayerName: defaultConfig.prayerName,
               adhanReciterId: found.adhanReciterId ?? found.adhan_reciter_id ?? null,
-              afterAdhan: found.afterAdhan ?? { type: found.after_type || "none", payload: found.after_payload_json ? JSON.parse(found.after_payload_json) : null }
+              afterAdhan:
+                found.afterAdhan ??
+                {
+                  type: found.after_type || "none",
+                  payload: found.after_payload_json ? JSON.parse(found.after_payload_json) : null,
+                },
             };
           });
           setPrayerConfigs(next);
         }
       }
 
-      // Devices (already stored in backend)
       const devRes = await apiFetch("/api/alexa/devices");
       if (devRes.ok) {
         const d = await devRes.json();
-        const list = Array.isArray(d) ? d : (Array.isArray(d.devices) ? d.devices : []);
+        const list = Array.isArray(d) ? d : Array.isArray(d.devices) ? d.devices : [];
         setDevices(list.map((x: any) => ({ id: String(x.id), name: String(x.name), platform: x.platform })));
       }
 
-      // Reciters
       const recRes = await apiFetch("/api/library/reciters?type=adhan");
       if (recRes.ok) {
         const r = await recRes.json();
-        const list = Array.isArray(r) ? r : (Array.isArray(r.reciters) ? r.reciters : []);
-        setReciters(list.map((x: any) => ({ id: String(x.id), name: String(x.name), country: x.country ?? null, style: x.style ?? null, type: x.type })));
+        const list = Array.isArray(r) ? r : Array.isArray(r.reciters) ? r.reciters : [];
+        setReciters(
+          list.map((x: any) => ({ id: String(x.id), name: String(x.name), country: x.country ?? null, style: x.style ?? null, type: x.type }))
+        );
       } else {
         setError("Reciter library not available. Ensure backend /api/library/reciters is working.");
       }
 
-      // Duas
       const duaRes = await apiFetch("/api/duas");
       if (duaRes.ok) {
         const j = await duaRes.json();
         const flat: { id: string; title: string }[] = [];
         const cats = j?.categories || [];
         for (const c of cats) {
-          for (const it of (c.items || [])) {
-            flat.push({ id: String(it.id), title: String(it.title) });
+          for (const item of c.items || []) {
+            flat.push({ id: String(item.id), title: String(item.title) });
           }
         }
         setDuas(flat);
       }
 
-      // Surahs (for after-adhan surah)
       const surRes = await apiFetch("/api/quran/surahs");
       if (surRes.ok) {
         const j = await surRes.json();
@@ -155,11 +152,13 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
     }
   }
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    loadAll();
+  }, []);
 
   const handleNext = async () => {
     setError(null);
-    const token = localStorage.getItem("amazon_access_token");
+    const token = getStoredAmazonToken();
     if (!token) {
       setError("Please connect Amazon in Step 2 before saving.");
       return;
@@ -167,14 +166,13 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
 
     setSaving(true);
     try {
-      // Save account enabled and per-prayer adhan/after-adhan
       const resp = await saveSettings({
         accountEnabled,
         prayerConfigs: prayerConfigs.map((p) => ({
           prayerName: p.prayerName,
           adhanReciterId: p.adhanReciterId,
-          afterAdhan: p.afterAdhan
-        }))
+          afterAdhan: p.afterAdhan,
+        })),
       });
 
       if (!resp.ok) {
@@ -186,7 +184,7 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
         ...onboardingData,
         devices: selectedDevices,
         accountEnabled,
-        prayerConfigs
+        prayerConfigs,
       });
 
       navigate("/onboarding/step6");
@@ -237,13 +235,9 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
 
           <Tabs defaultValue={tabs[0]} className="w-full">
             <TabsList className="bg-slate-800 border-slate-700 w-full justify-start overflow-x-auto flex-nowrap">
-              {tabs.map((t) => (
-                <TabsTrigger
-                  key={t}
-                  value={t}
-                  className="data-[state=active]:bg-emerald-600 data-[state=active]:text-white"
-                >
-                  {t}
+              {tabs.map((tab) => (
+                <TabsTrigger key={tab} value={tab} className="data-[state=active]:bg-emerald-600 data-[state=active]:text-white">
+                  {tab}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -252,23 +246,15 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
               {loading ? (
                 <p className="text-slate-400 text-sm">Loading devices…</p>
               ) : devices.length === 0 ? (
-                <p className="text-slate-300 text-sm">
-                  No Alexa devices found yet. You can continue and add devices later (Settings → Devices).
-                </p>
+                <p className="text-slate-300 text-sm">No Alexa devices found yet. You can continue and add devices later from Settings.</p>
               ) : (
                 <div className="space-y-3">
-                  {devices.map((d) => (
-                    <div key={d.id} className="flex items-center gap-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-                      <Checkbox
-                        id={d.id}
-                        checked={selectedDevices.includes(d.id)}
-                        onCheckedChange={() => toggleDevice(d.id)}
-                      />
-                      <Label htmlFor={d.id} className="flex-1 cursor-pointer">
-                        <div className="text-white">{d.name}</div>
-                        <div className="text-slate-400 text-sm">
-                          {d.platform ? d.platform.toUpperCase() : "ALEXA"}
-                        </div>
+                  {devices.map((device) => (
+                    <div key={device.id} className="flex items-center gap-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                      <Checkbox id={device.id} checked={selectedDevices.includes(device.id)} onCheckedChange={() => toggleDevice(device.id)} />
+                      <Label htmlFor={device.id} className="flex-1 cursor-pointer">
+                        <div className="text-white">{device.name}</div>
+                        <div className="text-slate-400 text-sm">{device.platform ? device.platform.toUpperCase() : "ALEXA"}</div>
                       </Label>
                     </div>
                   ))}
@@ -278,9 +264,7 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
 
             <TabsContent value={tabs[1]} className="mt-4">
               {reciters.length === 0 ? (
-                <p className="text-slate-300 text-sm">
-                  Reciters are not available yet. Ensure backend /api/library/reciters works and has data.
-                </p>
+                <p className="text-slate-300 text-sm">Reciters are not available yet. Ensure backend /api/library/reciters works and has data.</p>
               ) : (
                 <div className="space-y-4">
                   {prayerConfigs.map((pc) => (
@@ -292,17 +276,16 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
                       <div className="grid md:grid-cols-2 gap-4">
                         <div className="space-y-2">
                           <Label className="text-slate-200">Adhan reciter</Label>
-                          <Select
-                            value={pc.adhanReciterId ?? ""}
-                            onValueChange={(v) => updatePrayer(pc.prayerName, { adhanReciterId: v })}
-                          >
+                          <Select value={pc.adhanReciterId ?? ""} onValueChange={(v) => updatePrayer(pc.prayerName, { adhanReciterId: v })}>
                             <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                               <SelectValue placeholder="Select reciter" />
                             </SelectTrigger>
                             <SelectContent className="bg-slate-900 border-slate-700">
-                              {reciters.map((r) => (
-                                <SelectItem key={r.id} value={r.id}>
-                                  {r.name}{r.country ? ` · ${r.country}` : ""}{r.style ? ` · ${r.style}` : ""}
+                              {reciters.map((reciter) => (
+                                <SelectItem key={reciter.id} value={reciter.id}>
+                                  {reciter.name}
+                                  {reciter.country ? ` · ${reciter.country}` : ""}
+                                  {reciter.style ? ` · ${reciter.style}` : ""}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -328,18 +311,14 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
                           {pc.afterAdhan.type === "dua" && (
                             <Select
                               value={pc.afterAdhan.payload?.duaId ?? ""}
-                              onValueChange={(v) =>
-                                updatePrayer(pc.prayerName, { afterAdhan: { type: "dua", payload: { duaId: v } } })
-                              }
+                              onValueChange={(v) => updatePrayer(pc.prayerName, { afterAdhan: { type: "dua", payload: { duaId: v } } })}
                             >
                               <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                                 <SelectValue placeholder="Select Dua" />
                               </SelectTrigger>
                               <SelectContent className="bg-slate-900 border-slate-700">
-                                {duas.map((d) => (
-                                  <SelectItem key={d.id} value={d.id}>
-                                    {d.title}
-                                  </SelectItem>
+                                {duas.map((dua) => (
+                                  <SelectItem key={dua.id} value={dua.id}>{dua.title}</SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
@@ -349,18 +328,16 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
                             <Select
                               value={String(pc.afterAdhan.payload?.surahNumber ?? "")}
                               onValueChange={(v) =>
-                                updatePrayer(pc.prayerName, {
-                                  afterAdhan: { type: "surah", payload: { surahNumber: Number(v) } },
-                                })
+                                updatePrayer(pc.prayerName, { afterAdhan: { type: "surah", payload: { surahNumber: Number(v) } } })
                               }
                             >
                               <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                                 <SelectValue placeholder="Select Surah" />
                               </SelectTrigger>
                               <SelectContent className="bg-slate-900 border-slate-700">
-                                {surahs.map((s) => (
-                                  <SelectItem key={s.number} value={String(s.number)}>
-                                    {s.number}. {s.nameEnglish}
+                                {surahs.map((surah) => (
+                                  <SelectItem key={surah.number} value={String(surah.number)}>
+                                    {surah.number}. {surah.nameEnglish}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -376,27 +353,16 @@ export default function Step5DevicesAdhan({ onboardingData, setOnboardingData }:
           </Tabs>
 
           <div className="flex gap-4 mt-8">
-            <Button
-              onClick={() => navigate("/onboarding/step4")}
-              variant="outline"
-              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
-              disabled={saving}
-            >
+            <Button onClick={() => navigate("/onboarding/step4")} variant="outline" className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800" disabled={saving}>
               Back
             </Button>
-            <Button
-              onClick={handleNext}
-              disabled={!canContinue}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white"
-            >
+            <Button onClick={handleNext} disabled={!canContinue} className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white">
               {saving ? "Saving…" : "Save & Continue"}
             </Button>
           </div>
 
           {!canContinue && (
-            <p className="text-xs text-slate-400 mt-3">
-              To continue: enable account and choose at least one Adhan reciter for a prayer.
-            </p>
+            <p className="text-xs text-slate-400 mt-3">To continue: enable account and choose at least one Adhan reciter for a prayer.</p>
           )}
         </div>
       </div>

@@ -1,38 +1,47 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import RootShell from "./RootShell";
 import type { AppUser } from "./types/AppUser";
-import { apiFetch } from "./lib/api";
-
-const LS_AMAZON_ACCESS = "amazon_access_token";
+import {
+  apiFetch,
+  clearStoredAmazonToken,
+  getStoredAmazonToken,
+  subscribeToAmazonAuthChanges,
+} from "./lib/api";
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null);
 
-  useEffect(() => {
-    async function loadUser() {
-      const token = localStorage.getItem(LS_AMAZON_ACCESS);
-      if (!token) return; // no fake user
-
-      try {
-        const res = await apiFetch("/api/integrations");
-        if (!res.ok) return;
-
-        const data = await res.json();
-        setUser({
-          userId: data.userKey,
-          name: data?.alexa?.displayName ?? null,
-          // no email here because /api/integrations doesn't provide it
-        });
-      } catch {
-        // keep user null if backend isn't reachable
-      }
+  const loadUser = useCallback(async () => {
+    const token = getStoredAmazonToken();
+    if (!token) {
+      setUser(null);
+      return;
     }
 
-    loadUser();
+    try {
+      const res = await apiFetch("/api/integrations");
+      if (!res.ok) {
+        setUser(null);
+        return;
+      }
+
+      const data = await res.json();
+      setUser({
+        userId: data.userKey,
+        name: data?.alexa?.displayName ?? data?.amazon?.email ?? null,
+      });
+    } catch {
+      setUser(null);
+    }
   }, []);
 
+  useEffect(() => {
+    loadUser();
+    return subscribeToAmazonAuthChanges(loadUser);
+  }, [loadUser]);
+
   const onLogout = () => {
-    localStorage.removeItem(LS_AMAZON_ACCESS);
+    clearStoredAmazonToken();
     setUser(null);
     window.location.href = "/onboarding/step2";
   };

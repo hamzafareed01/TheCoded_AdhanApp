@@ -6,7 +6,12 @@ import { Badge } from "../ui/badge";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { AlexaIcon, GoogleIcon, AppleIcon } from "../shared/BrandIcons";
-import { apiFetch } from "../../lib/api";
+import {
+  apiFetch,
+  clearStoredAmazonToken,
+  getStoredAmazonToken,
+  setStoredAmazonToken,
+} from "../../lib/api";
 
 declare global {
   interface Window {
@@ -26,17 +31,15 @@ interface Props {
   setOnboardingData?: (data: OnboardingData) => void;
 }
 
-// server integration shape from GET /api/integrations
 type IntegrationStatus = {
   userKey: string;
-  alexa: { connected: boolean; linkedAt: string | null; displayName: string | null; accountId: string | null };
-  google: { connected: boolean; linkedAt: string | null };
-  apple: { connected: boolean; linkedAt: string | null };
+  alexa: { connected: boolean; linkedAt: string | null; displayName: string | null; accountId?: string | null };
+  google?: { connected: boolean; linkedAt: string | null };
+  apple?: { connected: boolean; linkedAt: string | null };
 };
 
 const LS_CONNECTED = "adhan_connected_platforms";
 const LS_TOKENS = "adhan_tokens";
-const LS_AMAZON_ACCESS = "amazon_access_token";
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -65,12 +68,12 @@ function loadAmazonSDK(): Promise<void> {
       return;
     }
 
-    const s = document.createElement("script");
-    s.src = "https://assets.loginwithamazon.com/sdk/na/login1.js";
-    s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("Amazon SDK load error"));
-    document.head.appendChild(s);
+    const script = document.createElement("script");
+    script.src = "https://assets.loginwithamazon.com/sdk/na/login1.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Amazon SDK load error"));
+    document.head.appendChild(script);
   });
 }
 
@@ -83,8 +86,8 @@ function getReturnUrl(): string {
     (import.meta as any).env?.VITE_AMAZON_RETURN_URL ||
     (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI ||
     "";
-  if (env) return env;
 
+  if (env) return env;
   return `${window.location.origin}/onboarding/step2`;
 }
 
@@ -113,7 +116,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         name: "Amazon Alexa",
         desc: "Control Adhan & reminders using Alexa devices.",
         Icon: AlexaIcon,
-        badge: "Recommended",
+        badge: "Required",
       },
       { key: "google" as const, name: "Google", desc: "Calendar + reminders (coming soon).", Icon: GoogleIcon, badge: "Soon" },
       { key: "apple" as const, name: "Apple", desc: "iOS notifications (coming soon).", Icon: AppleIcon, badge: "Soon" },
@@ -137,13 +140,22 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
   };
 
   async function refreshServerStatus() {
+    const token = getStoredAmazonToken();
+    if (!token) {
+      setServerStatus(null);
+      return;
+    }
+
     try {
       const resp = await apiFetch("/api/integrations");
       if (!resp.ok) return;
       const data = (await resp.json()) as IntegrationStatus;
       setServerStatus(data);
+      if (data?.alexa?.connected) {
+        markConnected("alexa");
+      }
     } catch {
-      // ignore (UI should still work offline-ish)
+      // ignore
     }
   }
 
@@ -161,7 +173,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     if (!clientId) {
       setLoadingKey(null);
       setError(
-        "Missing VITE_AMAZON_CLIENT_ID in the frontend build. Add it to GitHub Actions (Repository Variable/Secret) and redeploy the Static Web App."
+        "Missing VITE_AMAZON_CLIENT_ID in the frontend build. Add it to GitHub Actions and redeploy the Static Web App."
       );
       return;
     }
@@ -169,37 +181,36 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
     try {
       await loadAmazonSDK();
 
-      const options = {
-        scope: "profile",
-        response_type: "token",
-        redirect_uri: redirectUri,
-        popup: true,
-        state: `adhan_${Date.now()}`,
-      };
-
       const tokenResp: any = await new Promise((resolve, reject) => {
-        window.amazon.Login.authorize(options, (res: any) => {
-          if (!res) return reject(new Error("No response from Amazon login."));
-          if (res.error) return reject(new Error(res.error_description || res.error));
-          resolve(res);
-        });
+        window.amazon.Login.authorize(
+          {
+            scope: "profile",
+            response_type: "token",
+            redirect_uri: redirectUri,
+            popup: true,
+            state: `adhan_${Date.now()}`,
+          },
+          (res: any) => {
+            if (!res) return reject(new Error("No response from Amazon login."));
+            if (res.error) return reject(new Error(res.error_description || res.error));
+            resolve(res);
+          }
+        );
       });
 
       const accessToken: string | undefined = tokenResp?.access_token;
       if (!accessToken) throw new Error("Amazon did not return an access token.");
 
-      // store for api.ts Authorization auto-attach
-      localStorage.setItem(LS_AMAZON_ACCESS, accessToken);
+      setStoredAmazonToken(accessToken);
 
-      const r = await apiFetch("/api/integrations/alexa/login", {
+      const linkRes = await apiFetch("/api/integrations/alexa/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accessToken }),
       });
 
-      if (!r.ok) {
-        const msg = await r.text().catch(() => "");
-        throw new Error(`Backend link failed (${r.status}). ${msg}`);
+      if (!linkRes.ok) {
+        const msg = await linkRes.text().catch(() => "");
+        throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
       }
 
       setTokens((prev) => ({ ...prev, alexa: accessToken }));
@@ -220,12 +231,12 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
       await apiFetch("/api/integrations/alexa/disconnect", { method: "POST" }).catch(() => {});
       try {
         window.amazon?.Login?.logout?.();
-      } catch {}
-
-      localStorage.removeItem(LS_AMAZON_ACCESS);
-
+      } catch {
+        // ignore
+      }
+      clearStoredAmazonToken();
       markDisconnected("alexa");
-      await refreshServerStatus();
+      setServerStatus(null);
     } finally {
       setLoadingKey(null);
     }
@@ -261,7 +272,7 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         <div className="mt-8">
           <h1 className="text-2xl font-semibold">Connect your accounts</h1>
           <p className="mt-2 text-muted-foreground">
-            Linking Alexa lets your settings follow you across devices and enables voice experiences.
+            Amazon Alexa is required for this production build so your settings and prayer times can load from the backend.
           </p>
         </div>
 
@@ -272,44 +283,42 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
         )}
 
         <div className="mt-8 space-y-4">
-          {platforms.map((p) => {
-            const connected = isConnected(p.key);
-            const busy = loadingKey === p.key;
-
-            const serverConnected =
-              p.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
+          {platforms.map((platform) => {
+            const connected = isConnected(platform.key);
+            const busy = loadingKey === platform.key;
+            const serverConnected = platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
 
             return (
               <div
-                key={p.key}
+                key={platform.key}
                 className="flex items-center justify-between rounded-xl border bg-card p-5 shadow-sm"
               >
                 <div className="flex items-center gap-4">
                   <div className="grid h-11 w-11 place-items-center rounded-lg bg-muted">
-                    <p.Icon className="h-6 w-6" />
+                    <platform.Icon className="h-6 w-6" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <div className="font-medium">{p.name}</div>
-                      {p.badge && <Badge variant="secondary">{p.badge}</Badge>}
+                      <div className="font-medium">{platform.name}</div>
+                      {platform.badge && <Badge variant="secondary">{platform.badge}</Badge>}
                       {connected && <Badge>Connected</Badge>}
                       {serverConnected && <Badge variant="outline">Server linked</Badge>}
                     </div>
-                    <div className="text-sm text-muted-foreground">{p.desc}</div>
+                    <div className="text-sm text-muted-foreground">{platform.desc}</div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                   {!connected ? (
                     <Button
-                      onClick={() => handleConnect(p.key)}
+                      onClick={() => handleConnect(platform.key)}
                       disabled={busy}
-                      variant={p.key === "alexa" ? "default" : "secondary"}
+                      variant={platform.key === "alexa" ? "default" : "secondary"}
                     >
                       {busy ? "Connecting..." : "Connect"}
                     </Button>
                   ) : (
-                    <Button onClick={() => handleDisconnect(p.key)} disabled={busy} variant="outline">
+                    <Button onClick={() => handleDisconnect(platform.key)} disabled={busy} variant="outline">
                       {busy ? "Disconnecting..." : "Disconnect"}
                     </Button>
                   )}
@@ -324,7 +333,9 @@ export default function Step2ConnectAccounts({ onboardingData, setOnboardingData
             Back
           </Button>
 
-          <Button onClick={handleContinue}>Continue</Button>
+          <Button onClick={handleContinue} disabled={!isConnected("alexa")}>
+            Continue
+          </Button>
         </div>
       </div>
     </div>
