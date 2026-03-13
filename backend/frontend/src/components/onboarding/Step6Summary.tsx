@@ -8,9 +8,95 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { CheckCircle, PartyPopper, XCircle } from "lucide-react";
 import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
+type CountryCode = "US" | "PK";
+type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
+type AfterType = "none" | "dua" | "surah";
+
+type JsonRecord = Record<string, unknown>;
+
+type QuietHours = {
+  enabled: boolean;
+  from: string;
+  to: string;
+  muteFajr?: boolean;
+};
+
+type AfterAdhan = {
+  type: AfterType;
+  payload: JsonRecord | null;
+};
+
+type PrayerConfig = {
+  prayerName: PrayerName;
+  adhanReciterId: string | null;
+  afterAdhan: AfterAdhan;
+};
+
+type OnboardingLocation = {
+  country?: string;
+  city?: string;
+  timezone?: string;
+  latitude?: number | string;
+  longitude?: number | string;
+  useMosqueLocation?: boolean;
+};
+
+type OnboardingPrayerSettings = {
+  calculationMethod?: string;
+  method?: string;
+  madhhab?: string;
+  madhab?: string;
+  shia?: boolean;
+  highLatitudeMethod?: string;
+  highLatitudeMode?: string;
+};
+
+type OnboardingDevices = {
+  quietHours?: QuietHours;
+  adhanPreferences?: {
+    quietHoursEnabled?: boolean;
+    quietHours?: {
+      from?: string;
+      to?: string;
+    };
+  };
+};
+
+type OnboardingData = {
+  connectedPlatforms?: string[];
+  selectedPlatforms?: string[];
+  location?: OnboardingLocation;
+  prayerSettings?: OnboardingPrayerSettings;
+  devices?: string[] | OnboardingDevices;
+  accountEnabled?: boolean;
+  prayerConfigs?: PrayerConfig[];
+};
+
 type Props = {
-  onboardingData: any;
-  setOnboardingData: (data: any) => void;
+  onboardingData: OnboardingData;
+  setOnboardingData: (data: OnboardingData) => void;
+};
+
+type SummaryData = {
+  platformsConnected: string[];
+  location: {
+    country: CountryCode;
+    city: string;
+    timezone: string;
+    latitude: number | null;
+    longitude: number | null;
+    useMosqueLocation: boolean;
+  };
+  prayer: {
+    calculationMethod: string;
+    madhhab: string;
+    madhab: string;
+    highLatitudeMethod: string;
+  };
+  quiet: QuietHours;
+  accountEnabled: boolean;
+  prayerConfigs: PrayerConfig[];
+  selectedDeviceCount: number;
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -21,6 +107,7 @@ const METHOD_LABEL: Record<string, string> = {
   egypt: "Egyptian",
   tehran: "Tehran",
   jafari: "Jafari (Shia)",
+  ummalqura: "Umm Al-Qura",
 };
 
 const HIGHLAT_LABEL: Record<string, string> = {
@@ -30,65 +117,226 @@ const HIGHLAT_LABEL: Record<string, string> = {
   angle_based: "Angle Based",
 };
 
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function toNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) {
+    return Number(v);
+  }
   return null;
 }
 
-function readConnectedPlatforms(onboardingData: any): string[] {
-  if (Array.isArray(onboardingData?.connectedPlatforms)) return onboardingData.connectedPlatforms;
+function normalizeCountryCode(value: unknown): CountryCode {
+  const v = String(value ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (v === "PK" || v === "PAKISTAN") return "PK";
+  return "US";
+}
+
+function normalizeTimezone(country: CountryCode, value: unknown): string {
+  const timezone = asString(value);
+
+  if (country === "PK") {
+    return timezone === "Asia/Karachi" ? timezone : "Asia/Karachi";
+  }
+
+  const usAllowed = [
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+  ];
+
+  if (timezone && usAllowed.includes(timezone)) return timezone;
+  return "America/Chicago";
+}
+
+function readConnectedPlatforms(onboardingData: OnboardingData): string[] {
+  if (Array.isArray(onboardingData?.connectedPlatforms)) {
+    return onboardingData.connectedPlatforms.filter(
+      (x): x is string => typeof x === "string"
+    );
+  }
+
   try {
     const raw = localStorage.getItem("adhan_connected_platforms");
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
   } catch {
     return [];
   }
 }
 
-export default function Step6Summary({ onboardingData }: Props) {
+function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => {
+      const prayerNameRaw =
+        asString(item.prayerName)?.toLowerCase() ??
+        asString(item.prayer_name)?.toLowerCase() ??
+        "";
+
+      const prayerName = (
+        ["fajr", "dhuhr", "asr", "maghrib", "isha"].includes(prayerNameRaw)
+          ? prayerNameRaw
+          : "fajr"
+      ) as PrayerName;
+
+      const afterAdhanSource = isRecord(item.afterAdhan)
+        ? item.afterAdhan
+        : null;
+
+      const afterType =
+        afterAdhanSource?.type === "dua" || afterAdhanSource?.type === "surah"
+          ? afterAdhanSource.type
+          : "none";
+
+      return {
+        prayerName,
+        adhanReciterId: asString(item.adhanReciterId),
+        afterAdhan: {
+          type: afterType,
+          payload: isRecord(afterAdhanSource?.payload)
+            ? afterAdhanSource.payload
+            : null,
+        },
+      };
+    });
+}
+
+async function saveSettings(payload: Record<string, unknown>) {
+  const put = await apiFetch("/api/user/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+  if (put.ok) return put;
+
+  return apiFetch("/api/user/settings", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function geocodeLocation(city: string, country: CountryCode) {
+  const params = new URLSearchParams({
+    city: city.trim(),
+    country,
+  });
+
+  const res = await apiFetch(`/api/geocode?${params.toString()}`);
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    const message =
+      isRecord(data) && typeof data.error === "string"
+        ? data.error
+        : "Could not geocode your city.";
+    throw new Error(message);
+  }
+
+  if (!isRecord(data)) {
+    throw new Error("Invalid geocoding response.");
+  }
+
+  const lat = toNumber(data.lat);
+  const lng = toNumber(data.lng);
+  const timezone = normalizeTimezone(country, data.timezone);
+
+  if (lat === null || lng === null) {
+    throw new Error("Geocoding did not return valid coordinates.");
+  }
+
+  return { lat, lng, timezone };
+}
+
+export default function Step6Summary({
+  onboardingData,
+  setOnboardingData,
+}: Props) {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const summary = useMemo(() => {
+  const summary = useMemo<SummaryData>(() => {
     const location = onboardingData?.location || {};
     const prayer = onboardingData?.prayerSettings || {};
-    const devices = onboardingData?.devices || {};
-    const platformsSelected: string[] = onboardingData?.selectedPlatforms || [];
-    const platformsConnected: string[] = readConnectedPlatforms(onboardingData);
+    const devicesValue = onboardingData?.devices;
+    const platformsConnected = readConnectedPlatforms(onboardingData);
 
-    const country = location?.country || "US";
-    const city = location?.city || "Chicago";
-    const timezone = location?.timezone || "America/Chicago";
-    const latitude = toNumber(location?.latitude);
-    const longitude = toNumber(location?.longitude);
+    const country = normalizeCountryCode(location.country);
+    const city = location.city?.trim() || (country === "PK" ? "Karachi" : "Chicago");
+    const timezone = normalizeTimezone(country, location.timezone);
+    const latitude = toNumber(location.latitude);
+    const longitude = toNumber(location.longitude);
+    const useMosqueLocation = location.useMosqueLocation === true;
 
-    const calculationMethod: string = prayer?.calculationMethod || prayer?.method || "isna";
-    const madhhab: string = prayer?.madhhab || "hanafi";
-    const madhab: string = prayer?.madhab || (prayer?.shia ? "shia" : "sunni");
-    const highLatitudeMethod: string = prayer?.highLatitudeMethod || prayer?.highLatitudeMode || "automatic";
+    const calculationMethod =
+      prayer.calculationMethod || prayer.method || (country === "PK" ? "karachi" : "isna");
+    const madhhab = prayer.madhhab || "hanafi";
+    const madhab = prayer.madhab || (prayer.shia ? "shia" : "sunni");
+    const highLatitudeMethod =
+      prayer.highLatitudeMethod || prayer.highLatitudeMode || "automatic";
 
     const quietHoursEnabled =
-      devices?.adhanPreferences?.quietHoursEnabled === true ||
-      devices?.quietHours?.enabled === true;
+      !Array.isArray(devicesValue) &&
+      (devicesValue?.adhanPreferences?.quietHoursEnabled === true ||
+        devicesValue?.quietHours?.enabled === true);
 
     const quietFrom =
-      devices?.adhanPreferences?.quietHours?.from ||
-      devices?.quietHours?.from ||
-      "22:00";
+      !Array.isArray(devicesValue)
+        ? devicesValue?.adhanPreferences?.quietHours?.from ||
+          devicesValue?.quietHours?.from ||
+          "22:00"
+        : "22:00";
 
     const quietTo =
-      devices?.adhanPreferences?.quietHours?.to ||
-      devices?.quietHours?.to ||
-      "07:00";
+      !Array.isArray(devicesValue)
+        ? devicesValue?.adhanPreferences?.quietHours?.to ||
+          devicesValue?.quietHours?.to ||
+          "07:00"
+        : "07:00";
+
+    const selectedDeviceCount = Array.isArray(devicesValue)
+      ? devicesValue.length
+      : 0;
 
     return {
-      platformsSelected,
       platformsConnected,
-      location: { country, city, timezone, latitude, longitude },
-      prayer: { calculationMethod, madhhab, madhab, highLatitudeMethod },
-      quiet: { enabled: quietHoursEnabled, from: quietFrom, to: quietTo },
+      location: {
+        country,
+        city,
+        timezone,
+        latitude,
+        longitude,
+        useMosqueLocation,
+      },
+      prayer: {
+        calculationMethod,
+        madhhab,
+        madhab,
+        highLatitudeMethod,
+      },
+      quiet: {
+        enabled: quietHoursEnabled,
+        from: quietFrom,
+        to: quietTo,
+        muteFajr: true,
+      },
+      accountEnabled: onboardingData?.accountEnabled !== false,
+      prayerConfigs: normalizePrayerConfigs(onboardingData?.prayerConfigs),
+      selectedDeviceCount,
     };
   }, [onboardingData]);
 
@@ -106,44 +354,84 @@ export default function Step6Summary({ onboardingData }: Props) {
         throw new Error("Please connect Amazon in Step 2 before finishing setup.");
       }
 
-      await apiFetch("/api/integrations/alexa/login", {
+      if (!summary.location.city.trim()) {
+        throw new Error("City is required before finishing setup.");
+      }
+
+      const loginResp = await apiFetch("/api/integrations/alexa/login", {
         method: "POST",
         body: JSON.stringify({ accessToken: amazonToken }),
-      }).catch(() => {
-        // safe no-op
       });
 
-      const payload = {
-        country: summary.location.country,
-        city: summary.location.city,
-        timezone: summary.location.timezone,
-        ...(summary.location.latitude !== null ? { latitude: summary.location.latitude } : {}),
-        ...(summary.location.longitude !== null ? { longitude: summary.location.longitude } : {}),
+      if (!loginResp.ok) {
+        const loginText = await loginResp.text().catch(() => "");
+        throw new Error(
+          loginText || "Amazon Alexa account sync failed. Please reconnect Amazon."
+        );
+      }
+
+      const geo = await geocodeLocation(
+        summary.location.city,
+        summary.location.country
+      );
+
+      const syncedLocation = {
+        ...summary.location,
+        latitude: geo.lat,
+        longitude: geo.lng,
+        timezone: geo.timezone,
+      };
+
+      const payload: Record<string, unknown> = {
+        country: syncedLocation.country,
+        city: syncedLocation.city,
+        timezone: syncedLocation.timezone,
+        latitude: syncedLocation.latitude,
+        longitude: syncedLocation.longitude,
+        useMosqueLocation: syncedLocation.useMosqueLocation,
         calculationMethod: summary.prayer.calculationMethod,
         madhhab: summary.prayer.madhhab,
         shia: summary.prayer.madhab === "shia",
         highLatitudeMethod: summary.prayer.highLatitudeMethod,
+        accountEnabled: true,
         quietHours: {
           enabled: summary.quiet.enabled,
           from: summary.quiet.from,
           to: summary.quiet.to,
           muteFajr: true,
         },
+        prayerConfigs: summary.prayerConfigs,
       };
 
-      const resp = await apiFetch("/api/user/settings", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      const resp = await saveSettings(payload);
 
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(text || "Failed to save settings.");
       }
 
+      setOnboardingData({
+        ...onboardingData,
+        location: {
+          ...(onboardingData.location || {}),
+          country: syncedLocation.country,
+          city: syncedLocation.city,
+          timezone: syncedLocation.timezone,
+          latitude: syncedLocation.latitude,
+          longitude: syncedLocation.longitude,
+          useMosqueLocation: syncedLocation.useMosqueLocation,
+        },
+        accountEnabled: true,
+        prayerConfigs: summary.prayerConfigs,
+      });
+
       navigate("/dashboard");
-    } catch (e: any) {
-      setError(e?.message || "Failed to finish onboarding.");
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        setError(e.message);
+      } else {
+        setError("Failed to finish onboarding.");
+      }
     } finally {
       setSaving(false);
     }
@@ -162,7 +450,8 @@ export default function Step6Summary({ onboardingData }: Props) {
             <Badge variant="secondary">Ready</Badge>
           </div>
           <p className="text-muted-foreground">
-            Review everything below. When you click <b>Finish</b>, we’ll save your preferences to your account.
+            Review everything below. When you click <b>Finish</b>, we’ll save
+            your real preferences to your account.
           </p>
         </div>
 
@@ -187,14 +476,24 @@ export default function Step6Summary({ onboardingData }: Props) {
                 ) : (
                   <>
                     <XCircle className="w-5 h-5" />
-                    <span className="text-sm text-muted-foreground">Not connected</span>
+                    <span className="text-sm text-muted-foreground">
+                      Not connected
+                    </span>
                   </>
                 )}
               </div>
             </div>
 
+            <div className="flex items-center justify-between">
+              <div className="font-medium">Account Enabled</div>
+              <div className="text-sm">
+                {summary.accountEnabled ? "Yes" : "No"}
+              </div>
+            </div>
+
             <div className="text-xs text-muted-foreground">
-              Amazon should show connected before you finish, otherwise the dashboard will not be able to load your protected settings.
+              Amazon must show connected before you finish, otherwise the
+              dashboard will not be able to load your protected settings.
             </div>
           </div>
         </div>
@@ -205,13 +504,27 @@ export default function Step6Summary({ onboardingData }: Props) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div>
               <div className="text-muted-foreground">Location</div>
-              <div className="font-medium">{summary.location.city}, {summary.location.country}</div>
-              <div className="text-xs text-muted-foreground">{summary.location.timezone}</div>
+              <div className="font-medium">
+                {summary.location.city}, {summary.location.country}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {summary.location.timezone}
+              </div>
+              {summary.location.latitude !== null &&
+                summary.location.longitude !== null && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    {summary.location.latitude.toFixed(5)},{" "}
+                    {summary.location.longitude.toFixed(5)}
+                  </div>
+                )}
             </div>
 
             <div>
               <div className="text-muted-foreground">Calculation Method</div>
-              <div className="font-medium">{METHOD_LABEL[summary.prayer.calculationMethod] || summary.prayer.calculationMethod}</div>
+              <div className="font-medium">
+                {METHOD_LABEL[summary.prayer.calculationMethod.toLowerCase()] ||
+                  summary.prayer.calculationMethod}
+              </div>
             </div>
 
             <div>
@@ -226,19 +539,75 @@ export default function Step6Summary({ onboardingData }: Props) {
 
             <div>
               <div className="text-muted-foreground">High Latitude Rule</div>
-              <div className="font-medium">{HIGHLAT_LABEL[summary.prayer.highLatitudeMethod] || summary.prayer.highLatitudeMethod}</div>
+              <div className="font-medium">
+                {HIGHLAT_LABEL[summary.prayer.highLatitudeMethod] ||
+                  summary.prayer.highLatitudeMethod}
+              </div>
             </div>
 
             <div>
               <div className="text-muted-foreground">Quiet Hours</div>
-              <div className="font-medium">{summary.quiet.enabled ? `${summary.quiet.from} → ${summary.quiet.to}` : "Off"}</div>
+              <div className="font-medium">
+                {summary.quiet.enabled
+                  ? `${summary.quiet.from} → ${summary.quiet.to}`
+                  : "Off"}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground">Use Mosque Location</div>
+              <div className="font-medium">
+                {summary.location.useMosqueLocation ? "Yes" : "No"}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground">Selected Devices</div>
+              <div className="font-medium">{summary.selectedDeviceCount}</div>
             </div>
           </div>
         </div>
 
+        <div className="rounded-xl border bg-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold">Per-Prayer Adhan</h2>
+
+          {summary.prayerConfigs.length === 0 ? (
+            <div className="text-sm text-muted-foreground">
+              No per-prayer Adhan preferences were found yet.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {summary.prayerConfigs.map((config) => (
+                <div
+                  key={config.prayerName}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <div className="capitalize font-medium">
+                    {config.prayerName}
+                  </div>
+                  <div className="text-muted-foreground text-right">
+                    <div>
+                      Reciter: {config.adhanReciterId || "Not selected"}
+                    </div>
+                    <div>After Adhan: {config.afterAdhan.type}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="flex justify-between">
-          <Button variant="outline" onClick={() => navigate("/onboarding/step5")} disabled={saving}>Back</Button>
-          <Button onClick={finish} disabled={saving}>{saving ? "Saving..." : "Finish"}</Button>
+          <Button
+            variant="outline"
+            onClick={() => navigate("/onboarding/step5")}
+            disabled={saving}
+          >
+            Back
+          </Button>
+          <Button onClick={finish} disabled={saving}>
+            {saving ? "Saving..." : "Finish"}
+          </Button>
         </div>
       </div>
     </div>

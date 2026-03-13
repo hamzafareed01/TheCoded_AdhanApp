@@ -17,6 +17,10 @@ function getConfig() {
     );
   }
 
+  if (!Number.isFinite(port) || port <= 0) {
+    throw new Error("DB_PORT must be a valid number");
+  }
+
   return {
     user,
     password,
@@ -45,7 +49,7 @@ function isTransientSqlError(err) {
 
   return (
     num === 40613 || // database unavailable / serverless resume
-    num === 40197 || // service encountered error
+    num === 40197 || // service encountered an error
     num === 40501 || // service busy / throttling
     num === 49918 ||
     num === 49919 ||
@@ -54,26 +58,45 @@ function isTransientSqlError(err) {
     code === "ESOCKET" ||
     code === "ECONNRESET" ||
     code === "ECONNCLOSED" ||
-    code === "ELOGIN" ||
+    code === "EINSTLOOKUP" ||
     /not currently available/.test(msg) ||
     /timeout/.test(msg) ||
     /connection is closed/.test(msg) ||
     /socket/.test(msg) ||
-    /client with ip address .* is not allowed to access the server/.test(msg)
+    /server was not found/.test(msg) ||
+    /connection error/.test(msg)
   );
 }
 
-async function sleep(ms) {
+function isPermanentConfigError(err) {
+  const msg = String(err?.message || "").toLowerCase();
+  const code = String(err?.code || "").toUpperCase();
+  const num = Number(err?.number);
+
+  return (
+    code === "ELOGIN" ||
+    /login failed/.test(msg) ||
+    /client with ip address .* is not allowed to access the server/.test(msg) ||
+    /firewall/.test(msg) ||
+    /cannot open server/.test(msg) ||
+    /failed to connect to .*1433/.test(msg) ||
+    num === 18456
+  );
+}
+
+function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function connectWithRetry(maxAttempts = 6) {
-  let lastErr;
+  let lastErr = null;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let connectionPool = null;
+
     try {
-      const cfg = getConfig();
-      const connectionPool = new sql.ConnectionPool(cfg);
+      const config = getConfig();
+      connectionPool = new sql.ConnectionPool(config);
       const connectedPool = await connectionPool.connect();
 
       connectedPool.on("error", (err) => {
@@ -85,6 +108,18 @@ async function connectWithRetry(maxAttempts = 6) {
       return connectedPool;
     } catch (err) {
       lastErr = err;
+
+      if (connectionPool) {
+        try {
+          await connectionPool.close();
+        } catch {
+          // ignore close failure
+        }
+      }
+
+      if (isPermanentConfigError(err)) {
+        break;
+      }
 
       if (!isTransientSqlError(err) || attempt === maxAttempts) {
         break;
@@ -103,7 +138,7 @@ async function connectWithRetry(maxAttempts = 6) {
 }
 
 async function getPool() {
-  if (pool?.connected) {
+  if (pool && pool.connected) {
     return pool;
   }
 
@@ -114,7 +149,7 @@ async function getPool() {
   poolPromise = connectWithRetry()
     .then((connectedPool) => {
       pool = connectedPool;
-      return pool;
+      return connectedPool;
     })
     .catch((err) => {
       pool = null;
@@ -126,16 +161,17 @@ async function getPool() {
 }
 
 async function closePool() {
-  if (pool) {
+  const currentPool = pool;
+  pool = null;
+  poolPromise = null;
+
+  if (currentPool) {
     try {
-      await pool.close();
+      await currentPool.close();
     } catch (err) {
       console.warn("Error while closing Azure SQL pool:", err?.message || err);
     }
   }
-
-  pool = null;
-  poolPromise = null;
 }
 
 module.exports = {
