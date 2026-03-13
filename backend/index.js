@@ -18,6 +18,7 @@ app.use(express.json({ limit: "2mb" }));
 // -----------------------------
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
+const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
 const tokenCache = new Map(); // token -> { profile, exp }
 
 const corsOriginsRaw = process.env.CORS_ORIGINS || "";
@@ -47,6 +48,10 @@ function asyncHandler(fn) {
   };
 }
 
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 function readJsonFile(relativePath) {
   const full = path.join(__dirname, relativePath);
   const raw = fs.readFileSync(full, "utf8");
@@ -71,6 +76,48 @@ function cleanupExpiredTokenCache() {
   for (const [token, value] of tokenCache.entries()) {
     if (!value || value.exp <= now) tokenCache.delete(token);
   }
+}
+
+function parseOptionalNumber(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function normalizeCountryCode(value, fallback = "US") {
+  const code = String(value || fallback).trim().toUpperCase();
+  if (!code) return fallback;
+  return code;
+}
+
+function countryCodeToName(code) {
+  if (code === "US") return "United States";
+  if (code === "PK") return "Pakistan";
+  return code;
+}
+
+function normalizeTimeString(value, fallback) {
+  const s = String(value || "").trim();
+  return /^\d{2}:\d{2}$/.test(s) ? s : fallback;
+}
+
+function normalizeQueryText(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function normalizeMosqueSearchText(query, countryCode) {
+  const q = normalizeQueryText(query);
+  const countryName = countryCodeToName(countryCode);
+
+  if (!q) return `mosques in ${countryName}`;
+  if (/mosque|masjid/i.test(q)) return countryName ? `${q}, ${countryName}` : q;
+  return countryName ? `mosques in ${q}, ${countryName}` : `mosques in ${q}`;
 }
 
 async function fetchAmazonProfile(accessToken) {
@@ -181,6 +228,31 @@ async function ensureUser(pool, amazonUserId) {
   }
 }
 
+async function getUserProfileAndPrayers(pool, amazonUserId) {
+  const userId = await ensureUser(pool, amazonUserId);
+
+  const profileResult = await pool
+    .request()
+    .input("user_id", sql.UniqueIdentifier, userId)
+    .query(`SELECT * FROM dbo.user_profiles WHERE user_id=@user_id`);
+
+  const prayerResult = await pool
+    .request()
+    .input("user_id", sql.UniqueIdentifier, userId)
+    .query(`
+      SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to, adhan_reciter_id, after_type, after_payload_json
+      FROM dbo.prayer_configs
+      WHERE user_id=@user_id
+      ORDER BY prayer_name
+    `);
+
+  return {
+    userId,
+    profile: profileResult.recordset[0] || {},
+    prayers: prayerResult.recordset || [],
+  };
+}
+
 function addMinutesHHMM(hhmm, deltaMin) {
   const [hh, mm] = String(hhmm || "").split(":").map(Number);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return hhmm;
@@ -202,23 +274,26 @@ function to12h(hhmm) {
   return `${h12}:${String(mm).padStart(2, "0")} ${suffix}`;
 }
 
-function parseOffsetsFromBody(body) {
+function parseOffsetsFromBody(body, fallback) {
   const src = body?.globalOffsets || body?.offsets || {};
   const out = {};
-  for (const prayer of PRAYERS) out[prayer] = Number(src?.[prayer] || 0);
-  return out;
-}
 
-function parseOptionalNumber(value) {
-  if (value === undefined || value === null || value === "") return undefined;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : undefined;
+  for (const prayer of PRAYERS) {
+    if (hasOwn(src, prayer)) {
+      const n = Number(src[prayer]);
+      out[prayer] = Number.isFinite(n) ? n : fallback[prayer];
+    } else {
+      out[prayer] = fallback[prayer];
+    }
+  }
+
+  return out;
 }
 
 function mapCalcMethodToAlAdhan(method, sect) {
   const m = String(method || "").toLowerCase();
 
-  if (String(sect || "").toUpperCase() === "SHIA") return 0; // Jafari
+  if (String(sect || "").toUpperCase() === "SHIA") return 0;
   if (m.includes("karachi")) return 1;
   if (m.includes("isna")) return 2;
   if (m.includes("mwl")) return 3;
@@ -227,7 +302,7 @@ function mapCalcMethodToAlAdhan(method, sect) {
   if (m.includes("egypt")) return 5;
   if (m.includes("tehran")) return 7;
 
-  return 2; // ISNA
+  return 2;
 }
 
 function madhhabToSchool(madhhab) {
@@ -282,7 +357,9 @@ function buildUserSettingsPayload(amazonUserId, p, prayerRows) {
   const rows = Array.isArray(prayerRows) ? prayerRows : [];
 
   const firstQuietRow =
-    rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) || rows[0] || {};
+    rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) ||
+    rows[0] ||
+    {};
 
   const quietHours = {
     enabled: !!firstQuietRow.quiet_enabled,
@@ -320,7 +397,7 @@ function buildUserSettingsPayload(amazonUserId, p, prayerRows) {
     };
   });
 
-  const payload = {
+  return {
     userId: amazonUserId,
     userKey: amazonUserId,
     sect: p.sect || "SUNNI",
@@ -336,6 +413,11 @@ function buildUserSettingsPayload(amazonUserId, p, prayerRows) {
     timezone: p.timezone || "America/Chicago",
     latitude: typeof p.latitude === "number" ? p.latitude : null,
     longitude: typeof p.longitude === "number" ? p.longitude : null,
+    mosqueId: p.mosque_id || null,
+    mosqueName: p.mosque_name || null,
+    mosqueAddress: p.mosque_address || null,
+    mosqueLat: typeof p.mosque_lat === "number" ? p.mosque_lat : null,
+    mosqueLng: typeof p.mosque_lng === "number" ? p.mosque_lng : null,
     accountEnabled: !!p.account_enabled,
     quietHours,
     globalOffsets: {
@@ -354,8 +436,79 @@ function buildUserSettingsPayload(amazonUserId, p, prayerRows) {
     },
     prayerConfigs,
   };
+}
 
-  return payload;
+async function googlePlacesPost(endpoint, body, fieldMask) {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey) {
+    const err = new Error("GOOGLE_PLACES_API_KEY is not configured");
+    err.status = 500;
+    throw err;
+  }
+
+  const resp = await fetch(`${GOOGLE_PLACES_BASE}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": fieldMask,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    const err = new Error(`Google Places request failed (${resp.status}): ${text}`);
+    err.status = 502;
+    throw err;
+  }
+
+  return resp.json();
+}
+
+function normalizePlace(place) {
+  const displayName =
+    place?.displayName?.text ||
+    place?.displayName ||
+    place?.name ||
+    "Unknown mosque";
+
+  const placeId =
+    place?.id ||
+    (typeof place?.name === "string" && place.name.startsWith("places/")
+      ? place.name.replace(/^places\//, "")
+      : null);
+
+  return {
+    placeId: placeId || null,
+    name: displayName,
+    address: place?.formattedAddress || null,
+    location:
+      typeof place?.location?.latitude === "number" &&
+      typeof place?.location?.longitude === "number"
+        ? {
+            lat: place.location.latitude,
+            lng: place.location.longitude,
+          }
+        : null,
+  };
+}
+
+function dedupeMosques(list) {
+  const seen = new Set();
+  const out = [];
+
+  for (const item of list) {
+    const key =
+      item.placeId ||
+      `${String(item.name || "").toLowerCase()}|${String(item.address || "").toLowerCase()}`;
+
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+
+  return out;
 }
 
 // -----------------------------
@@ -372,7 +525,7 @@ app.get(
   "/api/geocode",
   asyncHandler(async (req, res) => {
     const city = String(req.query.city || "").trim();
-    const country = String(req.query.country || "").trim();
+    const country = normalizeCountryCode(req.query.country || "US");
 
     if (!city) {
       return res.status(400).json({ error: "city is required" });
@@ -383,11 +536,7 @@ app.get(
       return res.status(500).json({ error: "OPENCAGE_API_KEY is not configured" });
     }
 
-    const countryName =
-      country === "US" ? "United States" :
-      country === "PK" ? "Pakistan" :
-      country;
-
+    const countryName = countryCodeToName(country);
     const q = encodeURIComponent(`${city}, ${countryName}`);
     const url = `https://api.opencagedata.com/geocode/v1/json?q=${q}&key=${apiKey}&limit=1&no_annotations=0`;
 
@@ -410,7 +559,6 @@ app.get(
 
     const lat = first.geometry.lat;
     const lng = first.geometry.lng;
-
     const timezone =
       first?.annotations?.timezone?.name ||
       (country === "PK" ? "Asia/Karachi" : "America/Chicago");
@@ -466,7 +614,8 @@ app.post(
     const pool = await getPool();
     const userId = await ensureUser(pool, profile.user_id);
 
-    await pool.request()
+    await pool
+      .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .query(`
         UPDATE dbo.user_profiles
@@ -516,6 +665,78 @@ app.get(
   asyncHandler(async (req, res) => {
     const data = readJsonFile(path.join("data", "duas.json"));
     res.json(data);
+  })
+);
+
+// Mosque search
+app.get(
+  "/api/mosques",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const { profile } = await getUserProfileAndPrayers(pool, req.amazonProfile.user_id);
+
+    const country = normalizeCountryCode(req.query.country || profile.country || "US");
+    const query = normalizeQueryText(req.query.query || profile.city || "Chicago");
+    const bias = String(req.query.bias || "user").trim().toLowerCase();
+    const radiusKm = clampNumber(req.query.radiusKm, 1, 50, 25);
+    const radiusMeters = radiusKm * 1000;
+
+    const hasUserCoords =
+      typeof profile.latitude === "number" &&
+      Number.isFinite(profile.latitude) &&
+      typeof profile.longitude === "number" &&
+      Number.isFinite(profile.longitude);
+
+    let source = "text";
+    let placesJson;
+
+    if (bias === "user" && hasUserCoords) {
+      source = "nearby";
+      placesJson = await googlePlacesPost(
+        "/places:searchNearby",
+        {
+          includedTypes: ["mosque"],
+          maxResultCount: 20,
+          rankPreference: "DISTANCE",
+          locationRestriction: {
+            circle: {
+              center: {
+                latitude: profile.latitude,
+                longitude: profile.longitude,
+              },
+              radius: radiusMeters,
+            },
+          },
+        },
+        "places.id,places.name,places.displayName,places.formattedAddress,places.location"
+      );
+    } else {
+      placesJson = await googlePlacesPost(
+        "/places:searchText",
+        {
+          textQuery: normalizeMosqueSearchText(query, country),
+          includedType: "mosque",
+          strictTypeFiltering: true,
+          regionCode: country,
+          maxResultCount: 20,
+        },
+        "places.id,places.name,places.displayName,places.formattedAddress,places.location"
+      );
+    }
+
+    const mosques = dedupeMosques(
+      Array.isArray(placesJson?.places)
+        ? placesJson.places.map(normalizePlace).filter((m) => m.placeId && m.name)
+        : []
+    );
+
+    res.json({
+      query,
+      country,
+      source,
+      mosques,
+    });
   })
 );
 
@@ -629,27 +850,9 @@ app.get(
   asyncHandler(async (req, res) => {
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
-    const userId = await ensureUser(pool, amazonUserId);
 
-    const profileResult = await pool.request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`SELECT * FROM dbo.user_profiles WHERE user_id=@user_id`);
-
-    const prayerResult = await pool.request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`
-        SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to, adhan_reciter_id, after_type, after_payload_json
-        FROM dbo.prayer_configs
-        WHERE user_id=@user_id
-        ORDER BY prayer_name
-      `);
-
-    const p = profileResult.recordset[0] || {};
-    const settings = buildUserSettingsPayload(
-      amazonUserId,
-      p,
-      prayerResult.recordset
-    );
+    const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
+    const settings = buildUserSettingsPayload(amazonUserId, profile, prayers);
 
     res.json({
       userKey: amazonUserId,
@@ -662,7 +865,10 @@ app.get(
 async function handleSaveUserSettings(req, res) {
   const pool = await getPool();
   const amazonUserId = req.amazonProfile.user_id;
-  const userId = await ensureUser(pool, amazonUserId);
+  const { userId, profile: currentProfile } = await getUserProfileAndPrayers(
+    pool,
+    amazonUserId
+  );
   const body = req.body || {};
 
   const sect = body.sect || (body.shia === true ? "SHIA" : undefined);
@@ -677,7 +883,19 @@ async function handleSaveUserSettings(req, res) {
   const longitude = parseOptionalNumber(body.longitude);
   const accountEnabled = body.accountEnabled ?? body.account_enabled;
 
-  const offsets = parseOffsetsFromBody(body);
+  const hasMosqueId = hasOwn(body, "mosqueId");
+  const hasMosqueName = hasOwn(body, "mosqueName");
+  const hasMosqueAddress = hasOwn(body, "mosqueAddress");
+  const hasMosqueLat = hasOwn(body, "mosqueLat");
+  const hasMosqueLng = hasOwn(body, "mosqueLng");
+
+  const offsets = parseOffsetsFromBody(body, {
+    fajr: currentProfile.offset_fajr || 0,
+    dhuhr: currentProfile.offset_dhuhr || 0,
+    asr: currentProfile.offset_asr || 0,
+    maghrib: currentProfile.offset_maghrib || 0,
+    isha: currentProfile.offset_isha || 0,
+  });
 
   const profileReq = pool.request().input("user_id", sql.UniqueIdentifier, userId);
 
@@ -721,6 +939,43 @@ async function handleSaveUserSettings(req, res) {
   profileReq.input("off_maghrib", sql.Int, offsets.maghrib);
   profileReq.input("off_isha", sql.Int, offsets.isha);
 
+  profileReq.input("set_mosque_id", sql.Bit, hasMosqueId ? 1 : 0);
+  profileReq.input(
+    "mosque_id",
+    sql.NVarChar(255),
+    hasMosqueId ? (body.mosqueId ? String(body.mosqueId) : null) : null
+  );
+
+  profileReq.input("set_mosque_name", sql.Bit, hasMosqueName ? 1 : 0);
+  profileReq.input(
+    "mosque_name",
+    sql.NVarChar(255),
+    hasMosqueName ? (body.mosqueName ? String(body.mosqueName) : null) : null
+  );
+
+  profileReq.input("set_mosque_address", sql.Bit, hasMosqueAddress ? 1 : 0);
+  profileReq.input(
+    "mosque_address",
+    sql.NVarChar(500),
+    hasMosqueAddress
+      ? (body.mosqueAddress ? String(body.mosqueAddress) : null)
+      : null
+  );
+
+  profileReq.input("set_mosque_lat", sql.Bit, hasMosqueLat ? 1 : 0);
+  profileReq.input(
+    "mosque_lat",
+    sql.Float,
+    hasMosqueLat ? parseOptionalNumber(body.mosqueLat) ?? null : null
+  );
+
+  profileReq.input("set_mosque_lng", sql.Bit, hasMosqueLng ? 1 : 0);
+  profileReq.input(
+    "mosque_lng",
+    sql.Float,
+    hasMosqueLng ? parseOptionalNumber(body.mosqueLng) ?? null : null
+  );
+
   await profileReq.query(`
     UPDATE dbo.user_profiles
     SET
@@ -734,6 +989,11 @@ async function handleSaveUserSettings(req, res) {
       timezone = COALESCE(@timezone, timezone),
       latitude = COALESCE(@latitude, latitude),
       longitude = COALESCE(@longitude, longitude),
+      mosque_id = CASE WHEN @set_mosque_id = 1 THEN @mosque_id ELSE mosque_id END,
+      mosque_name = CASE WHEN @set_mosque_name = 1 THEN @mosque_name ELSE mosque_name END,
+      mosque_address = CASE WHEN @set_mosque_address = 1 THEN @mosque_address ELSE mosque_address END,
+      mosque_lat = CASE WHEN @set_mosque_lat = 1 THEN @mosque_lat ELSE mosque_lat END,
+      mosque_lng = CASE WHEN @set_mosque_lng = 1 THEN @mosque_lng ELSE mosque_lng END,
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -741,16 +1001,17 @@ async function handleSaveUserSettings(req, res) {
       offset_maghrib = @off_maghrib,
       offset_isha = @off_isha,
       updated_at = SYSUTCDATETIME()
-    WHERE user_id=@user_id
+    WHERE user_id = @user_id
   `);
 
   const quietHours = body.quietHours;
   if (quietHours && typeof quietHours === "object") {
     const quietEnabled = quietHours.enabled ? 1 : 0;
-    const quietFrom = quietHours.from || null;
-    const quietTo = quietHours.to || null;
+    const quietFrom = normalizeTimeString(quietHours.from, "22:00");
+    const quietTo = normalizeTimeString(quietHours.to, "07:00");
 
-    await pool.request()
+    await pool
+      .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .input("quiet_enabled", sql.Bit, quietEnabled)
       .input("quiet_from", sql.Time, quietFrom)
@@ -758,34 +1019,29 @@ async function handleSaveUserSettings(req, res) {
       .query(`
         UPDATE dbo.prayer_configs
         SET
-          quiet_enabled=@quiet_enabled,
-          quiet_from=@quiet_from,
-          quiet_to=@quiet_to,
-          updated_at=SYSUTCDATETIME()
-        WHERE user_id=@user_id
+          quiet_enabled = @quiet_enabled,
+          quiet_from = @quiet_from,
+          quiet_to = @quiet_to,
+          updated_at = SYSUTCDATETIME()
+        WHERE user_id = @user_id
       `);
   }
 
   const pcs = Array.isArray(body.prayerConfigs) ? body.prayerConfigs : null;
   if (pcs) {
     for (const pc of pcs) {
-      const prayerName = String(
-        pc.prayerName || pc.prayer_name || ""
-      ).toLowerCase();
-
+      const prayerName = String(pc.prayerName || pc.prayer_name || "").toLowerCase();
       if (!PRAYERS.includes(prayerName)) continue;
 
       const afterType = String(
         pc.afterAdhan?.type || pc.after_type || "none"
       ).toLowerCase();
 
-      const afterPayload =
-        pc.afterAdhan?.payload ?? pc.after_payload ?? null;
-      const afterPayloadJson = afterPayload
-        ? JSON.stringify(afterPayload)
-        : null;
+      const afterPayload = pc.afterAdhan?.payload ?? pc.after_payload ?? null;
+      const afterPayloadJson = afterPayload ? JSON.stringify(afterPayload) : null;
 
-      await pool.request()
+      await pool
+        .request()
         .input("user_id", sql.UniqueIdentifier, userId)
         .input("prayer_name", sql.NVarChar(10), prayerName)
         .input("enabled", sql.Bit, pc.enabled === false ? 0 : 1)
@@ -799,21 +1055,33 @@ async function handleSaveUserSettings(req, res) {
         .query(`
           UPDATE dbo.prayer_configs
           SET
-            enabled=@enabled,
-            offset_min=@offset_min,
-            quiet_enabled=@quiet_enabled,
-            quiet_from=@quiet_from,
-            quiet_to=@quiet_to,
-            adhan_reciter_id=@adhan_reciter_id,
-            after_type=@after_type,
-            after_payload_json=@after_payload_json,
-            updated_at=SYSUTCDATETIME()
-          WHERE user_id=@user_id AND prayer_name=@prayer_name
+            enabled = @enabled,
+            offset_min = @offset_min,
+            quiet_enabled = @quiet_enabled,
+            quiet_from = @quiet_from,
+            quiet_to = @quiet_to,
+            adhan_reciter_id = @adhan_reciter_id,
+            after_type = @after_type,
+            after_payload_json = @after_payload_json,
+            updated_at = SYSUTCDATETIME()
+          WHERE user_id = @user_id AND prayer_name = @prayer_name
         `);
     }
   }
 
-  res.json({ ok: true });
+  const refreshed = await getUserProfileAndPrayers(pool, amazonUserId);
+  const settings = buildUserSettingsPayload(
+    amazonUserId,
+    refreshed.profile,
+    refreshed.prayers
+  );
+
+  res.json({
+    ok: true,
+    userKey: amazonUserId,
+    ...settings,
+    settings,
+  });
 }
 
 app.put("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
@@ -826,53 +1094,38 @@ app.get(
   asyncHandler(async (req, res) => {
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
-    const userId = await ensureUser(pool, amazonUserId);
-
-    const profileResult = await pool.request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`SELECT * FROM dbo.user_profiles WHERE user_id=@user_id`);
-
-    const prayerResult = await pool.request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`
-        SELECT prayer_name, enabled, offset_min
-        FROM dbo.prayer_configs
-        WHERE user_id=@user_id
-      `);
-
-    const p = profileResult.recordset[0] || {};
+    const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
 
     const perPrayerOffset = {};
     const enabledMap = {};
-    for (const r of prayerResult.recordset) {
+    for (const r of prayers) {
       perPrayerOffset[r.prayer_name] = r.offset_min || 0;
       enabledMap[r.prayer_name] = !!r.enabled;
     }
 
     const method = mapCalcMethodToAlAdhan(
-      p.calculation_method || "isna",
-      p.sect || "SUNNI"
+      profile.calculation_method || "isna",
+      profile.sect || "SUNNI"
     );
-    const school = madhhabToSchool(p.madhhab || "hanafi");
+    const school = madhhabToSchool(profile.madhhab || "hanafi");
 
     const hasCoords =
-      typeof p.latitude === "number" &&
-      Number.isFinite(p.latitude) &&
-      typeof p.longitude === "number" &&
-      Number.isFinite(p.longitude);
+      typeof profile.latitude === "number" &&
+      Number.isFinite(profile.latitude) &&
+      typeof profile.longitude === "number" &&
+      Number.isFinite(profile.longitude);
 
     const url = hasCoords
       ? `https://api.aladhan.com/v1/timings?latitude=${encodeURIComponent(
-          p.latitude
-        )}&longitude=${encodeURIComponent(p.longitude)}&method=${method}&school=${school}`
+          profile.latitude
+        )}&longitude=${encodeURIComponent(profile.longitude)}&method=${method}&school=${school}`
       : `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(
-          p.city || "Chicago"
+          profile.city || "Chicago"
         )}&country=${encodeURIComponent(
-          p.country || "US"
+          profile.country || "US"
         )}&method=${method}&school=${school}`;
 
     const resp = await fetch(url);
-
     if (!resp.ok) {
       return res.status(502).json({ error: "Prayer API upstream failed" });
     }
@@ -890,11 +1143,11 @@ app.get(
     };
 
     const globalOffsets = {
-      fajr: p.offset_fajr || 0,
-      dhuhr: p.offset_dhuhr || 0,
-      asr: p.offset_asr || 0,
-      maghrib: p.offset_maghrib || 0,
-      isha: p.offset_isha || 0,
+      fajr: profile.offset_fajr || 0,
+      dhuhr: profile.offset_dhuhr || 0,
+      asr: profile.offset_asr || 0,
+      maghrib: profile.offset_maghrib || 0,
+      isha: profile.offset_isha || 0,
     };
 
     const adjusted24 = {
@@ -917,16 +1170,23 @@ app.get(
 
     res.json({
       location: {
-        city: p.city || "Chicago",
-        country: p.country || "US",
-        timezone: p.timezone || "America/Chicago",
-        latitude: hasCoords ? p.latitude : null,
-        longitude: hasCoords ? p.longitude : null,
+        city: profile.city || "Chicago",
+        country: profile.country || "US",
+        timezone: profile.timezone || "America/Chicago",
+        latitude: hasCoords ? profile.latitude : null,
+        longitude: hasCoords ? profile.longitude : null,
+      },
+      mosque: {
+        id: profile.mosque_id || null,
+        name: profile.mosque_name || null,
+        address: profile.mosque_address || null,
+        latitude: typeof profile.mosque_lat === "number" ? profile.mosque_lat : null,
+        longitude: typeof profile.mosque_lng === "number" ? profile.mosque_lng : null,
       },
       method: {
-        sect: p.sect || "SUNNI",
-        calculationMethod: p.calculation_method || "isna",
-        madhhab: p.madhhab || "hanafi",
+        sect: profile.sect || "SUNNI",
+        calculationMethod: profile.calculation_method || "isna",
+        madhhab: profile.madhhab || "hanafi",
       },
       source: hasCoords ? "coordinates" : "city",
       enabled: enabledMap,
@@ -947,7 +1207,8 @@ app.get(
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
 
-    const result = await pool.request()
+    const result = await pool
+      .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .query(`
         SELECT device_id AS id, device_name AS name, platform
@@ -973,7 +1234,8 @@ app.post(
       return res.status(400).json({ error: "Provide {id, name}" });
     }
 
-    await pool.request()
+    await pool
+      .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .input("device_id", sql.NVarChar(255), String(id))
       .input("device_name", sql.NVarChar(255), String(name))
@@ -1001,7 +1263,8 @@ app.get(
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
 
-    const result = await pool.request()
+    const result = await pool
+      .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .query(`
         SELECT id, schedule_type, time_of_day, days_mask, enabled, device_id, payload_json, created_at
@@ -1077,7 +1340,8 @@ app.post(
       reciterId: payload.reciterId ? String(payload.reciterId) : null,
     });
 
-    const result = await pool.request()
+    const result = await pool
+      .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .input("schedule_type", sql.NVarChar(20), scheduleType)
       .input("time_of_day", sql.Time, timeOfDay)
@@ -1105,7 +1369,8 @@ app.delete(
 
     const id = String(req.params.id);
 
-    await pool.request()
+    await pool
+      .request()
       .input("id", sql.UniqueIdentifier, id)
       .input("user_id", sql.UniqueIdentifier, userId)
       .query(`

@@ -5,23 +5,37 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { apiFetch } from "../../lib/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
+import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
+type CountryCode = "US" | "PK";
 type Sect = "SUNNI" | "SHIA";
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
-type Offsets = Record<PrayerName, number>;
 type AfterType = "none" | "dua" | "surah";
+
+type JsonRecord = Record<string, unknown>;
+type Offsets = Record<PrayerName, number>;
+
+type AfterAdhan = {
+  type: AfterType;
+  payload: JsonRecord | null;
+};
 
 type PrayerConfig = {
   prayerName: PrayerName;
   enabled: boolean;
   offsetMin: number;
   quietEnabled: boolean;
-  quietFrom: string; // HH:MM
-  quietTo: string;   // HH:MM
+  quietFrom: string;
+  quietTo: string;
   adhanReciterId: string | null;
-  afterAdhan: { type: AfterType; payload: any | null };
+  afterAdhan: AfterAdhan;
 };
 
 type UserSettings = {
@@ -30,102 +44,419 @@ type UserSettings = {
   madhhab: "hanafi" | "shafi";
   calculationMethod: string;
   highLatitudeMethod: string;
-
-  country: string;
+  country: CountryCode;
   city: string;
   timezone: string;
-
+  latitude: number | null;
+  longitude: number | null;
   accountEnabled: boolean;
   globalOffsets: Offsets;
   prayerConfigs: PrayerConfig[];
 };
 
-type Reciter = { id: string; name: string; country?: string | null; style?: string | null; type?: string };
-type DuaItem = { id: string; title: string };
-type SurahItem = { number: number; nameEnglish: string };
-type Device = { id: string; name: string };
+type Reciter = {
+  id: string;
+  name: string;
+  country?: string | null;
+  style?: string | null;
+  type?: string;
+};
+
+type DuaItem = {
+  id: string;
+  title: string;
+};
+
+type SurahItem = {
+  number: number;
+  nameEnglish: string;
+};
+
+type Device = {
+  id: string;
+  name: string;
+};
+
+type SchedulePayload = {
+  surahNumber: number;
+  title?: string | null;
+  reciterId?: string | null;
+};
 
 type Schedule = {
   id: string;
   scheduleType: "tilawat";
-  timeOfDay: string; // HH:MM
-  days: boolean[]; // Sun..Sat
+  timeOfDay: string;
+  days: boolean[];
   enabled: boolean;
   deviceId: string | null;
-  payload: { surahNumber: number; title?: string | null; reciterId?: string | null };
+  payload: SchedulePayload;
+  createdAt?: string;
 };
 
 type SettingsProps = {
-  onboardingData: any;
-  setOnboardingData: (data: any) => void;
+  onboardingData: Record<string, unknown>;
+  setOnboardingData: (data: Record<string, unknown>) => void;
 };
 
 const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const NONE_VALUE = "__none__";
+
+const COUNTRY_OPTIONS: { value: CountryCode; label: string }[] = [
+  { value: "US", label: "United States" },
+  { value: "PK", label: "Pakistan" },
+];
+
+const TIMEZONE_OPTIONS: Record<
+  CountryCode,
+  { value: string; label: string }[]
+> = {
+  US: [
+    { value: "America/New_York", label: "America/New_York (Eastern)" },
+    { value: "America/Chicago", label: "America/Chicago (Central)" },
+    { value: "America/Denver", label: "America/Denver (Mountain)" },
+    { value: "America/Los_Angeles", label: "America/Los_Angeles (Pacific)" },
+  ],
+  PK: [{ value: "Asia/Karachi", label: "Asia/Karachi (Pakistan Standard Time)" }],
+};
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeCountryCode(value: unknown): CountryCode {
+  const v = String(value ?? "")
+    .trim()
+    .toUpperCase();
+
+  if (v === "PK" || v === "PAKISTAN") return "PK";
+  return "US";
+}
+
+function getDefaultTimezone(country: CountryCode): string {
+  return country === "PK" ? "Asia/Karachi" : "America/Chicago";
+}
+
+function normalizeTimezone(country: CountryCode, timezone: unknown): string {
+  const tz = asString(timezone);
+  const allowed = TIMEZONE_OPTIONS[country].map((item) => item.value);
+  if (tz && allowed.includes(tz)) return tz;
+  return getDefaultTimezone(country);
+}
 
 function defaultOffsets(): Offsets {
-  return { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
+  return {
+    fajr: 0,
+    dhuhr: 0,
+    asr: 0,
+    maghrib: 0,
+    isha: 0,
+  };
 }
+
 function defaultPrayerConfigs(): PrayerConfig[] {
-  return PRAYERS.map((p) => ({
-    prayerName: p,
+  return PRAYERS.map((prayerName) => ({
+    prayerName,
     enabled: true,
     offsetMin: 0,
     quietEnabled: false,
     quietFrom: "22:00",
     quietTo: "07:00",
     adhanReciterId: null,
-    afterAdhan: { type: "none", payload: null },
+    afterAdhan: {
+      type: "none",
+      payload: null,
+    },
   }));
 }
 
-function normalizeSettings(payload: any): UserSettings {
-  const s = payload?.settings ?? payload ?? {};
-  const sect: Sect = (s.sect ?? (s.shia ? "SHIA" : "SUNNI")) as Sect;
+function safeParseJson(value: unknown): JsonRecord | null {
+  if (typeof value !== "string" || !value.trim()) return null;
 
-  const globalOffsets: Offsets = {
-    ...defaultOffsets(),
-    ...(s.globalOffsets || s.offsets || {}),
-  };
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
-  const pcsIn = Array.isArray(s.prayerConfigs) ? s.prayerConfigs : [];
-  const pcs = defaultPrayerConfigs().map((d) => {
-    const found = pcsIn.find((x: any) => (x.prayerName || x.prayer_name) === d.prayerName);
-    if (!found) return d;
+function normalizeAfterAdhan(source: unknown): AfterAdhan {
+  if (!isRecord(source)) {
+    return { type: "none", payload: null };
+  }
+
+  if (isRecord(source.afterAdhan)) {
+    const nestedType =
+      source.afterAdhan.type === "dua" || source.afterAdhan.type === "surah"
+        ? source.afterAdhan.type
+        : "none";
+
     return {
-      prayerName: d.prayerName,
-      enabled: !!(found.enabled ?? true),
-      offsetMin: Number(found.offsetMin ?? found.offset_min ?? 0),
-      quietEnabled: !!(found.quietEnabled ?? found.quiet_enabled ?? false),
-      quietFrom: (found.quietFrom ?? found.quiet_from ?? "22:00").slice(0,5),
-      quietTo: (found.quietTo ?? found.quiet_to ?? "07:00").slice(0,5),
-      adhanReciterId: found.adhanReciterId ?? found.adhan_reciter_id ?? null,
-      afterAdhan: found.afterAdhan ?? { type: found.after_type ?? "none", payload: found.after_payload_json ? JSON.parse(found.after_payload_json) : null }
+      type: nestedType,
+      payload: isRecord(source.afterAdhan.payload)
+        ? source.afterAdhan.payload
+        : null,
     };
-  });
+  }
+
+  const flatType =
+    source.after_type === "dua" || source.after_type === "surah"
+      ? source.after_type
+      : "none";
 
   return {
-    sect,
-    language: s.language ?? "en",
-    madhhab: (s.madhhab ?? "hanafi") === "shafi" ? "shafi" : "hanafi",
-    calculationMethod: s.calculationMethod ?? "isna",
-    highLatitudeMethod: s.highLatitudeMethod ?? "automatic",
-    country: s.country ?? "",
-    city: s.city ?? "",
-    timezone: s.timezone ?? "",
-    accountEnabled: !!(s.accountEnabled ?? s.account_enabled ?? false),
-    globalOffsets,
-    prayerConfigs: pcs,
+    type: flatType,
+    payload: safeParseJson(source.after_payload_json),
   };
 }
 
-async function saveSettings(payload: any) {
-  const put = await apiFetch("/api/user/settings", { method: "PUT", body: JSON.stringify(payload) });
-  if (put.ok) return put;
-  return apiFetch("/api/user/settings", { method: "POST", body: JSON.stringify(payload) });
+function normalizePrayerConfigs(source: unknown): PrayerConfig[] {
+  const incoming = Array.isArray(source)
+    ? source.filter((item): item is JsonRecord => isRecord(item))
+    : [];
+
+  return defaultPrayerConfigs().map((base) => {
+    const found = incoming.find((item) => {
+      const prayerName =
+        asString(item.prayerName)?.toLowerCase() ||
+        asString(item.prayer_name)?.toLowerCase() ||
+        "";
+      return prayerName === base.prayerName;
+    });
+
+    if (!found) return base;
+
+    return {
+      prayerName: base.prayerName,
+      enabled: found.enabled !== false,
+      offsetMin: asNumber(found.offsetMin) ?? asNumber(found.offset_min) ?? 0,
+      quietEnabled:
+        asBoolean(found.quietEnabled) ??
+        asBoolean(found.quiet_enabled) ??
+        false,
+      quietFrom:
+        (asString(found.quietFrom) ??
+          asString(found.quiet_from) ??
+          "22:00").slice(0, 5),
+      quietTo:
+        (asString(found.quietTo) ??
+          asString(found.quiet_to) ??
+          "07:00").slice(0, 5),
+      adhanReciterId:
+        asString(found.adhanReciterId) ??
+        asString(found.adhan_reciter_id),
+      afterAdhan: normalizeAfterAdhan(found),
+    };
+  });
 }
 
-export default function Settings({ onboardingData, setOnboardingData }: SettingsProps) {
+function normalizeSettings(payload: unknown): UserSettings {
+  const root = isRecord(payload) ? payload : {};
+  const src = isRecord(root.settings) ? root.settings : root;
+
+  const country = normalizeCountryCode(src.country);
+
+  const offsetsSource = isRecord(src.globalOffsets)
+    ? src.globalOffsets
+    : isRecord(src.offsets)
+    ? src.offsets
+    : {};
+
+  return {
+    sect: src.sect === "SHIA" || src.shia === true ? "SHIA" : "SUNNI",
+    language: asString(src.language) ?? "en",
+    madhhab:
+      (asString(src.madhhab) ?? "hanafi").toLowerCase() === "shafi"
+        ? "shafi"
+        : "hanafi",
+    calculationMethod:
+      asString(src.calculationMethod) ??
+      asString(src.calculation_method) ??
+      "isna",
+    highLatitudeMethod:
+      asString(src.highLatitudeMethod) ??
+      asString(src.high_latitude_method) ??
+      "automatic",
+    country,
+    city: asString(src.city) ?? (country === "PK" ? "Karachi" : "Chicago"),
+    timezone: normalizeTimezone(country, src.timezone),
+    latitude: asNumber(src.latitude),
+    longitude: asNumber(src.longitude),
+    accountEnabled:
+      asBoolean(src.accountEnabled) ??
+      asBoolean(src.account_enabled) ??
+      false,
+    globalOffsets: {
+      fajr: asNumber(offsetsSource.fajr) ?? 0,
+      dhuhr: asNumber(offsetsSource.dhuhr) ?? 0,
+      asr: asNumber(offsetsSource.asr) ?? 0,
+      maghrib: asNumber(offsetsSource.maghrib) ?? 0,
+      isha: asNumber(offsetsSource.isha) ?? 0,
+    },
+    prayerConfigs: normalizePrayerConfigs(src.prayerConfigs),
+  };
+}
+
+function normalizeReciters(payload: unknown): Reciter[] {
+  const list = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.reciters)
+    ? payload.reciters
+    : [];
+
+  return list
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => ({
+      id: asString(item.id) ?? "",
+      name: asString(item.name) ?? "",
+      country: asString(item.country),
+      style: asString(item.style),
+      type: asString(item.type) ?? undefined,
+    }))
+    .filter((item) => item.id && item.name);
+}
+
+function normalizeDuas(payload: unknown): DuaItem[] {
+  if (!isRecord(payload) || !Array.isArray(payload.categories)) return [];
+
+  const flat: DuaItem[] = [];
+
+  for (const category of payload.categories) {
+    if (!isRecord(category) || !Array.isArray(category.items)) continue;
+
+    for (const item of category.items) {
+      if (!isRecord(item)) continue;
+
+      const id = asString(item.id) ?? "";
+      const title = asString(item.title) ?? "";
+      if (id && title) flat.push({ id, title });
+    }
+  }
+
+  return flat;
+}
+
+function normalizeSurahs(payload: unknown): SurahItem[] {
+  if (!isRecord(payload) || !Array.isArray(payload.surahs)) return [];
+
+  return payload.surahs
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => ({
+      number: asNumber(item.number) ?? NaN,
+      nameEnglish: asString(item.nameEnglish) ?? "",
+    }))
+    .filter((item) => Number.isFinite(item.number) && item.number >= 1 && !!item.nameEnglish);
+}
+
+function normalizeDevices(payload: unknown): Device[] {
+  const list = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.devices)
+    ? payload.devices
+    : [];
+
+  return list
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => ({
+      id: asString(item.id) ?? "",
+      name: asString(item.name) ?? "",
+    }))
+    .filter((item) => item.id && item.name);
+}
+
+function normalizeSchedules(payload: unknown): Schedule[] {
+  if (!isRecord(payload) || !Array.isArray(payload.schedules)) return [];
+
+  return payload.schedules
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => ({
+      id: asString(item.id) ?? "",
+      scheduleType: "tilawat" as const,
+      timeOfDay: (asString(item.timeOfDay) ?? "06:30").slice(0, 5),
+      days:
+        Array.isArray(item.days) && item.days.length === 7
+          ? item.days.map((d) => d === true)
+          : [true, true, true, true, true, true, true],
+      enabled: item.enabled !== false,
+      deviceId: asString(item.deviceId),
+      payload: isRecord(item.payload)
+        ? {
+            surahNumber: asNumber(item.payload.surahNumber) ?? 1,
+            title: asString(item.payload.title),
+            reciterId: asString(item.payload.reciterId),
+          }
+        : { surahNumber: 1 },
+      createdAt: asString(item.createdAt) ?? undefined,
+    }))
+    .filter((item) => !!item.id);
+}
+
+async function saveSettings(payload: JsonRecord) {
+  const put = await apiFetch("/api/user/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+  if (put.ok) return put;
+
+  return apiFetch("/api/user/settings", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function geocodeLocation(city: string, country: CountryCode) {
+  const params = new URLSearchParams({
+    city: city.trim(),
+    country,
+  });
+
+  const res = await apiFetch(`/api/geocode?${params.toString()}`);
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    throw new Error(
+      (isRecord(data) && asString(data.error)) ||
+        "Could not geocode the selected city."
+    );
+  }
+
+  if (!isRecord(data)) {
+    throw new Error("Invalid geocoding response.");
+  }
+
+  const lat = asNumber(data.lat);
+  const lng = asNumber(data.lng);
+  const timezone = asString(data.timezone);
+
+  if (lat == null || lng == null) {
+    throw new Error("Geocoding did not return valid coordinates.");
+  }
+
+  return {
+    lat,
+    lng,
+    timezone: normalizeTimezone(country, timezone),
+  };
+}
+
+export default function Settings({
+  onboardingData,
+  setOnboardingData,
+}: SettingsProps) {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [reciters, setReciters] = useState<Reciter[]>([]);
   const [duas, setDuas] = useState<DuaItem[]>([]);
@@ -137,13 +468,20 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // schedule form
   const [newTime, setNewTime] = useState("06:30");
-  const [newDays, setNewDays] = useState<boolean[]>([true,true,true,true,true,true,true]);
+  const [newDays, setNewDays] = useState<boolean[]>([
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+  ]);
   const [newSurah, setNewSurah] = useState<number>(1);
   const [newTitle, setNewTitle] = useState<string>("");
-  const [newReciterId, setNewReciterId] = useState<string>("");
-  const [newDeviceId, setNewDeviceId] = useState<string>("");
+  const [newReciterId, setNewReciterId] = useState<string>(NONE_VALUE);
+  const [newDeviceId, setNewDeviceId] = useState<string>(NONE_VALUE);
 
   const offsetsRows = useMemo(() => PRAYERS, []);
 
@@ -152,96 +490,162 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
       try {
         setError(null);
 
-        const token = localStorage.getItem("amazon_access_token");
+        const token = getStoredAmazonToken();
         if (!token) {
-          setError("Please connect Amazon (Onboarding Step 2) to use Settings.");
+          setError("Please connect Amazon in onboarding step 2 to use settings.");
           return;
         }
 
-        const sRes = await apiFetch("/api/user/settings");
-        if (!sRes.ok) throw new Error(`Failed to load settings (${sRes.status})`);
-        const sJson = await sRes.json();
-        setSettings(normalizeSettings(sJson));
+        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
+          await Promise.all([
+            apiFetch("/api/user/settings"),
+            apiFetch("/api/library/reciters?type=adhan"),
+            apiFetch("/api/duas"),
+            apiFetch("/api/quran/surahs"),
+            apiFetch("/api/alexa/devices"),
+          ]);
 
-        // reciters (adhan)
-        const rRes = await apiFetch("/api/library/reciters?type=adhan");
-        if (rRes.ok) {
-          const rJson = await rRes.json();
-          const list = Array.isArray(rJson) ? rJson : (rJson.reciters || []);
-          setReciters(list.map((x: any) => ({ id: String(x.id), name: String(x.name), country: x.country ?? null, style: x.style ?? null, type: x.type })));
+        if (!settingsRes.ok) {
+          throw new Error(`Failed to load settings (${settingsRes.status})`);
         }
 
-        // duas
-        const dRes = await apiFetch("/api/duas");
-        if (dRes.ok) {
-          const j = await dRes.json();
-          const flat: DuaItem[] = [];
-          for (const c of (j.categories || [])) {
-            for (const it of (c.items || [])) {
-              flat.push({ id: String(it.id), title: String(it.title) });
-            }
+        const settingsJson = await settingsRes.json();
+        setSettings(normalizeSettings(settingsJson));
+
+        if (recitersRes.ok) {
+          const recitersJson = await recitersRes.json();
+          setReciters(normalizeReciters(recitersJson));
+        }
+
+        if (duasRes.ok) {
+          const duasJson = await duasRes.json();
+          setDuas(normalizeDuas(duasJson));
+        }
+
+        if (surahsRes.ok) {
+          const surahsJson = await surahsRes.json();
+          const normalizedSurahs = normalizeSurahs(surahsJson);
+          setSurahs(normalizedSurahs);
+          if (normalizedSurahs.length > 0) {
+            setNewSurah(normalizedSurahs[0].number);
           }
-          setDuas(flat);
         }
 
-        // surahs
-        const surRes = await apiFetch("/api/quran/surahs");
-        if (surRes.ok) {
-          const j = await surRes.json();
-          setSurahs((j.surahs || []).map((s: any) => ({ number: Number(s.number), nameEnglish: String(s.nameEnglish) })));
+        if (devicesRes.ok) {
+          const devicesJson = await devicesRes.json();
+          setDevices(normalizeDevices(devicesJson));
         }
 
-        // devices
-        const devRes = await apiFetch("/api/alexa/devices");
-        if (devRes.ok) {
-          const j = await devRes.json();
-          const list = Array.isArray(j) ? j : (j.devices || []);
-          setDevices(list.map((x: any) => ({ id: String(x.id), name: String(x.name) })));
-        }
-
-        // schedules
         await loadSchedules();
-
-      } catch (e: any) {
-        setError(e?.message || "Unable to load settings.");
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Unable to load settings.");
       }
     }
 
-    loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadAll();
   }, []);
 
   async function loadSchedules() {
     const res = await apiFetch("/api/user/schedules");
     if (!res.ok) return;
-    const j = await res.json();
-    setSchedules((j.schedules || []) as Schedule[]);
+
+    const json = await res.json();
+    setSchedules(normalizeSchedules(json));
   }
 
-  const updateField = <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
-    if (!settings) return;
-    setSettings({ ...settings, [key]: value });
+  const updateField = <K extends keyof UserSettings>(
+    key: K,
+    value: UserSettings[K]
+  ) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      return { ...prev, [key]: value };
+    });
   };
 
-  const updatePrayerConfig = (prayerName: PrayerName, patch: Partial<PrayerConfig>) => {
-    if (!settings) return;
-    const next = settings.prayerConfigs.map((pc) =>
-      pc.prayerName === prayerName ? { ...pc, ...patch } : pc
-    );
-    setSettings({ ...settings, prayerConfigs: next });
+  const updatePrayerConfig = (
+    prayerName: PrayerName,
+    patch: Partial<PrayerConfig>
+  ) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+
+      return {
+        ...prev,
+        prayerConfigs: prev.prayerConfigs.map((pc) =>
+          pc.prayerName === prayerName ? { ...pc, ...patch } : pc
+        ),
+      };
+    });
+  };
+
+  const handleCountryChange = (country: CountryCode) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+
+      const nextTimezone =
+        country === "PK"
+          ? "Asia/Karachi"
+          : prev.timezone === "Asia/Karachi"
+          ? "America/Chicago"
+          : normalizeTimezone(country, prev.timezone);
+
+      return {
+        ...prev,
+        country,
+        timezone: nextTimezone,
+        city: prev.city || (country === "PK" ? "Karachi" : "Chicago"),
+        latitude: null,
+        longitude: null,
+      };
+    });
   };
 
   const handleSave = async () => {
     if (!settings) return;
+
     setSaving(true);
     setSaveMessage(null);
     setError(null);
 
     try {
-      const payload = {
+      if (!settings.city.trim()) {
+        throw new Error("City is required.");
+      }
+
+      const geo = await geocodeLocation(settings.city, settings.country);
+
+      const syncedSettings: UserSettings = {
         ...settings,
-        shia: settings.sect === "SHIA",
-        offsets: settings.globalOffsets,
+        latitude: geo.lat,
+        longitude: geo.lng,
+        timezone: geo.timezone,
+      };
+
+      const payload: JsonRecord = {
+        sect: syncedSettings.sect,
+        shia: syncedSettings.sect === "SHIA",
+        language: syncedSettings.language,
+        madhhab: syncedSettings.madhhab,
+        calculationMethod: syncedSettings.calculationMethod,
+        highLatitudeMethod: syncedSettings.highLatitudeMethod,
+        country: syncedSettings.country,
+        city: syncedSettings.city,
+        timezone: syncedSettings.timezone,
+        latitude: syncedSettings.latitude,
+        longitude: syncedSettings.longitude,
+        accountEnabled: syncedSettings.accountEnabled,
+        globalOffsets: syncedSettings.globalOffsets,
+        prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
+          prayerName: pc.prayerName,
+          enabled: pc.enabled,
+          offsetMin: pc.offsetMin,
+          quietEnabled: pc.quietEnabled,
+          quietFrom: pc.quietFrom,
+          quietTo: pc.quietTo,
+          adhanReciterId: pc.adhanReciterId,
+          afterAdhan: pc.afterAdhan,
+        })),
       };
 
       const res = await saveSettings(payload);
@@ -250,70 +654,95 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
         throw new Error(`Save failed (${res.status}). ${msg}`.trim());
       }
 
+      setSettings(syncedSettings);
+
       setOnboardingData({
         ...onboardingData,
         prayerSettings: {
-          ...(onboardingData.prayerSettings || {}),
-          sect: settings.sect,
-          shia: settings.sect === "SHIA",
-          madhhab: settings.madhhab,
-          calculationMethod: settings.calculationMethod,
-          highLatitudeMode: settings.highLatitudeMethod,
-          offsets: settings.globalOffsets,
-        }
+          ...(isRecord(onboardingData.prayerSettings)
+            ? onboardingData.prayerSettings
+            : {}),
+          sect: syncedSettings.sect,
+          shia: syncedSettings.sect === "SHIA",
+          madhhab: syncedSettings.madhhab,
+          calculationMethod: syncedSettings.calculationMethod,
+          highLatitudeMode: syncedSettings.highLatitudeMethod,
+          offsets: syncedSettings.globalOffsets,
+        },
+        location: {
+          ...(isRecord(onboardingData.location) ? onboardingData.location : {}),
+          country: syncedSettings.country,
+          city: syncedSettings.city,
+          timezone: syncedSettings.timezone,
+          latitude: syncedSettings.latitude,
+          longitude: syncedSettings.longitude,
+        },
+        accountEnabled: syncedSettings.accountEnabled,
+        prayerConfigs: syncedSettings.prayerConfigs,
       });
 
-      setSaveMessage("Settings saved.");
-    } catch (e: any) {
-      setError(e?.message || "Could not save settings.");
+      setSaveMessage("Settings saved and location synced.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not save settings.");
     } finally {
       setSaving(false);
     }
   };
 
   const toggleDay = (idx: number) => {
-    setNewDays((prev) => prev.map((v, i) => (i === idx ? !v : v)));
+    setNewDays((prev) => prev.map((value, i) => (i === idx ? !value : value)));
   };
 
   const createSchedule = async () => {
     setError(null);
+
     try {
-      const payload = {
+      const payload: JsonRecord = {
         scheduleType: "tilawat",
         timeOfDay: newTime,
         days: newDays,
         enabled: true,
-        deviceId: newDeviceId || null,
+        deviceId: newDeviceId === NONE_VALUE ? null : newDeviceId,
         payload: {
           surahNumber: newSurah,
-          title: newTitle || null,
-          reciterId: newReciterId || null,
+          title: newTitle.trim() || null,
+          reciterId: newReciterId === NONE_VALUE ? null : newReciterId,
         },
       };
 
-      const res = await apiFetch("/api/user/schedules", { method: "POST", body: JSON.stringify(payload) });
+      const res = await apiFetch("/api/user/schedules", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
         throw new Error(`Could not create schedule (${res.status}). ${msg}`.trim());
       }
+
       await loadSchedules();
       setNewTitle("");
-    } catch (e: any) {
-      setError(e?.message || "Could not create schedule.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not create schedule.");
     }
   };
 
   const deleteSchedule = async (id: string) => {
     setError(null);
+
     try {
-      const res = await apiFetch(`/api/user/schedules/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/user/schedules/${id}`, {
+        method: "DELETE",
+      });
+
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
         throw new Error(`Delete failed (${res.status}). ${msg}`.trim());
       }
+
       await loadSchedules();
-    } catch (e: any) {
-      setError(e?.message || "Could not delete schedule.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not delete schedule.");
     }
   };
 
@@ -329,7 +758,7 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
           <div>
             <h1 className="text-white text-xl mb-1">Settings</h1>
             <p className="text-slate-400 text-sm">
-              Sect, calculation, offsets, per-prayer Adhan, and schedules.
+              Sect, calculation, location sync, per-prayer Adhan, and schedules.
             </p>
           </div>
 
@@ -338,6 +767,7 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
               {error}
             </div>
           )}
+
           {saveMessage && (
             <div className="text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-900 rounded-md px-3 py-2">
               {saveMessage}
@@ -348,14 +778,16 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
             <p className="text-slate-400 text-sm">Loading…</p>
           ) : (
             <>
-              {/* Sect + Calculation + Location */}
               <div className="grid md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <h2 className="text-white text-lg">Sect & Calculation</h2>
 
                   <div className="space-y-2">
                     <Label className="text-slate-200">Sect</Label>
-                    <Select value={settings.sect} onValueChange={(v: string) => updateField("sect", v as Sect)}>
+                    <Select
+                      value={settings.sect}
+                      onValueChange={(v: string) => updateField("sect", v as Sect)}
+                    >
                       <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                         <SelectValue />
                       </SelectTrigger>
@@ -368,7 +800,12 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                   <div className="space-y-2">
                     <Label className="text-slate-200">Madhhab</Label>
-                    <Select value={settings.madhhab} onValueChange={(v: string) => updateField("madhhab", v as any)}>
+                    <Select
+                      value={settings.madhhab}
+                      onValueChange={(v: string) =>
+                        updateField("madhhab", v === "shafi" ? "shafi" : "hanafi")
+                      }
+                    >
                       <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                         <SelectValue />
                       </SelectTrigger>
@@ -381,7 +818,12 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                   <div className="space-y-2">
                     <Label className="text-slate-200">Calculation method</Label>
-                    <Select value={settings.calculationMethod} onValueChange={(v: string) => updateField("calculationMethod", v)}>
+                    <Select
+                      value={settings.calculationMethod}
+                      onValueChange={(v: string) =>
+                        updateField("calculationMethod", v)
+                      }
+                    >
                       <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                         <SelectValue />
                       </SelectTrigger>
@@ -392,19 +834,27 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                         <SelectItem value="karachi">Karachi</SelectItem>
                         <SelectItem value="makkah">Makkah</SelectItem>
                         <SelectItem value="ummAlQura">Umm Al-Qura</SelectItem>
+                        <SelectItem value="tehran">Tehran</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
 
                   <div className="space-y-2">
                     <Label className="text-slate-200">High latitude rule</Label>
-                    <Select value={settings.highLatitudeMethod} onValueChange={(v: string) => updateField("highLatitudeMethod", v)}>
+                    <Select
+                      value={settings.highLatitudeMethod}
+                      onValueChange={(v: string) =>
+                        updateField("highLatitudeMethod", v)
+                      }
+                    >
                       <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-slate-900 border-slate-700">
                         <SelectItem value="automatic">Automatic</SelectItem>
-                        <SelectItem value="middle_of_the_night">Middle of the Night</SelectItem>
+                        <SelectItem value="middle_of_the_night">
+                          Middle of the Night
+                        </SelectItem>
                         <SelectItem value="one_seventh">One Seventh</SelectItem>
                         <SelectItem value="angle_based">Angle Based</SelectItem>
                       </SelectContent>
@@ -412,10 +862,16 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                   </div>
 
                   <div className="border-t border-slate-800 pt-6">
-                    <h3 className="text-white text-lg mb-2">Timing offsets (minutes)</h3>
+                    <h3 className="text-white text-lg mb-2">
+                      Timing offsets (minutes)
+                    </h3>
+
                     <div className="space-y-3">
                       {offsetsRows.map((p) => (
-                        <div key={p} className="flex items-center justify-between gap-4">
+                        <div
+                          key={p}
+                          className="flex items-center justify-between gap-4"
+                        >
                           <Label className="text-slate-200 capitalize">{p}</Label>
                           <Input
                             type="number"
@@ -437,9 +893,16 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                     <div className="flex items-center justify-between rounded-lg border border-slate-700 px-4 py-3">
                       <div>
                         <Label className="text-slate-200">Account enabled</Label>
-                        <p className="text-xs text-slate-400">Must be enabled for device playback and schedules.</p>
+                        <p className="text-xs text-slate-400">
+                          Must be enabled for device playback and schedules.
+                        </p>
                       </div>
-                      <Switch checked={settings.accountEnabled} onCheckedChange={(v: boolean) => updateField("accountEnabled", v)} />
+                      <Switch
+                        checked={settings.accountEnabled}
+                        onCheckedChange={(v: boolean) =>
+                          updateField("accountEnabled", v)
+                        }
+                      />
                     </div>
                   </div>
                 </div>
@@ -448,57 +911,150 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                   <h2 className="text-white text-lg">Location</h2>
 
                   <div className="space-y-2">
-                    <Label className="text-slate-200">City</Label>
-                    <Input className="bg-slate-900 border-slate-700 text-slate-100" value={settings.city} onChange={(e) => updateField("city", e.target.value)} />
-                  </div>
-                  <div className="space-y-2">
                     <Label className="text-slate-200">Country</Label>
-                    <Input className="bg-slate-900 border-slate-700 text-slate-100" value={settings.country} onChange={(e) => updateField("country", e.target.value)} />
+                    <Select
+                      value={settings.country}
+                      onValueChange={(v: string) =>
+                        handleCountryChange(v === "PK" ? "PK" : "US")
+                      }
+                    >
+                      <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-700">
+                        {COUNTRY_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-slate-200">City</Label>
+                    <Input
+                      className="bg-slate-900 border-slate-700 text-slate-100"
+                      value={settings.city}
+                      onChange={(e) => {
+                        updateField("city", e.target.value);
+                        updateField("latitude", null);
+                        updateField("longitude", null);
+                      }}
+                      placeholder={settings.country === "PK" ? "Karachi" : "Chicago"}
+                    />
+                  </div>
+
                   <div className="space-y-2">
                     <Label className="text-slate-200">Time zone</Label>
-                    <Input className="bg-slate-900 border-slate-700 text-slate-100" value={settings.timezone} onChange={(e) => updateField("timezone", e.target.value)} />
+                    <Select
+                      value={settings.timezone}
+                      onValueChange={(v: string) => updateField("timezone", v)}
+                    >
+                      <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-slate-900 border-slate-700">
+                        {TIMEZONE_OPTIONS[settings.country].map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm">
+                    <div className="text-slate-200 mb-1">Saved coordinates</div>
+                    <div className="text-slate-400">
+                      {settings.latitude != null && settings.longitude != null
+                        ? `${settings.latitude.toFixed(6)}, ${settings.longitude.toFixed(6)}`
+                        : "Will be refreshed from your city when you save settings."}
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Per-prayer controls */}
               <div className="border-t border-slate-800 pt-6">
                 <h2 className="text-white text-lg mb-4">Per-prayer controls</h2>
 
                 {settings.prayerConfigs.map((pc) => (
-                  <div key={pc.prayerName} className="rounded-xl border border-slate-800 p-4 mb-4">
+                  <div
+                    key={pc.prayerName}
+                    className="rounded-xl border border-slate-800 p-4 mb-4"
+                  >
                     <div className="flex items-center justify-between">
-                      <h3 className="text-slate-100 capitalize">{pc.prayerName}</h3>
-                      <Switch checked={pc.enabled} onCheckedChange={(v: boolean) => updatePrayerConfig(pc.prayerName, { enabled: v })} />
+                      <h3 className="text-slate-100 capitalize">
+                        {pc.prayerName}
+                      </h3>
+                      <Switch
+                        checked={pc.enabled}
+                        onCheckedChange={(v: boolean) =>
+                          updatePrayerConfig(pc.prayerName, { enabled: v })
+                        }
+                      />
                     </div>
 
                     <div className="grid md:grid-cols-3 gap-4 mt-4">
                       <div className="space-y-2">
                         <Label className="text-slate-200">Offset (min)</Label>
-                        <Input type="number" className="bg-slate-900 border-slate-700 text-slate-100" value={pc.offsetMin}
-                          onChange={(e) => updatePrayerConfig(pc.prayerName, { offsetMin: Number(e.target.value || 0) })} />
+                        <Input
+                          type="number"
+                          className="bg-slate-900 border-slate-700 text-slate-100"
+                          value={pc.offsetMin}
+                          onChange={(e) =>
+                            updatePrayerConfig(pc.prayerName, {
+                              offsetMin: Number(e.target.value || 0),
+                            })
+                          }
+                        />
                       </div>
 
                       <div className="flex items-center justify-between rounded-lg border border-slate-700 px-4 py-3 mt-6 md:mt-0">
                         <div>
                           <Label className="text-slate-200">Quiet window</Label>
-                          <p className="text-xs text-slate-400">Don’t play during this time.</p>
+                          <p className="text-xs text-slate-400">
+                            Don’t play during this time.
+                          </p>
                         </div>
-                        <Switch checked={pc.quietEnabled} onCheckedChange={(v: boolean) => updatePrayerConfig(pc.prayerName, { quietEnabled: v })} />
+                        <Switch
+                          checked={pc.quietEnabled}
+                          onCheckedChange={(v: boolean) =>
+                            updatePrayerConfig(pc.prayerName, {
+                              quietEnabled: v,
+                            })
+                          }
+                        />
                       </div>
 
                       {pc.quietEnabled ? (
                         <div className="grid grid-cols-2 gap-3 md:col-span-3">
                           <div className="space-y-2">
                             <Label className="text-slate-200">From</Label>
-                            <Input type="time" className="bg-slate-900 border-slate-700 text-slate-100" value={pc.quietFrom}
-                              onChange={(e) => updatePrayerConfig(pc.prayerName, { quietFrom: e.target.value })} />
+                            <Input
+                              type="time"
+                              className="bg-slate-900 border-slate-700 text-slate-100"
+                              value={pc.quietFrom}
+                              onChange={(e) =>
+                                updatePrayerConfig(pc.prayerName, {
+                                  quietFrom: e.target.value,
+                                })
+                              }
+                            />
                           </div>
+
                           <div className="space-y-2">
                             <Label className="text-slate-200">To</Label>
-                            <Input type="time" className="bg-slate-900 border-slate-700 text-slate-100" value={pc.quietTo}
-                              onChange={(e) => updatePrayerConfig(pc.prayerName, { quietTo: e.target.value })} />
+                            <Input
+                              type="time"
+                              className="bg-slate-900 border-slate-700 text-slate-100"
+                              value={pc.quietTo}
+                              onChange={(e) =>
+                                updatePrayerConfig(pc.prayerName, {
+                                  quietTo: e.target.value,
+                                })
+                              }
+                            />
                           </div>
                         </div>
                       ) : null}
@@ -507,14 +1063,26 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                     <div className="grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-800">
                       <div className="space-y-2">
                         <Label className="text-slate-200">Adhan reciter</Label>
-                        <Select value={pc.adhanReciterId ?? ""} onValueChange={(v) => updatePrayerConfig(pc.prayerName, { adhanReciterId: v })}>
+                        <Select
+                          value={pc.adhanReciterId ?? NONE_VALUE}
+                          onValueChange={(v: string) =>
+                            updatePrayerConfig(pc.prayerName, {
+                              adhanReciterId: v === NONE_VALUE ? null : v,
+                            })
+                          }
+                        >
                           <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                             <SelectValue placeholder="Select reciter" />
                           </SelectTrigger>
                           <SelectContent className="bg-slate-900 border-slate-700">
+                            <SelectItem value={NONE_VALUE}>
+                              No reciter selected
+                            </SelectItem>
                             {reciters.map((r) => (
                               <SelectItem key={r.id} value={r.id}>
-                                {r.name}{r.country ? ` · ${r.country}` : ""}{r.style ? ` · ${r.style}` : ""}
+                                {r.name}
+                                {r.country ? ` · ${r.country}` : ""}
+                                {r.style ? ` · ${r.style}` : ""}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -523,7 +1091,17 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                       <div className="space-y-2">
                         <Label className="text-slate-200">After Adhan</Label>
-                        <Select value={pc.afterAdhan.type} onValueChange={(v) => updatePrayerConfig(pc.prayerName, { afterAdhan: { type: v as AfterType, payload: null } })}>
+                        <Select
+                          value={pc.afterAdhan.type}
+                          onValueChange={(v: string) =>
+                            updatePrayerConfig(pc.prayerName, {
+                              afterAdhan: {
+                                type: v as AfterType,
+                                payload: null,
+                              },
+                            })
+                          }
+                        >
                           <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                             <SelectValue />
                           </SelectTrigger>
@@ -536,15 +1114,29 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                         {pc.afterAdhan.type === "dua" && (
                           <Select
-                            value={pc.afterAdhan.payload?.duaId ?? ""}
-                            onValueChange={(v) => updatePrayerConfig(pc.prayerName, { afterAdhan: { type: "dua", payload: { duaId: v } } })}
+                            value={
+                              asString(pc.afterAdhan.payload?.duaId) ?? NONE_VALUE
+                            }
+                            onValueChange={(v: string) =>
+                              updatePrayerConfig(pc.prayerName, {
+                                afterAdhan:
+                                  v === NONE_VALUE
+                                    ? { type: "dua", payload: null }
+                                    : { type: "dua", payload: { duaId: v } },
+                              })
+                            }
                           >
                             <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                               <SelectValue placeholder="Select Dua" />
                             </SelectTrigger>
                             <SelectContent className="bg-slate-900 border-slate-700">
+                              <SelectItem value={NONE_VALUE}>
+                                No Dua selected
+                              </SelectItem>
                               {duas.map((d) => (
-                                <SelectItem key={d.id} value={d.id}>{d.title}</SelectItem>
+                                <SelectItem key={d.id} value={d.id}>
+                                  {d.title}
+                                </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
@@ -552,15 +1144,37 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                         {pc.afterAdhan.type === "surah" && (
                           <Select
-                            value={String(pc.afterAdhan.payload?.surahNumber ?? "")}
-                            onValueChange={(v) => updatePrayerConfig(pc.prayerName, { afterAdhan: { type: "surah", payload: { surahNumber: Number(v) } } })}
+                            value={
+                              asNumber(pc.afterAdhan.payload?.surahNumber) != null
+                                ? String(asNumber(pc.afterAdhan.payload?.surahNumber))
+                                : NONE_VALUE
+                            }
+                            onValueChange={(v: string) =>
+                              updatePrayerConfig(pc.prayerName, {
+                                afterAdhan:
+                                  v === NONE_VALUE
+                                    ? { type: "surah", payload: null }
+                                    : {
+                                        type: "surah",
+                                        payload: { surahNumber: Number(v) },
+                                      },
+                              })
+                            }
                           >
                             <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                               <SelectValue placeholder="Select Surah" />
                             </SelectTrigger>
                             <SelectContent className="bg-slate-900 border-slate-700">
+                              <SelectItem value={NONE_VALUE}>
+                                No Surah selected
+                              </SelectItem>
                               {surahs.map((s) => (
-                                <SelectItem key={s.number} value={String(s.number)}>{s.number}. {s.nameEnglish}</SelectItem>
+                                <SelectItem
+                                  key={s.number}
+                                  value={String(s.number)}
+                                >
+                                  {s.number}. {s.nameEnglish}
+                                </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
@@ -571,11 +1185,11 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                 ))}
               </div>
 
-              {/* Schedules */}
               <div className="border-t border-slate-800 pt-6">
                 <h2 className="text-white text-lg mb-2">Tilawat schedules</h2>
                 <p className="text-slate-400 text-sm mb-4">
-                  Create schedules (stored in your account). Playback automation depends on Alexa routines; for now this manages your planned schedule list.
+                  Create schedules stored in your account. Alexa routine playback
+                  can be layered on top later.
                 </p>
 
                 <div className="rounded-xl border border-slate-800 p-4 mb-6">
@@ -584,18 +1198,28 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                   <div className="grid md:grid-cols-4 gap-4">
                     <div className="space-y-2">
                       <Label className="text-slate-200">Time</Label>
-                      <Input type="time" className="bg-slate-900 border-slate-700 text-slate-100" value={newTime} onChange={(e) => setNewTime(e.target.value)} />
+                      <Input
+                        type="time"
+                        className="bg-slate-900 border-slate-700 text-slate-100"
+                        value={newTime}
+                        onChange={(e) => setNewTime(e.target.value)}
+                      />
                     </div>
 
                     <div className="space-y-2">
                       <Label className="text-slate-200">Surah</Label>
-                      <Select value={String(newSurah)} onValueChange={(v) => setNewSurah(Number(v))}>
+                      <Select
+                        value={String(newSurah)}
+                        onValueChange={(v: string) => setNewSurah(Number(v))}
+                      >
                         <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-700 max-h-72 overflow-y-auto">
                           {surahs.map((s) => (
-                            <SelectItem key={s.number} value={String(s.number)}>{s.number}. {s.nameEnglish}</SelectItem>
+                            <SelectItem key={s.number} value={String(s.number)}>
+                              {s.number}. {s.nameEnglish}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -603,14 +1227,19 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                     <div className="space-y-2">
                       <Label className="text-slate-200">Device (optional)</Label>
-                      <Select value={newDeviceId} onValueChange={(v) => setNewDeviceId(v)}>
+                      <Select
+                        value={newDeviceId}
+                        onValueChange={(v: string) => setNewDeviceId(v)}
+                      >
                         <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                           <SelectValue placeholder="None" />
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-700">
-                          <SelectItem value="">None</SelectItem>
+                          <SelectItem value={NONE_VALUE}>None</SelectItem>
                           {devices.map((d) => (
-                            <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                            <SelectItem key={d.id} value={d.id}>
+                              {d.name}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -618,14 +1247,19 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
 
                     <div className="space-y-2">
                       <Label className="text-slate-200">Reciter (optional)</Label>
-                      <Select value={newReciterId} onValueChange={(v) => setNewReciterId(v)}>
+                      <Select
+                        value={newReciterId}
+                        onValueChange={(v: string) => setNewReciterId(v)}
+                      >
                         <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                           <SelectValue placeholder="Default" />
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-700">
-                          <SelectItem value="">Default</SelectItem>
+                          <SelectItem value={NONE_VALUE}>Default</SelectItem>
                           {reciters.map((r) => (
-                            <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                            <SelectItem key={r.id} value={r.id}>
+                              {r.name}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -635,7 +1269,12 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                   <div className="grid md:grid-cols-2 gap-4 mt-4">
                     <div className="space-y-2">
                       <Label className="text-slate-200">Title (optional)</Label>
-                      <Input className="bg-slate-900 border-slate-700 text-slate-100" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="e.g., Morning Tilawat" />
+                      <Input
+                        className="bg-slate-900 border-slate-700 text-slate-100"
+                        value={newTitle}
+                        onChange={(e) => setNewTitle(e.target.value)}
+                        placeholder="e.g., Morning Tilawat"
+                      />
                     </div>
 
                     <div className="space-y-2">
@@ -645,7 +1284,11 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                           <button
                             key={d}
                             type="button"
-                            className={`px-2 py-1 rounded border text-xs ${newDays[i] ? "border-emerald-500 text-emerald-300" : "border-slate-700 text-slate-300"}`}
+                            className={`px-2 py-1 rounded border text-xs ${
+                              newDays[i]
+                                ? "border-emerald-500 text-emerald-300"
+                                : "border-slate-700 text-slate-300"
+                            }`}
                             onClick={() => toggleDay(i)}
                           >
                             {d}
@@ -656,7 +1299,10 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                   </div>
 
                   <div className="mt-4">
-                    <Button onClick={createSchedule} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                    <Button
+                      onClick={createSchedule}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    >
                       Add schedule
                     </Button>
                   </div>
@@ -667,17 +1313,37 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
                     <p className="text-slate-400 text-sm">No schedules yet.</p>
                   ) : (
                     schedules.map((s) => (
-                      <div key={s.id} className="flex items-center justify-between gap-4 rounded-lg border border-slate-800 p-4">
+                      <div
+                        key={s.id}
+                        className="flex items-center justify-between gap-4 rounded-lg border border-slate-800 p-4"
+                      >
                         <div>
                           <div className="text-slate-100">
-                            {s.payload?.title ? s.payload.title : `Tilawat · Surah ${s.payload.surahNumber}`} · {s.timeOfDay}
+                            {s.payload?.title
+                              ? s.payload.title
+                              : `Tilawat · Surah ${s.payload.surahNumber}`}{" "}
+                            · {s.timeOfDay}
                           </div>
                           <div className="text-xs text-slate-400">
-                            Days: {s.days.map((on, i) => (on ? DAY_LABELS[i] : null)).filter(Boolean).join(", ")}
-                            {s.deviceId ? ` · Device: ${devices.find((d) => d.id === s.deviceId)?.name || s.deviceId}` : ""}
+                            Days:{" "}
+                            {s.days
+                              .map((on, i) => (on ? DAY_LABELS[i] : null))
+                              .filter(Boolean)
+                              .join(", ")}
+                            {s.deviceId
+                              ? ` · Device: ${
+                                  devices.find((d) => d.id === s.deviceId)?.name ||
+                                  s.deviceId
+                                }`
+                              : ""}
                           </div>
                         </div>
-                        <Button variant="outline" className="border-slate-700 text-slate-200" onClick={() => deleteSchedule(s.id)}>
+
+                        <Button
+                          variant="outline"
+                          className="border-slate-700 text-slate-200"
+                          onClick={() => deleteSchedule(s.id)}
+                        >
                           Delete
                         </Button>
                       </div>
@@ -687,7 +1353,11 @@ export default function Settings({ onboardingData, setOnboardingData }: Settings
               </div>
 
               <div className="flex justify-end pt-4">
-                <Button onClick={handleSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                <Button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                >
                   {saving ? "Saving…" : "Save settings"}
                 </Button>
               </div>
