@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
 import { Badge } from "../ui/badge";
 import { Switch } from "../ui/switch";
@@ -84,7 +83,7 @@ function isRecord(value: unknown): value is JsonRecord {
 }
 
 function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function asBoolean(value: unknown): boolean | null {
@@ -104,14 +103,6 @@ function safeParseJson(value: unknown): JsonRecord | null {
   } catch {
     return null;
   }
-}
-
-function getInitialSelectedDevices(onboardingData: OnboardingData): string[] {
-  if (!Array.isArray(onboardingData.devices)) return [];
-
-  return onboardingData.devices
-    .filter((value): value is string => typeof value === "string" && !!value.trim())
-    .map((value) => value.trim());
 }
 
 function defaultPrayerConfigs(): PrayerConfig[] {
@@ -244,7 +235,9 @@ function normalizeSurahs(payload: unknown): SurahOption[] {
     }))
     .filter(
       (item: SurahOption) =>
-        Number.isFinite(item.number) && item.number >= 1 && item.nameEnglish.length > 0
+        Number.isFinite(item.number) &&
+        item.number >= 1 &&
+        item.nameEnglish.length > 0
     );
 }
 
@@ -275,9 +268,6 @@ export default function Step5DevicesAdhan({
     onboardingData.accountEnabled === true
   );
   const [devices, setDevices] = useState<Device[]>([]);
-  const [selectedDevices, setSelectedDevices] = useState<string[]>(
-    getInitialSelectedDevices(onboardingData)
-  );
   const [reciters, setReciters] = useState<Reciter[]>([]);
   const [duas, setDuas] = useState<DuaOption[]>([]);
   const [surahs, setSurahs] = useState<SurahOption[]>([]);
@@ -289,12 +279,6 @@ export default function Step5DevicesAdhan({
     const anyReciter = prayerConfigs.some((p) => !!p.adhanReciterId);
     return accountEnabled && anyReciter && !saving;
   }, [accountEnabled, prayerConfigs, saving]);
-
-  function toggleDevice(id: string) {
-    setSelectedDevices((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  }
 
   function updatePrayer(prayerName: PrayerName, patch: Partial<PrayerConfig>) {
     setPrayerConfigs((prev) =>
@@ -331,7 +315,11 @@ export default function Step5DevicesAdhan({
           ? (payloadUnknown as UserSettingsPayload)
           : {};
 
-        const settings = isRecord(payload.settings) ? payload.settings : isRecord(payloadUnknown) ? payloadUnknown : {};
+        const settings = isRecord(payload.settings)
+          ? payload.settings
+          : isRecord(payloadUnknown)
+          ? payloadUnknown
+          : {};
 
         const enabledValue =
           asBoolean(settings.accountEnabled) ??
@@ -341,8 +329,9 @@ export default function Step5DevicesAdhan({
 
         setAccountEnabled(enabledValue ?? false);
 
-        const configsSource =
-          Array.isArray(settings.prayerConfigs) ? settings.prayerConfigs : payload.prayerConfigs;
+        const configsSource = Array.isArray(settings.prayerConfigs)
+          ? settings.prayerConfigs
+          : payload.prayerConfigs;
 
         if (Array.isArray(configsSource)) {
           setPrayerConfigs(normalizePrayerConfigs(configsSource));
@@ -351,12 +340,7 @@ export default function Step5DevicesAdhan({
 
       if (devicesRes.ok) {
         const payload = (await devicesRes.json()) as unknown;
-        const normalizedDevices = normalizeDevices(payload);
-        setDevices(normalizedDevices);
-
-        setSelectedDevices((prev) =>
-          prev.filter((id) => normalizedDevices.some((d) => d.id === id))
-        );
+        setDevices(normalizeDevices(payload));
       }
 
       if (recitersRes.ok) {
@@ -385,7 +369,10 @@ export default function Step5DevicesAdhan({
         setSurahs(normalizeSurahs(payload));
       }
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Failed to load devices and Adhan settings.";
+      const message =
+        e instanceof Error
+          ? e.message
+          : "Failed to load devices and Adhan settings.";
       setError(message);
     } finally {
       setLoading(false);
@@ -431,14 +418,12 @@ export default function Step5DevicesAdhan({
 
       if (!resp.ok) {
         const msg = await resp.text().catch(() => "");
-        throw new Error(
-          `Could not save settings (${resp.status}). ${msg}`.trim()
-        );
+        throw new Error(`Could not save settings (${resp.status}). ${msg}`.trim());
       }
 
       setOnboardingData({
         ...onboardingData,
-        devices: selectedDevices,
+        devices: devices.map((d) => d.id),
         accountEnabled,
         prayerConfigs,
       });
@@ -455,7 +440,7 @@ export default function Step5DevicesAdhan({
     }
   };
 
-  const tabs = useMemo(() => ["Devices", "Adhan per Prayer"], []);
+  const tabs = useMemo(() => ["Linked Devices", "Adhan per Prayer"], []);
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -521,7 +506,7 @@ export default function Step5DevicesAdhan({
               ) : devices.length === 0 ? (
                 <p className="text-slate-300 text-sm">
                   No linked Alexa devices were returned yet. You can continue and
-                  review device targeting later.
+                  link or review device usage later.
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -530,21 +515,23 @@ export default function Step5DevicesAdhan({
                       key={device.id}
                       className="flex items-center gap-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700"
                     >
-                      <Checkbox
-                        id={device.id}
-                        checked={selectedDevices.includes(device.id)}
-                        onCheckedChange={() => toggleDevice(device.id)}
-                      />
-                      <Label htmlFor={device.id} className="flex-1 cursor-pointer">
+                      <div className="flex-1">
                         <div className="text-white">{device.name}</div>
                         <div className="text-slate-400 text-sm">
                           {device.platform ? device.platform.toUpperCase() : "ALEXA"}
                         </div>
-                      </Label>
+                      </div>
+                      <Badge variant="secondary">Linked</Badge>
                     </div>
                   ))}
                 </div>
               )}
+
+              <p className="text-xs text-slate-400 mt-4">
+                Linked devices are shown from your backend account. This screen
+                does not fake a saved per-device target setting that your backend
+                does not currently persist.
+              </p>
             </TabsContent>
 
             <TabsContent value={tabs[1]} className="mt-4">
