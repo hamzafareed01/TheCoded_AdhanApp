@@ -8,7 +8,6 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { CheckCircle, PartyPopper, XCircle } from "lucide-react";
 import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
-type CountryCode = "US" | "PK";
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
 
@@ -80,7 +79,7 @@ type Props = {
 type SummaryData = {
   platformsConnected: string[];
   location: {
-    country: CountryCode;
+    country: string;
     city: string;
     timezone: string;
     latitude: number | null;
@@ -102,7 +101,7 @@ type SummaryData = {
 const METHOD_LABEL: Record<string, string> = {
   isna: "ISNA (North America)",
   mwl: "Muslim World League",
-  karachi: "Karachi (Pakistan)",
+  karachi: "Karachi",
   makkah: "Makkah",
   egypt: "Egyptian",
   tehran: "Tehran",
@@ -133,47 +132,44 @@ function toNumber(v: unknown): number | null {
   return null;
 }
 
-function normalizeCountryCode(value: unknown): CountryCode {
-  const v = String(value ?? "")
-    .trim()
-    .toUpperCase();
-
-  if (v === "PK" || v === "PAKISTAN") return "PK";
-  return "US";
+function normalizeCountry(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!raw) return "US";
+  if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
+  return raw;
 }
 
-function normalizeTimezone(country: CountryCode, value: unknown): string {
+function normalizeTimezone(value: unknown): string {
   const timezone = asString(value);
-
-  if (country === "PK") {
-    return timezone === "Asia/Karachi" ? timezone : "Asia/Karachi";
-  }
-
-  const usAllowed = [
-    "America/New_York",
-    "America/Chicago",
-    "America/Denver",
-    "America/Los_Angeles",
-  ];
-
-  if (timezone && usAllowed.includes(timezone)) return timezone;
-  return "America/Chicago";
+  return timezone || "Etc/UTC";
 }
 
 function readConnectedPlatforms(onboardingData: OnboardingData): string[] {
-  if (Array.isArray(onboardingData?.connectedPlatforms)) {
-    return onboardingData.connectedPlatforms.filter(
-      (x): x is string => typeof x === "string"
-    );
+  const fromData = Array.isArray(onboardingData?.connectedPlatforms)
+    ? onboardingData.connectedPlatforms.filter(
+        (x): x is string => typeof x === "string"
+      )
+    : [];
+
+  const fromLocal = (() => {
+    try {
+      const raw = localStorage.getItem("adhan_connected_platforms");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((x): x is string => typeof x === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const merged = new Set<string>([...fromData, ...fromLocal]);
+
+  if (getStoredAmazonToken()) {
+    merged.add("alexa");
   }
 
-  try {
-    const raw = localStorage.getItem("adhan_connected_platforms");
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
+  return Array.from(merged);
 }
 
 function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
@@ -229,7 +225,7 @@ async function saveSettings(payload: Record<string, unknown>) {
   });
 }
 
-async function geocodeLocation(city: string, country: CountryCode) {
+async function geocodeLocation(city: string, country: string) {
   const params = new URLSearchParams({
     city: city.trim(),
     country,
@@ -252,7 +248,7 @@ async function geocodeLocation(city: string, country: CountryCode) {
 
   const lat = toNumber(data.lat);
   const lng = toNumber(data.lng);
-  const timezone = normalizeTimezone(country, data.timezone);
+  const timezone = normalizeTimezone(data.timezone);
 
   if (lat === null || lng === null) {
     throw new Error("Geocoding did not return valid coordinates.");
@@ -275,15 +271,14 @@ export default function Step6Summary({
     const devicesValue = onboardingData?.devices;
     const platformsConnected = readConnectedPlatforms(onboardingData);
 
-    const country = normalizeCountryCode(location.country);
-    const city = location.city?.trim() || (country === "PK" ? "Karachi" : "Chicago");
-    const timezone = normalizeTimezone(country, location.timezone);
+    const country = normalizeCountry(location.country);
+    const city = location.city?.trim() || "Chicago";
+    const timezone = normalizeTimezone(location.timezone);
     const latitude = toNumber(location.latitude);
     const longitude = toNumber(location.longitude);
     const useMosqueLocation = location.useMosqueLocation === true;
 
-    const calculationMethod =
-      prayer.calculationMethod || prayer.method || (country === "PK" ? "karachi" : "isna");
+    const calculationMethod = prayer.calculationMethod || prayer.method || "isna";
     const madhhab = prayer.madhhab || "hanafi";
     const madhab = prayer.madhab || (prayer.shia ? "shia" : "sunni");
     const highLatitudeMethod =
@@ -370,30 +365,33 @@ export default function Step6Summary({
         );
       }
 
-      const geo = await geocodeLocation(
-        summary.location.city,
-        summary.location.country
-      );
+      let syncedLatitude = summary.location.latitude;
+      let syncedLongitude = summary.location.longitude;
+      let syncedTimezone = summary.location.timezone;
 
-      const syncedLocation = {
-        ...summary.location,
-        latitude: geo.lat,
-        longitude: geo.lng,
-        timezone: geo.timezone,
-      };
+      if (syncedLatitude === null || syncedLongitude === null) {
+        const geo = await geocodeLocation(
+          summary.location.city,
+          summary.location.country
+        );
+        syncedLatitude = geo.lat;
+        syncedLongitude = geo.lng;
+
+        if (!summary.location.timezone || summary.location.timezone === "Etc/UTC") {
+          syncedTimezone = geo.timezone;
+        }
+      }
 
       const payload: Record<string, unknown> = {
-        country: syncedLocation.country,
-        city: syncedLocation.city,
-        timezone: syncedLocation.timezone,
-        latitude: syncedLocation.latitude,
-        longitude: syncedLocation.longitude,
-        useMosqueLocation: syncedLocation.useMosqueLocation,
+        country: summary.location.country,
+        city: summary.location.city,
+        timezone: syncedTimezone,
+        useMosqueLocation: summary.location.useMosqueLocation,
         calculationMethod: summary.prayer.calculationMethod,
         madhhab: summary.prayer.madhhab,
         shia: summary.prayer.madhab === "shia",
         highLatitudeMethod: summary.prayer.highLatitudeMethod,
-        accountEnabled: true,
+        accountEnabled: summary.accountEnabled,
         quietHours: {
           enabled: summary.quiet.enabled,
           from: summary.quiet.from,
@@ -402,6 +400,14 @@ export default function Step6Summary({
         },
         prayerConfigs: summary.prayerConfigs,
       };
+
+      if (syncedLatitude !== null) {
+        payload.latitude = syncedLatitude;
+      }
+
+      if (syncedLongitude !== null) {
+        payload.longitude = syncedLongitude;
+      }
 
       const resp = await saveSettings(payload);
 
@@ -413,15 +419,15 @@ export default function Step6Summary({
       setOnboardingData({
         ...onboardingData,
         location: {
-          ...(onboardingData.location || {}),
-          country: syncedLocation.country,
-          city: syncedLocation.city,
-          timezone: syncedLocation.timezone,
-          latitude: syncedLocation.latitude,
-          longitude: syncedLocation.longitude,
-          useMosqueLocation: syncedLocation.useMosqueLocation,
+          ...(isRecord(onboardingData.location) ? onboardingData.location : {}),
+          country: summary.location.country,
+          city: summary.location.city,
+          timezone: syncedTimezone,
+          latitude: syncedLatitude,
+          longitude: syncedLongitude,
+          useMosqueLocation: summary.location.useMosqueLocation,
         },
-        accountEnabled: true,
+        accountEnabled: summary.accountEnabled,
         prayerConfigs: summary.prayerConfigs,
       });
 

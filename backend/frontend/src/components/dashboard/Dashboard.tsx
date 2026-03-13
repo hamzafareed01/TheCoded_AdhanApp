@@ -11,7 +11,7 @@ import {
   Building2,
   CheckCircle,
   Edit,
-  Settings,
+  Settings as SettingsIcon,
   Volume2,
 } from "lucide-react";
 
@@ -43,7 +43,7 @@ const PRAYER_LABELS: Record<PrayerCode, string> = {
   isha: "Isha",
 };
 
-const platformIcons: Record<string, string> = {
+const PLATFORM_ICONS: Record<string, string> = {
   alexa: "🔵",
   google: "🔴",
   apple: "⚫",
@@ -51,7 +51,7 @@ const platformIcons: Record<string, string> = {
   sonos: "⚫",
 };
 
-const platformNames: Record<string, string> = {
+const PLATFORM_NAMES: Record<string, string> = {
   alexa: "Alexa",
   google: "Google",
   apple: "Apple",
@@ -59,11 +59,7 @@ const platformNames: Record<string, string> = {
   sonos: "Sonos",
 };
 
-type DashboardProps = {
-  onboardingData: Record<string, unknown>;
-  user?: AppUser | null;
-};
-
+type JsonObject = Record<string, unknown>;
 type PrayerMap = Partial<Record<PrayerCode, string>>;
 
 type PrayerConfig = {
@@ -121,8 +117,21 @@ type Device = {
   platform?: string;
 };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+type DashboardProps = {
+  onboardingData: Record<string, unknown>;
+  user?: AppUser | null;
+};
+
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function safeReadJson<T>(key: string, fallback: T): T {
@@ -140,7 +149,7 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
   const root = payload as SettingsResponse;
   const src = isObject(root.settings) ? root.settings : root;
 
-  const prayerConfigs = Array.isArray(src.prayerConfigs)
+  const prayerConfigs: PrayerConfig[] = Array.isArray(src.prayerConfigs)
     ? src.prayerConfigs
         .filter((item): item is PrayerConfig => isObject(item))
         .map((item) => ({
@@ -151,7 +160,8 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
             typeof item.quietEnabled === "boolean" ? item.quietEnabled : false,
           quietFrom:
             typeof item.quietFrom === "string" ? item.quietFrom : undefined,
-          quietTo: typeof item.quietTo === "string" ? item.quietTo : undefined,
+          quietTo:
+            typeof item.quietTo === "string" ? item.quietTo : undefined,
           adhanReciterId:
             typeof item.adhanReciterId === "string"
               ? item.adhanReciterId
@@ -161,17 +171,11 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
     : [];
 
   return {
-    city: typeof src.city === "string" ? src.city : undefined,
-    country: typeof src.country === "string" ? src.country : undefined,
-    timezone: typeof src.timezone === "string" ? src.timezone : undefined,
-    latitude:
-      typeof src.latitude === "number" && Number.isFinite(src.latitude)
-        ? src.latitude
-        : null,
-    longitude:
-      typeof src.longitude === "number" && Number.isFinite(src.longitude)
-        ? src.longitude
-        : null,
+    city: asString(src.city),
+    country: asString(src.country),
+    timezone: asString(src.timezone),
+    latitude: asNumber(src.latitude),
+    longitude: asNumber(src.longitude),
     accountEnabled: src.accountEnabled === true,
     prayerConfigs,
     mosqueId: typeof src.mosqueId === "string" ? src.mosqueId : null,
@@ -185,30 +189,17 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
 function normalizeToday(payload: unknown): TodayShape | null {
   if (!isObject(payload)) return null;
 
-  const src = payload as Record<string, unknown>;
+  const src = payload as JsonObject;
+  const location = isObject(src.location) ? src.location : null;
 
   return {
-    location: isObject(src.location)
+    location: location
       ? {
-          city: typeof src.location.city === "string" ? src.location.city : undefined,
-          country:
-            typeof src.location.country === "string"
-              ? src.location.country
-              : undefined,
-          timezone:
-            typeof src.location.timezone === "string"
-              ? src.location.timezone
-              : undefined,
-          latitude:
-            typeof src.location.latitude === "number" &&
-            Number.isFinite(src.location.latitude)
-              ? src.location.latitude
-              : null,
-          longitude:
-            typeof src.location.longitude === "number" &&
-            Number.isFinite(src.location.longitude)
-              ? src.location.longitude
-              : null,
+          city: asString(location.city),
+          country: asString(location.country),
+          timezone: asString(location.timezone),
+          latitude: asNumber(location.latitude),
+          longitude: asNumber(location.longitude),
         }
       : undefined,
     prayers12: isObject(src.prayers12) ? (src.prayers12 as PrayerMap) : undefined,
@@ -216,78 +207,116 @@ function normalizeToday(payload: unknown): TodayShape | null {
     enabled: isObject(src.enabled)
       ? (src.enabled as Partial<Record<PrayerCode, boolean>>)
       : undefined,
-    source: typeof src.source === "string" ? src.source : undefined,
+    source: asString(src.source),
     date: src.date,
     meta: src.meta,
   };
 }
 
 function normalizeDevices(payload: unknown): Device[] {
-  if (Array.isArray(payload)) {
-    return payload.filter(isObject).map((item) => ({
+  const list = Array.isArray(payload)
+    ? payload
+    : isObject(payload) && Array.isArray(payload.devices)
+    ? payload.devices
+    : [];
+
+  return list
+    .filter((item): item is JsonObject => isObject(item))
+    .map((item) => ({
       id: typeof item.id === "string" ? item.id : "",
       name: typeof item.name === "string" ? item.name : "",
-      platform: typeof item.platform === "string" ? item.platform : undefined,
-    }));
-  }
-
-  if (isObject(payload) && Array.isArray(payload.devices)) {
-    return payload.devices.filter(isObject).map((item) => ({
-      id: typeof item.id === "string" ? item.id : "",
-      name: typeof item.name === "string" ? item.name : "",
-      platform: typeof item.platform === "string" ? item.platform : undefined,
-    }));
-  }
-
-  return [];
+      platform:
+        typeof item.platform === "string" ? item.platform : undefined,
+    }))
+    .filter((item) => item.id && item.name);
 }
 
-function parseTimeForToday(timeStr: string): Date | null {
-  if (!timeStr) return null;
+function parsePrayerTimeToSeconds(timeStr: string): number | null {
+  const cleaned = String(timeStr || "").replace(/\s*\(.*?\)\s*$/, "").trim();
 
-  const cleaned = String(timeStr).replace(/\s*\(.*?\)\s*$/, "").trim();
+  const m24 = cleaned.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (m24) {
+    const hours = Number(m24[1]);
+    const minutes = Number(m24[2]);
+    const seconds = m24[3] ? Number(m24[3]) : 0;
 
-  const match = cleaned.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (!match) return null;
-
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const seconds = match[3] ? Number(match[3]) : 0;
-
-  if ([hours, minutes, seconds].some(Number.isNaN)) return null;
-
-  const date = new Date();
-  date.setHours(hours, minutes, seconds, 0);
-  return date;
-}
-
-function parseDisplayTimeForToday(timeStr: string): Date | null {
-  if (!timeStr) return null;
-
-  const cleaned = String(timeStr).replace(/\s*\(.*?\)\s*$/, "").trim();
+    if (
+      Number.isFinite(hours) &&
+      Number.isFinite(minutes) &&
+      Number.isFinite(seconds) &&
+      hours >= 0 &&
+      hours <= 23 &&
+      minutes >= 0 &&
+      minutes <= 59 &&
+      seconds >= 0 &&
+      seconds <= 59
+    ) {
+      return hours * 3600 + minutes * 60 + seconds;
+    }
+  }
 
   const m12 = cleaned.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)$/i);
-  if (!m12) return parseTimeForToday(cleaned);
+  if (m12) {
+    let hours = Number(m12[1]);
+    const minutes = Number(m12[2]);
+    const seconds = m12[3] ? Number(m12[3]) : 0;
+    const meridian = m12[4].toUpperCase();
 
-  let h = Number(m12[1]);
-  const m = Number(m12[2]);
-  const s = m12[3] ? Number(m12[3]) : 0;
-  const meridian = m12[4].toUpperCase();
+    if (
+      Number.isFinite(hours) &&
+      Number.isFinite(minutes) &&
+      Number.isFinite(seconds) &&
+      hours >= 1 &&
+      hours <= 12 &&
+      minutes >= 0 &&
+      minutes <= 59 &&
+      seconds >= 0 &&
+      seconds <= 59
+    ) {
+      if (meridian === "AM") {
+        if (hours === 12) hours = 0;
+      } else if (hours !== 12) {
+        hours += 12;
+      }
 
-  if (meridian === "AM") {
-    if (h === 12) h = 0;
-  } else if (h !== 12) {
-    h += 12;
+      return hours * 3600 + minutes * 60 + seconds;
+    }
   }
 
-  if ([h, m, s].some(Number.isNaN)) return null;
-
-  const date = new Date();
-  date.setHours(h, m, s, 0);
-  return date;
+  return null;
 }
 
-function formatDiff(ms: number) {
+function getNowInTimeZone(timeZone: string): {
+  hour: number;
+  minute: number;
+  second: number;
+} | null {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    const parts = formatter.formatToParts(new Date());
+    const getPart = (type: string) =>
+      Number(parts.find((p) => p.type === type)?.value ?? NaN);
+
+    const hour = getPart("hour");
+    const minute = getPart("minute");
+    const second = getPart("second");
+
+    if ([hour, minute, second].some(Number.isNaN)) return null;
+
+    return { hour, minute, second };
+  } catch {
+    return null;
+  }
+}
+
+function formatDiff(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -296,19 +325,27 @@ function formatDiff(ms: number) {
   if (hours > 0) {
     return `${hours}h ${minutes}m ${seconds}s`;
   }
-
   return `${minutes}m ${seconds}s`;
 }
 
-function getConnectedPlatforms(onboardingData: Record<string, unknown>): string[] {
-  const fromOnboarding = Array.isArray(onboardingData?.connectedPlatforms)
+function getConnectedPlatforms(
+  onboardingData: Record<string, unknown>,
+  hasAmazonToken: boolean
+): string[] {
+  const fromOnboarding = Array.isArray(onboardingData.connectedPlatforms)
     ? onboardingData.connectedPlatforms.filter(
         (x): x is string => typeof x === "string"
       )
     : [];
 
   const fromLocal = safeReadJson<string[]>("adhan_connected_platforms", []);
-  return Array.from(new Set([...fromOnboarding, ...fromLocal]));
+  const merged = new Set<string>([...fromOnboarding, ...fromLocal]);
+
+  if (hasAmazonToken) {
+    merged.add("alexa");
+  }
+
+  return Array.from(merged);
 }
 
 export default function Dashboard({ onboardingData, user }: DashboardProps) {
@@ -316,27 +353,33 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const hasAmazonToken = !!getStoredAmazonToken();
 
   const [todayData, setTodayData] = useState<TodayShape | null>(null);
-  const [loadingToday, setLoadingToday] = useState<boolean>(true);
+  const [loadingToday, setLoadingToday] = useState(true);
   const [todayError, setTodayError] = useState<string | null>(null);
 
   const [userSettings, setUserSettings] = useState<SettingsShape | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
-  const [deviceCount, setDeviceCount] = useState<number>(0);
+  const [deviceCount, setDeviceCount] = useState(0);
   const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
   const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
   const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
 
   const connectedPlatforms = useMemo(
-    () => getConnectedPlatforms(onboardingData),
-    [onboardingData]
+    () => getConnectedPlatforms(onboardingData, hasAmazonToken),
+    [onboardingData, hasAmazonToken]
   );
 
   const prayersForDisplay: PrayerMap | null =
     todayData?.prayers12 || todayData?.prayers24 || null;
+
   const prayersForCountdown: PrayerMap | null =
     todayData?.prayers24 || todayData?.prayers12 || null;
+
+  const activeTimeZone =
+    todayData?.location?.timezone ||
+    userSettings?.timezone ||
+    "Etc/UTC";
 
   useEffect(() => {
     async function loadSettingsAndDevices() {
@@ -364,17 +407,15 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
         if (devicesRes.ok) {
           const devicesPayload = await devicesRes.json();
-          const list = normalizeDevices(devicesPayload).filter(
-            (d) => d.id && d.name
-          );
-          setDeviceCount(list.length);
+          setDeviceCount(normalizeDevices(devicesPayload).length);
         } else {
           setDeviceCount(0);
         }
       } catch (err) {
-        console.error("Failed to load user settings:", err);
+        console.error("Failed to load settings/devices:", err);
         setSettingsError("Could not load your automation settings.");
         setUserSettings(null);
+        setDeviceCount(0);
       }
     }
 
@@ -402,7 +443,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         const data = await res.json();
         setTodayData(normalizeToday(data));
       } catch (err) {
-        console.error("Failed to load today prayer times:", err);
+        console.error("Failed to load prayer times:", err);
         setTodayError("Could not load prayer times.");
         setTodayData(null);
       } finally {
@@ -423,14 +464,24 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     }
 
     const updateCountdown = () => {
-      const now = new Date();
+      const nowParts = getNowInTimeZone(activeTimeZone);
+      if (!nowParts) {
+        setTimeToNextPrayer(null);
+        setNextPrayerCode(null);
+        setNextPrayerTimeDisplay(null);
+        setProgress(0);
+        return;
+      }
+
+      const nowSeconds =
+        nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
 
       const entries = COUNTDOWN_PRAYERS.map((code) => {
         const raw = prayersForCountdown[code];
-        const date = raw ? parseTimeForToday(raw) || parseDisplayTimeForToday(raw) : null;
-        return date ? { code, time: date } : null;
+        const seconds = raw ? parsePrayerTimeToSeconds(raw) : null;
+        return seconds != null ? { code, seconds } : null;
       }).filter(
-        (item): item is { code: PrayerCode; time: Date } => item !== null
+        (item): item is { code: PrayerCode; seconds: number } => item !== null
       );
 
       if (entries.length === 0) {
@@ -441,20 +492,35 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         return;
       }
 
-      let nextIdx = entries.findIndex((entry) => entry.time > now);
-      let nextEntry: { code: PrayerCode; time: Date };
-      let prevEntry: { code: PrayerCode; time: Date } | null;
+      let nextIdx = entries.findIndex((entry) => entry.seconds > nowSeconds);
+      let nextEntry: { code: PrayerCode; seconds: number };
+      let prevEntry: { code: PrayerCode; seconds: number } | null;
 
       if (nextIdx === -1) {
         nextEntry = {
           ...entries[0],
-          time: new Date(entries[0].time.getTime() + 24 * 60 * 60 * 1000),
+          seconds: entries[0].seconds + 24 * 3600,
         };
         prevEntry = entries[entries.length - 1];
       } else {
         nextEntry = entries[nextIdx];
         prevEntry = nextIdx > 0 ? entries[nextIdx - 1] : null;
+
+        if (!prevEntry) {
+          prevEntry = {
+            ...entries[entries.length - 1],
+            seconds: entries[entries.length - 1].seconds - 24 * 3600,
+          };
+        }
       }
+
+      const effectiveNowSeconds =
+        nextIdx === 0 ? nowSeconds : nextIdx === -1 ? nowSeconds : nowSeconds;
+
+      const adjustedNowSeconds =
+        prevEntry && prevEntry.seconds > effectiveNowSeconds
+          ? effectiveNowSeconds + 24 * 3600
+          : effectiveNowSeconds;
 
       setNextPrayerCode(nextEntry.code);
       setNextPrayerTimeDisplay(
@@ -462,31 +528,35 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           prayersForCountdown[nextEntry.code] ||
           null
       );
-      setTimeToNextPrayer(formatDiff(nextEntry.time.getTime() - now.getTime()));
+
+      const diffMs = Math.max(0, (nextEntry.seconds - adjustedNowSeconds) * 1000);
+      setTimeToNextPrayer(formatDiff(diffMs));
 
       if (!prevEntry) {
         setProgress(0);
         return;
       }
 
-      const total = nextEntry.time.getTime() - prevEntry.time.getTime();
-      const elapsed = now.getTime() - prevEntry.time.getTime();
+      const total = nextEntry.seconds - prevEntry.seconds;
+      const elapsed = adjustedNowSeconds - prevEntry.seconds;
       const pct =
         total > 0
           ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100)))
           : 0;
+
       setProgress(pct);
     };
 
     updateCountdown();
     const interval = window.setInterval(updateCountdown, 1000);
     return () => window.clearInterval(interval);
-  }, [prayersForCountdown, prayersForDisplay]);
+  }, [prayersForCountdown, prayersForDisplay, activeTimeZone]);
 
   const quietHours = useMemo<QuietHours | null>(() => {
     const configs = Array.isArray(userSettings?.prayerConfigs)
       ? userSettings.prayerConfigs
       : [];
+
     const firstQuiet = configs.find((p) => p.quietEnabled);
     if (!firstQuiet) return null;
 
@@ -509,16 +579,20 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     };
   }, [userSettings]);
 
-  const locationLabel =
-    todayData?.location?.city
-      ? `${todayData.location.city}${
-          todayData.location.country ? `, ${todayData.location.country}` : ""
-        }`
-      : userSettings?.city
-      ? `${userSettings.city}${
-          userSettings.country ? `, ${userSettings.country}` : ""
-        }`
-      : "";
+  const locationLabel = todayData?.location?.city
+    ? `${todayData.location.city}${
+        todayData.location.country ? `, ${todayData.location.country}` : ""
+      }`
+    : userSettings?.city
+    ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
+    : "";
+
+  const locationCoords =
+    todayData?.location?.latitude != null && todayData?.location?.longitude != null
+      ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
+      : userSettings?.latitude != null && userSettings?.longitude != null
+      ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
+      : null;
 
   if (!hasAmazonToken) {
     return (
@@ -583,6 +657,18 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 </p>
               )}
 
+              {activeTimeZone && (
+                <p className="text-slate-500 text-xs mt-1">
+                  Timezone: {activeTimeZone}
+                </p>
+              )}
+
+              {locationCoords && (
+                <p className="text-slate-500 text-xs mt-1">
+                  Coordinates: {locationCoords}
+                </p>
+              )}
+
               {quietHours && (
                 <p className="text-slate-500 text-xs mt-1">
                   Quiet hours: {quietHours.from}–{quietHours.to}
@@ -609,13 +695,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 />
                 Automation: {automationOn ? "ON" : "OFF"}
               </Badge>
+
               <TestAdhanButton />
             </div>
           </div>
 
           <p className="text-slate-500 text-sm">
-            Play a sample Adhan on your selected device. If it&apos;s within your
-            quiet hours, it should stay muted.
+            Play a sample Adhan on your selected device. If it&apos;s inside quiet
+            hours, it should stay muted.
           </p>
         </div>
 
@@ -690,8 +777,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                       className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3"
                     >
                       <span className="text-white">
-                        {platformIcons[platform] || "•"}{" "}
-                        {platformNames[platform] || platform}
+                        {PLATFORM_ICONS[platform] || "•"}{" "}
+                        {PLATFORM_NAMES[platform] || platform}
                       </span>
                       <span className="text-emerald-400 text-sm flex items-center gap-2">
                         <CheckCircle className="w-4 h-4" /> Connected
@@ -762,7 +849,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
                   onClick={() => navigate("/settings")}
                 >
-                  <Edit className="w-4 h-4 mr-3" /> Edit Prayer Settings
+                  <Edit className="w-4 h-4 mr-3" />
+                  Edit Prayer Settings
                 </Button>
 
                 <Button
@@ -770,8 +858,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
                   onClick={() => navigate("/settings")}
                 >
-                  <Settings className="w-4 h-4 mr-3" /> Manage Devices & Quiet
-                  Hours
+                  <SettingsIcon className="w-4 h-4 mr-3" />
+                  Manage Devices & Quiet Hours
                 </Button>
 
                 <Button
@@ -779,7 +867,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
                   onClick={() => navigate("/settings")}
                 >
-                  <Volume2 className="w-4 h-4 mr-3" /> Pause Adhan for Today
+                  <Volume2 className="w-4 h-4 mr-3" />
+                  Pause Adhan for Today
                 </Button>
               </div>
             </div>

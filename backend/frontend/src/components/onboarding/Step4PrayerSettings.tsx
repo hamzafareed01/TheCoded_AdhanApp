@@ -5,7 +5,13 @@ import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { Label } from "../ui/label";
 import { Settings2 } from "lucide-react";
@@ -20,7 +26,9 @@ export type PrayerMethod =
   | "mwl"
   | "makkah"
   | "egypt"
-  | "ummAlQura";
+  | "ummAlQura"
+  | "tehran"
+  | "jafari";
 
 export type HighLatitudeMode =
   | "automatic"
@@ -28,12 +36,32 @@ export type HighLatitudeMode =
   | "one_seventh"
   | "angle_based";
 
-type Step4PrayerSettingsProps = {
-  onboardingData: any;
-  setOnboardingData: (data: any) => void;
+type Offsets = Record<PrayerName, number>;
+
+type PrayerSettingsData = {
+  sect?: Sect;
+  shia?: boolean;
+  calculationMethod?: PrayerMethod;
+  madhhab?: "hanafi" | "shafi";
+  highLatitudeMode?: HighLatitudeMode;
+  highLatitudeMethod?: HighLatitudeMode;
+  offsets?: Partial<Offsets>;
 };
 
-type Offsets = Record<PrayerName, number>;
+type OnboardingData = {
+  location?: {
+    country?: string;
+    city?: string;
+    timezone?: string;
+  };
+  prayerSettings?: PrayerSettingsData;
+  [key: string]: unknown;
+};
+
+type Step4PrayerSettingsProps = {
+  onboardingData: OnboardingData;
+  setOnboardingData: (data: OnboardingData) => void;
+};
 
 const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 
@@ -41,7 +69,72 @@ function defaultOffsets(): Offsets {
   return { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
 }
 
-async function saveSettings(payload: any) {
+function normalizeCountry(value: unknown): string {
+  const raw = String(value ?? "").trim().toUpperCase();
+  return raw || "US";
+}
+
+function getDefaultMethodForCountry(country: string, sect: Sect): PrayerMethod {
+  if (sect === "SHIA") {
+    if (country === "IR") return "tehran";
+    return "jafari";
+  }
+
+  if (country === "PK") return "karachi";
+  if (country === "SA") return "ummAlQura";
+  if (country === "EG") return "egypt";
+  if (country === "US" || country === "CA") return "isna";
+
+  return "mwl";
+}
+
+function normalizeMethod(
+  value: unknown,
+  country: string,
+  sect: Sect
+): PrayerMethod {
+  const raw = String(value ?? "").trim();
+
+  const allowed: PrayerMethod[] = [
+    "isna",
+    "karachi",
+    "mwl",
+    "makkah",
+    "egypt",
+    "ummAlQura",
+    "tehran",
+    "jafari",
+  ];
+
+  if (allowed.includes(raw as PrayerMethod)) {
+    return raw as PrayerMethod;
+  }
+
+  return getDefaultMethodForCountry(country, sect);
+}
+
+function normalizeHighLatitudeMode(value: unknown): HighLatitudeMode {
+  const raw = String(value ?? "").trim();
+
+  const allowed: HighLatitudeMode[] = [
+    "automatic",
+    "middle_of_the_night",
+    "one_seventh",
+    "angle_based",
+  ];
+
+  return allowed.includes(raw as HighLatitudeMode)
+    ? (raw as HighLatitudeMode)
+    : "automatic";
+}
+
+function normalizeMadhhab(value: unknown): "hanafi" | "shafi" {
+  return String(value ?? "").trim().toLowerCase() === "shafi"
+    ? "shafi"
+    : "hanafi";
+}
+
+async function saveSettings(payload: Record<string, unknown>) {
   const put = await apiFetch("/api/user/settings", {
     method: "PUT",
     body: JSON.stringify(payload),
@@ -54,30 +147,57 @@ async function saveSettings(payload: any) {
   });
 }
 
-export default function Step4PrayerSettings({ onboardingData, setOnboardingData }: Step4PrayerSettingsProps) {
+export default function Step4PrayerSettings({
+  onboardingData,
+  setOnboardingData,
+}: Step4PrayerSettingsProps) {
   const navigate = useNavigate();
 
   const existing = onboardingData?.prayerSettings || {};
+  const country = normalizeCountry(onboardingData?.location?.country);
 
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [sect, setSect] = useState<Sect>("SUNNI");
-  const [calculationMethod, setCalculationMethod] = useState<PrayerMethod>("isna");
-  const [madhhab, setMadhhab] = useState<"hanafi" | "shafi">("hanafi");
-  const [highLatitudeMode, setHighLatitudeMode] = useState<HighLatitudeMode>("automatic");
-  const [offsets, setOffsets] = useState<Offsets>(defaultOffsets());
+  const initialSect: Sect = existing?.shia === true || existing?.sect === "SHIA"
+    ? "SHIA"
+    : "SUNNI";
+
+  const [sect, setSect] = useState<Sect>(initialSect);
+  const [calculationMethod, setCalculationMethod] = useState<PrayerMethod>(
+    normalizeMethod(existing?.calculationMethod, country, initialSect)
+  );
+  const [madhhab, setMadhhab] = useState<"hanafi" | "shafi">(
+    normalizeMadhhab(existing?.madhhab)
+  );
+  const [highLatitudeMode, setHighLatitudeMode] = useState<HighLatitudeMode>(
+    normalizeHighLatitudeMode(
+      existing?.highLatitudeMode || existing?.highLatitudeMethod
+    )
+  );
+  const [offsets, setOffsets] = useState<Offsets>({
+    ...defaultOffsets(),
+    ...(existing?.offsets || {}),
+  });
 
   useEffect(() => {
     async function hydrate() {
       if (existing && Object.keys(existing).length > 0) {
-        if (existing?.sect) setSect(existing.sect);
-        if (existing?.shia === true) setSect("SHIA");
-        if (existing?.calculationMethod) setCalculationMethod(existing.calculationMethod);
-        if (existing?.madhhab) setMadhhab(existing.madhhab);
-        if (existing?.highLatitudeMode) setHighLatitudeMode(existing.highLatitudeMode);
-        if (existing?.highLatitudeMethod) setHighLatitudeMode(existing.highLatitudeMethod);
+        const nextSect: Sect =
+          existing?.shia === true || existing?.sect === "SHIA" ? "SHIA" : "SUNNI";
+
+        setSect(nextSect);
+        setCalculationMethod(
+          normalizeMethod(existing?.calculationMethod, country, nextSect)
+        );
+        setMadhhab(normalizeMadhhab(existing?.madhhab));
+        setHighLatitudeMode(
+          normalizeHighLatitudeMode(
+            existing?.highLatitudeMode || existing?.highLatitudeMethod
+          )
+        );
+
         if (existing?.offsets && typeof existing.offsets === "object") {
           setOffsets({ ...defaultOffsets(), ...existing.offsets });
         }
@@ -91,47 +211,71 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
         setLoading(true);
         const res = await apiFetch("/api/user/settings");
         if (!res.ok) return;
+
         const payload = await res.json();
         const s = payload?.settings ?? payload ?? {};
 
-        if (s?.sect) setSect(s.sect);
-        if (s?.shia === true) setSect("SHIA");
-        if (s?.calculationMethod) setCalculationMethod(s.calculationMethod);
-        if (s?.madhhab) setMadhhab(s.madhhab);
-        if (s?.highLatitudeMethod) setHighLatitudeMode(s.highLatitudeMethod);
+        const nextSect: Sect =
+          s?.shia === true || s?.sect === "SHIA" ? "SHIA" : "SUNNI";
+
+        setSect(nextSect);
+        setCalculationMethod(
+          normalizeMethod(s?.calculationMethod, country, nextSect)
+        );
+        setMadhhab(normalizeMadhhab(s?.madhhab));
+        setHighLatitudeMode(
+          normalizeHighLatitudeMode(s?.highLatitudeMethod)
+        );
+
         if (s?.globalOffsets && typeof s.globalOffsets === "object") {
           setOffsets({ ...defaultOffsets(), ...s.globalOffsets });
         }
       } catch {
-        // ignore hydrate error here
+        // keep local defaults
       } finally {
         setLoading(false);
       }
     }
 
-    hydrate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void hydrate();
+  }, [country]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setCalculationMethod((prev) => {
+      const allowedForSect =
+        sect === "SHIA"
+          ? ["jafari", "tehran", "karachi", "mwl", "egypt", "ummAlQura", "makkah", "isna"]
+          : ["isna", "mwl", "karachi", "makkah", "egypt", "ummAlQura", "tehran", "jafari"];
+
+      return allowedForSect.includes(prev)
+        ? prev
+        : getDefaultMethodForCountry(country, sect);
+    });
+  }, [sect, country]);
 
   const calcMethodChoices = useMemo(() => {
     if (sect === "SHIA") {
       return [
+        { value: "jafari", label: "Jafari" },
+        { value: "tehran", label: "Tehran" },
         { value: "karachi", label: "Karachi" },
         { value: "mwl", label: "Muslim World League" },
         { value: "egypt", label: "Egyptian Survey" },
         { value: "ummAlQura", label: "Umm Al-Qura" },
-        { value: "isna", label: "ISNA (North America)" },
         { value: "makkah", label: "Makkah" },
+        { value: "isna", label: "ISNA (North America)" },
       ] as const;
     }
 
     return [
-      { value: "isna", label: "ISNA (North America)" },
       { value: "mwl", label: "Muslim World League" },
+      { value: "isna", label: "ISNA (North America)" },
+      { value: "karachi", label: "Karachi" },
+      { value: "ummAlQura", label: "Umm Al-Qura" },
       { value: "makkah", label: "Makkah" },
       { value: "egypt", label: "Egyptian Survey" },
-      { value: "karachi", label: "Karachi (Pakistan)" },
-      { value: "ummAlQura", label: "Umm Al-Qura" },
+      { value: "tehran", label: "Tehran" },
+      { value: "jafari", label: "Jafari" },
     ] as const;
   }, [sect]);
 
@@ -144,7 +288,7 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
       return;
     }
 
-    const nextPrayerSettings = {
+    const nextPrayerSettings: PrayerSettingsData = {
       sect,
       shia: sect === "SHIA",
       calculationMethod,
@@ -172,7 +316,9 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
 
       if (!resp.ok) {
         const msg = await resp.text().catch(() => "");
-        throw new Error(`Could not save prayer settings (${resp.status}). ${msg}`.trim());
+        throw new Error(
+          `Could not save prayer settings (${resp.status}). ${msg}`.trim()
+        );
       }
 
       navigate("/onboarding/step5");
@@ -196,9 +342,14 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
                 <Settings2 className="h-7 w-7 text-emerald-400" />
                 <h1 className="text-white">Prayer Settings</h1>
               </div>
-              <p className="text-slate-300">Choose sect, calculation method, and offsets for accurate prayer times.</p>
+              <p className="text-slate-300">
+                Choose sect, calculation method, and offsets for accurate prayer times.
+              </p>
             </div>
-            <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
+            <Badge
+              variant="outline"
+              className="border-emerald-500/30 text-emerald-400"
+            >
               Step 4 of 6
             </Badge>
           </div>
@@ -212,27 +363,42 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
           <div className="space-y-8">
             <div className="space-y-4">
               <Label className="text-white">Sect</Label>
-              <RadioGroup value={sect} onValueChange={(value: string) => setSect(value as Sect)} className="flex gap-6">
+              <RadioGroup
+                value={sect}
+                onValueChange={(value: string) => setSect(value as Sect)}
+                className="flex gap-6"
+              >
                 <div className="flex items-center gap-2">
                   <RadioGroupItem value="SUNNI" id="sect-sunni" />
-                  <Label htmlFor="sect-sunni" className="text-white cursor-pointer">Sunni</Label>
+                  <Label htmlFor="sect-sunni" className="text-white cursor-pointer">
+                    Sunni
+                  </Label>
                 </div>
                 <div className="flex items-center gap-2">
                   <RadioGroupItem value="SHIA" id="sect-shia" />
-                  <Label htmlFor="sect-shia" className="text-white cursor-pointer">Shia</Label>
+                  <Label htmlFor="sect-shia" className="text-white cursor-pointer">
+                    Shia
+                  </Label>
                 </div>
               </RadioGroup>
             </div>
 
             <div className="space-y-3">
               <Label className="text-white">Calculation Method</Label>
-              <Select value={calculationMethod} onValueChange={(value: string) => setCalculationMethod(value as PrayerMethod)}>
+              <Select
+                value={calculationMethod}
+                onValueChange={(value: string) =>
+                  setCalculationMethod(value as PrayerMethod)
+                }
+              >
                 <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                   <SelectValue placeholder="Select calculation method" />
                 </SelectTrigger>
                 <SelectContent>
                   {calcMethodChoices.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -240,7 +406,12 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
 
             <div className="space-y-3">
               <Label className="text-white">Madhhab (Asr method)</Label>
-              <Select value={madhhab} onValueChange={(value: string) => setMadhhab(value as "hanafi" | "shafi")}>
+              <Select
+                value={madhhab}
+                onValueChange={(value: string) =>
+                  setMadhhab(value as "hanafi" | "shafi")
+                }
+              >
                 <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                   <SelectValue placeholder="Select madhhab" />
                 </SelectTrigger>
@@ -253,13 +424,20 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
 
             <div className="space-y-3">
               <Label className="text-white">High Latitude Rule</Label>
-              <Select value={highLatitudeMode} onValueChange={(value: string) => setHighLatitudeMode(value as HighLatitudeMode)}>
+              <Select
+                value={highLatitudeMode}
+                onValueChange={(value: string) =>
+                  setHighLatitudeMode(value as HighLatitudeMode)
+                }
+              >
                 <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                   <SelectValue placeholder="Select high latitude rule" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="automatic">Automatic</SelectItem>
-                  <SelectItem value="middle_of_the_night">Middle of the Night</SelectItem>
+                  <SelectItem value="middle_of_the_night">
+                    Middle of the Night
+                  </SelectItem>
                   <SelectItem value="one_seventh">One Seventh</SelectItem>
                   <SelectItem value="angle_based">Angle Based</SelectItem>
                 </SelectContent>
@@ -268,7 +446,9 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
 
             <div className="border-t border-slate-800 pt-6">
               <h2 className="text-white text-lg mb-2">Timing offsets (minutes)</h2>
-              <p className="text-slate-400 text-sm mb-4">Adjust each prayer time slightly (e.g., Fajr +2, Maghrib -1).</p>
+              <p className="text-slate-400 text-sm mb-4">
+                Adjust each prayer time slightly.
+              </p>
 
               <div className="grid md:grid-cols-2 gap-4">
                 {PRAYERS.map((p) => (
@@ -292,10 +472,19 @@ export default function Step4PrayerSettings({ onboardingData, setOnboardingData 
           </div>
 
           <div className="flex justify-between mt-12">
-            <Button variant="outline" onClick={() => navigate("/onboarding/step3")} className="border-slate-700 text-white hover:bg-slate-800" disabled={saving}>
+            <Button
+              variant="outline"
+              onClick={() => navigate("/onboarding/step3")}
+              className="border-slate-700 text-white hover:bg-slate-800"
+              disabled={saving}
+            >
               Back
             </Button>
-            <Button onClick={handleContinue} className="bg-emerald-600 hover:bg-emerald-700" disabled={saving}>
+            <Button
+              onClick={handleContinue}
+              className="bg-emerald-600 hover:bg-emerald-700"
+              disabled={saving}
+            >
               {saving ? "Saving…" : "Save & Continue"}
             </Button>
           </div>

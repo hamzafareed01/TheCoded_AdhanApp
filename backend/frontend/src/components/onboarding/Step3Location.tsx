@@ -5,20 +5,11 @@ import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
 import { Switch } from "../ui/switch";
 import { apiFetch } from "../../lib/api";
 
-type SupportedCountry = "US" | "PK";
-
 type LocationSettings = {
-  country: SupportedCountry;
+  country: string;
   city: string;
   timezone: string;
   useMosqueLocation: boolean;
@@ -26,38 +17,42 @@ type LocationSettings = {
   longitude?: number;
 };
 
+type OnboardingData = {
+  location?: Partial<LocationSettings>;
+  [key: string]: unknown;
+};
+
 type Step3LocationProps = {
-  onboardingData: any;
-  setOnboardingData: (data: any) => void;
+  onboardingData: OnboardingData;
+  setOnboardingData: (data: OnboardingData) => void;
 };
-
-const COUNTRY_DEFAULTS: Record<SupportedCountry, { city: string; timezone: string }> = {
-  US: {
-    city: "Chicago",
-    timezone: "America/Chicago",
-  },
-  PK: {
-    city: "Karachi",
-    timezone: "Asia/Karachi",
-  },
-};
-
-const TIMEZONE_OPTIONS = [
-  { value: "America/New_York", label: "America/New_York (Eastern)" },
-  { value: "America/Chicago", label: "America/Chicago (Central)" },
-  { value: "America/Denver", label: "America/Denver (Mountain)" },
-  { value: "America/Los_Angeles", label: "America/Los_Angeles (Pacific)" },
-  { value: "America/Anchorage", label: "America/Anchorage (Alaska)" },
-  { value: "Pacific/Honolulu", label: "Pacific/Honolulu (Hawaii)" },
-  { value: "Asia/Karachi", label: "Asia/Karachi (Pakistan Standard Time)" },
-];
 
 function normalizeCity(value: string) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
 
-function makeResolvedKey(country: SupportedCountry, city: string) {
-  return `${country}::${normalizeCity(city).toLowerCase()}`;
+function normalizeCountry(value: string) {
+  const raw = String(value || "").trim().replace(/\s+/g, " ");
+  if (/^[A-Za-z]{2}$/.test(raw)) {
+    return raw.toUpperCase();
+  }
+  return raw;
+}
+
+function normalizeTimezone(value: string) {
+  return String(value || "").trim();
+}
+
+function makeResolvedKey(country: string, city: string) {
+  return `${normalizeCountry(country).toLowerCase()}::${normalizeCity(city).toLowerCase()}`;
+}
+
+function getBrowserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC";
+  } catch {
+    return "Etc/UTC";
+  }
 }
 
 export default function Step3Location({
@@ -66,14 +61,13 @@ export default function Step3Location({
 }: Step3LocationProps) {
   const navigate = useNavigate();
 
-  const initialCountry: SupportedCountry =
-    onboardingData?.location?.country === "PK" ? "PK" : "US";
-
-  const initialCity =
-    onboardingData?.location?.city || COUNTRY_DEFAULTS[initialCountry].city;
-
-  const initialTimezone =
-    onboardingData?.location?.timezone || COUNTRY_DEFAULTS[initialCountry].timezone;
+  const initialCountry = normalizeCountry(
+    onboardingData?.location?.country || "US"
+  );
+  const initialCity = normalizeCity(onboardingData?.location?.city || "Chicago");
+  const initialTimezone = normalizeTimezone(
+    onboardingData?.location?.timezone || getBrowserTimezone()
+  );
 
   const initialLatitude =
     typeof onboardingData?.location?.latitude === "number"
@@ -94,6 +88,7 @@ export default function Step3Location({
     longitude: initialLongitude,
   });
 
+  const [timezoneManuallyEdited, setTimezoneManuallyEdited] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
   const [geocodeError, setGeocodeError] = useState<string | null>(null);
   const [resolvedKey, setResolvedKey] = useState<string | null>(
@@ -112,9 +107,14 @@ export default function Step3Location({
     [location.city]
   );
 
+  const currentCountryNormalized = useMemo(
+    () => normalizeCountry(location.country),
+    [location.country]
+  );
+
   const currentLookupKey = useMemo(
-    () => makeResolvedKey(location.country, currentCityNormalized),
-    [location.country, currentCityNormalized]
+    () => makeResolvedKey(currentCountryNormalized, currentCityNormalized),
+    [currentCountryNormalized, currentCityNormalized]
   );
 
   const clearResolvedCoordinates = () => {
@@ -127,21 +127,18 @@ export default function Step3Location({
     }));
   };
 
-  const handleCountryChange = (value: SupportedCountry) => {
-    const defaults = COUNTRY_DEFAULTS[value];
-
+  const handleCountryChange = (value: string) => {
     setLocation((prev) => ({
       ...prev,
       country: value,
-      city: defaults.city,
-      timezone: defaults.timezone,
-      latitude: undefined,
-      longitude: undefined,
     }));
+    setTimezoneManuallyEdited(false);
+
+    if (resolvedKey) {
+      clearResolvedCoordinates();
+    }
 
     setGeocodeError(null);
-    setResolvedKey(null);
-    setResolvedMessage(null);
   };
 
   const handleCityChange = (value: string) => {
@@ -153,10 +150,12 @@ export default function Step3Location({
     if (resolvedKey) {
       clearResolvedCoordinates();
     }
+
     setGeocodeError(null);
   };
 
   const handleTimezoneChange = (value: string) => {
+    setTimezoneManuallyEdited(true);
     setLocation((prev) => ({
       ...prev,
       timezone: value,
@@ -167,16 +166,24 @@ export default function Step3Location({
     setGeocodeError(null);
 
     const cityTrimmed = normalizeCity(loc.city);
+    const countryTrimmed = normalizeCountry(loc.country);
+
     if (!cityTrimmed) {
-      setGeocodeError("Please enter a city name.");
+      setGeocodeError("Please enter a city.");
+      return null;
+    }
+
+    if (!countryTrimmed) {
+      setGeocodeError("Please enter a country or 2-letter country code.");
       return null;
     }
 
     setGeocoding(true);
+
     try {
       const params = new URLSearchParams({
         city: cityTrimmed,
-        country: loc.country,
+        country: countryTrimmed,
       });
 
       const res = await apiFetch(`/api/geocode?${params.toString()}`);
@@ -184,18 +191,21 @@ export default function Step3Location({
 
       if (!res.ok) {
         const message =
-          data?.error ||
-          "Could not look up coordinates for this city. Please try again.";
+          typeof data?.error === "string"
+            ? data.error
+            : "Could not look up coordinates for this location. Please try again.";
         setGeocodeError(message);
         return null;
       }
 
       const lat = typeof data?.lat === "number" ? data.lat : undefined;
       const lng = typeof data?.lng === "number" ? data.lng : undefined;
+      const geocodedTimezone =
+        typeof data?.timezone === "string" ? data.timezone.trim() : undefined;
 
       if (lat == null || lng == null) {
         setGeocodeError(
-          "The geocoding service did not return valid coordinates for this city."
+          "The geocoding service did not return valid coordinates for this location."
         );
         return null;
       }
@@ -203,14 +213,16 @@ export default function Step3Location({
       return {
         lat,
         lng,
-        formatted: data?.formatted || cityTrimmed,
-        geocodedTimezone:
-          typeof data?.timezone === "string" ? data.timezone : undefined,
+        formatted:
+          typeof data?.formatted === "string" && data.formatted.trim()
+            ? data.formatted
+            : `${cityTrimmed}, ${countryTrimmed}`,
+        geocodedTimezone,
       };
     } catch (err) {
       console.error("Geocoding request failed", err);
       setGeocodeError(
-        "Could not reach the geocoding service. Check your internet connection and try again."
+        "Could not reach the geocoding service. Check your connection and try again."
       );
       return null;
     } finally {
@@ -220,23 +232,28 @@ export default function Step3Location({
 
   const handleNext = async () => {
     const cityTrimmed = normalizeCity(location.city);
+    const countryTrimmed = normalizeCountry(location.country);
+    const timezoneTrimmed = normalizeTimezone(location.timezone);
+
     if (!cityTrimmed) {
-      setGeocodeError("Please enter a city name.");
+      setGeocodeError("Please enter a city.");
       return;
     }
 
-    if (!location.timezone) {
-      setGeocodeError("Please select a timezone.");
+    if (!countryTrimmed) {
+      setGeocodeError("Please enter a country or 2-letter country code.");
       return;
     }
 
     let lat = location.latitude;
     let lng = location.longitude;
+    let finalTimezone = timezoneTrimmed;
 
     if (resolvedKey !== currentLookupKey || lat == null || lng == null) {
       const result = await runGeocode({
         ...location,
         city: cityTrimmed,
+        country: countryTrimmed,
       });
 
       if (!result) return;
@@ -244,20 +261,32 @@ export default function Step3Location({
       lat = result.lat;
       lng = result.lng;
 
+      if ((!timezoneTrimmed || !timezoneManuallyEdited) && result.geocodedTimezone) {
+        finalTimezone = result.geocodedTimezone;
+      }
+
       setResolvedKey(currentLookupKey);
       setResolvedMessage(
         `Coordinates confirmed for ${result.formatted}: ${result.lat.toFixed(
           5
-        )}, ${result.lng.toFixed(5)}`
+        )}, ${result.lng.toFixed(5)}${
+          result.geocodedTimezone ? ` · Timezone: ${result.geocodedTimezone}` : ""
+        }`
       );
+    }
+
+    if (!finalTimezone) {
+      setGeocodeError("Please enter a timezone.");
+      return;
     }
 
     const updatedLocation: LocationSettings = {
       ...location,
+      country: countryTrimmed,
       city: cityTrimmed,
+      timezone: finalTimezone,
       latitude: lat,
       longitude: lng,
-      timezone: location.timezone,
     };
 
     setLocation(updatedLocation);
@@ -278,32 +307,26 @@ export default function Step3Location({
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
           <h1 className="text-white mb-4">Where should prayer times be based?</h1>
           <p className="text-slate-300 mb-8">
-            Choose the country profile, city, and timezone for your prayer
-            schedule. We will look up real coordinates for the city before you continue.
+            Enter your country, city, and timezone. We will look up the real
+            coordinates for this location before you continue.
           </p>
 
           <div className="space-y-6 mb-8">
             <div>
               <Label htmlFor="country" className="text-white mb-2 block">
-                Country
+                Country or region
               </Label>
-              <Select
+              <Input
+                id="country"
                 value={location.country}
-                onValueChange={(value: string) =>
-                  handleCountryChange(value as SupportedCountry)
-                }
-              >
-                <SelectTrigger
-                  id="country"
-                  className="bg-slate-800 border-slate-700 text-white"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
-                  <SelectItem value="US">United States</SelectItem>
-                  <SelectItem value="PK">Pakistan</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={(e) => handleCountryChange(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-white"
+                placeholder="Example: US, PK, Canada, United Kingdom"
+              />
+              <p className="mt-2 text-xs text-slate-400">
+                You can enter a 2-letter code like <span className="font-medium">US</span> or{" "}
+                <span className="font-medium">PK</span>, or a full country name.
+              </p>
             </div>
 
             <div>
@@ -315,16 +338,14 @@ export default function Step3Location({
                 value={location.city}
                 onChange={(e) => handleCityChange(e.target.value)}
                 className="bg-slate-800 border-slate-700 text-white"
-                placeholder={
-                  location.country === "PK" ? "Karachi" : "Chicago"
-                }
+                placeholder="Example: Chicago, Karachi, London, Dubai"
               />
               {geocodeError && (
                 <p className="mt-2 text-xs text-red-400">{geocodeError}</p>
               )}
               {geocoding && !geocodeError && (
                 <p className="mt-2 text-xs text-slate-400">
-                  Looking up real coordinates for this city…
+                  Looking up real coordinates for this location…
                 </p>
               )}
               {!geocoding && !geocodeError && resolvedMessage && (
@@ -336,26 +357,15 @@ export default function Step3Location({
               <Label htmlFor="timezone" className="text-white mb-2 block">
                 Timezone
               </Label>
-              <Select
+              <Input
+                id="timezone"
                 value={location.timezone}
-                onValueChange={(value: string) => handleTimezoneChange(value)}
-              >
-                <SelectTrigger
-                  id="timezone"
-                  className="bg-slate-800 border-slate-700 text-white"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
-                  {TIMEZONE_OPTIONS.map((tz) => (
-                    <SelectItem key={tz.value} value={tz.value}>
-                      {tz.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(e) => handleTimezoneChange(e.target.value)}
+                className="bg-slate-800 border-slate-700 text-white"
+                placeholder="Example: America/Chicago, Asia/Karachi, Europe/London"
+              />
               <p className="mt-2 text-xs text-slate-400">
-                Your selected timezone will be saved as-is. City lookup is used for coordinates.
+                Timezone can be auto-detected from city lookup. You can also override it manually.
               </p>
             </div>
 
@@ -395,7 +405,7 @@ export default function Step3Location({
               size="lg"
               disabled={geocoding}
             >
-              {geocoding ? "Checking city…" : "Next"}
+              {geocoding ? "Checking location…" : "Next"}
             </Button>
           </div>
         </div>

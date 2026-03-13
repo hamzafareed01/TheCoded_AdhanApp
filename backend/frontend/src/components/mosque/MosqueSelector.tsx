@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
@@ -62,7 +68,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function asBoolean(value: unknown): boolean | null {
@@ -73,17 +79,40 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function normalizeCountry(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!raw) return "US";
+  if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
+  return raw;
+}
+
+function normalizeCity(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(/\s+/g, " ");
+  return raw || "Chicago";
+}
+
+function normalizeTimezone(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  return raw || "Etc/UTC";
+}
+
 function normalizeSettings(payload: unknown): UserSettings {
   const root = isRecord(payload) ? (payload as SettingsResponse) : {};
   const src =
     isRecord((root as { settings?: unknown }).settings)
-      ? ((root as { settings?: Record<string, unknown> }).settings as Record<string, unknown>)
+      ? ((root as { settings?: Record<string, unknown> }).settings as Record<
+          string,
+          unknown
+        >)
       : (root as Record<string, unknown>);
 
   const quietSource = isRecord(src.quietHours) ? src.quietHours : {};
 
   return {
-    userId: asString((root as Record<string, unknown>).userKey) ?? asString(src.userId) ?? undefined,
+    userId:
+      asString((root as Record<string, unknown>).userKey) ??
+      asString(src.userId) ??
+      undefined,
     language: asString(src.language) ?? "en",
     madhhab: asString(src.madhhab) ?? "hanafi",
     shia: asBoolean(src.shia) ?? src.sect === "SHIA",
@@ -95,9 +124,9 @@ function normalizeSettings(payload: unknown): UserSettings {
       asString(src.highLatitudeMethod) ??
       asString(src.high_latitude_method) ??
       "automatic",
-    country: asString(src.country) ?? "US",
-    city: asString(src.city) ?? "Chicago",
-    timezone: asString(src.timezone) ?? "America/Chicago",
+    country: normalizeCountry(src.country),
+    city: normalizeCity(src.city),
+    timezone: normalizeTimezone(src.timezone),
     mosqueId: asString(src.mosqueId),
     quietHours: {
       enabled: asBoolean(quietSource.enabled) ?? false,
@@ -153,10 +182,7 @@ function isSameLocationQuery(query: string, settings: UserSettings) {
   return false;
 }
 
-function buildDirectionsUrl(
-  mosque: Mosque,
-  settings: UserSettings | null
-): string {
+function buildDirectionsUrl(mosque: Mosque, settings: UserSettings | null): string {
   const origin =
     typeof settings?.latitude === "number" &&
     typeof settings?.longitude === "number"
@@ -227,6 +253,7 @@ export default function MosqueSelector({
 
     const json = await res.json();
     const normalized = normalizeSettings(json);
+
     setSettings(normalized);
     setSelectedMosqueId(normalized.mosqueId ?? null);
 
@@ -250,10 +277,13 @@ export default function MosqueSelector({
     if (!settings) return;
 
     const rawQuery =
-      queryOverride?.trim() ||
-      searchQuery.trim() ||
-      settings.city.trim() ||
-      "";
+      queryOverride?.trim() || searchQuery.trim() || settings.city.trim() || "";
+
+    if (!rawQuery) {
+      setMosquesError("Please enter a city or mosque name.");
+      setMosques([]);
+      return;
+    }
 
     const sameAsOnboarding = isSameLocationQuery(rawQuery, settings);
 
@@ -261,21 +291,26 @@ export default function MosqueSelector({
       setMosquesLoading(true);
       setMosquesError(null);
 
-      const effectiveQuery = rawQuery || settings.city;
       const params = new URLSearchParams();
-
-      params.set("query", effectiveQuery);
+      params.set("query", rawQuery);
       params.set("country", settings.country || "US");
       params.set("radiusKm", "25");
       params.set("bias", sameAsOnboarding ? "user" : "none");
 
       const res = await apiFetch(`/api/mosques?${params.toString()}`);
       if (!res.ok) {
-        throw new Error(`Failed to load mosques (${res.status})`);
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `Failed to load mosques (${res.status})`);
       }
 
       const json = await res.json();
-      setMosques(normalizeMosques(json));
+      const normalized = normalizeMosques(json);
+
+      setMosques(normalized);
+
+      if (normalized.length === 0) {
+        setMosquesError("No mosques found for this search.");
+      }
     } catch (err) {
       console.error(err);
       setMosquesError("Unable to load mosques from server.");
@@ -290,7 +325,9 @@ export default function MosqueSelector({
       try {
         const token = getStoredAmazonToken();
         if (!token) {
-          setError("Please connect Amazon in onboarding step 2 before choosing a mosque.");
+          setError(
+            "Please connect Amazon in onboarding step 2 before choosing a mosque."
+          );
           return;
         }
 
@@ -463,13 +500,13 @@ export default function MosqueSelector({
                   <p className="text-slate-400 text-sm px-1">Loading mosques…</p>
                 )}
 
-                {mosquesError && (
+                {!mosquesLoading && mosquesError && (
                   <p className="text-red-400 text-sm px-1">{mosquesError}</p>
                 )}
 
                 {!mosquesLoading && !mosquesError && mosques.length === 0 && (
                   <p className="text-slate-400 text-sm px-1">
-                    No mosques found for this search.
+                    Search for a city or mosque name to load results.
                   </p>
                 )}
 
