@@ -14,7 +14,6 @@ import {
 } from "../ui/select";
 import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
-type CountryCode = "US" | "PK";
 type Sect = "SUNNI" | "SHIA";
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
@@ -44,7 +43,7 @@ type UserSettings = {
   madhhab: "hanafi" | "shafi";
   calculationMethod: string;
   highLatitudeMethod: string;
-  country: CountryCode;
+  country: string;
   city: string;
   timezone: string;
   latitude: number | null;
@@ -103,24 +102,6 @@ const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const NONE_VALUE = "__none__";
 
-const COUNTRY_OPTIONS: { value: CountryCode; label: string }[] = [
-  { value: "US", label: "United States" },
-  { value: "PK", label: "Pakistan" },
-];
-
-const TIMEZONE_OPTIONS: Record<
-  CountryCode,
-  { value: string; label: string }[]
-> = {
-  US: [
-    { value: "America/New_York", label: "America/New_York (Eastern)" },
-    { value: "America/Chicago", label: "America/Chicago (Central)" },
-    { value: "America/Denver", label: "America/Denver (Mountain)" },
-    { value: "America/Los_Angeles", label: "America/Los_Angeles (Pacific)" },
-  ],
-  PK: [{ value: "Asia/Karachi", label: "Asia/Karachi (Pakistan Standard Time)" }],
-};
-
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -137,24 +118,28 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function normalizeCountryCode(value: unknown): CountryCode {
-  const v = String(value ?? "")
-    .trim()
-    .toUpperCase();
-
-  if (v === "PK" || v === "PAKISTAN") return "PK";
-  return "US";
+function normalizeCountry(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!raw) return "US";
+  if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
+  return raw;
 }
 
-function getDefaultTimezone(country: CountryCode): string {
-  return country === "PK" ? "Asia/Karachi" : "America/Chicago";
+function normalizeCity(value: unknown): string {
+  const raw = String(value ?? "").trim().replace(/\s+/g, " ");
+  return raw || "Chicago";
 }
 
-function normalizeTimezone(country: CountryCode, timezone: unknown): string {
-  const tz = asString(timezone);
-  const allowed = TIMEZONE_OPTIONS[country].map((item) => item.value);
-  if (tz && allowed.includes(tz)) return tz;
-  return getDefaultTimezone(country);
+function normalizeTimezone(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function getBrowserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC";
+  } catch {
+    return "Etc/UTC";
+  }
 }
 
 function defaultOffsets(): Offsets {
@@ -268,8 +253,6 @@ function normalizeSettings(payload: unknown): UserSettings {
   const root = isRecord(payload) ? payload : {};
   const src = isRecord(root.settings) ? root.settings : root;
 
-  const country = normalizeCountryCode(src.country);
-
   const offsetsSource = isRecord(src.globalOffsets)
     ? src.globalOffsets
     : isRecord(src.offsets)
@@ -291,9 +274,9 @@ function normalizeSettings(payload: unknown): UserSettings {
       asString(src.highLatitudeMethod) ??
       asString(src.high_latitude_method) ??
       "automatic",
-    country,
-    city: asString(src.city) ?? (country === "PK" ? "Karachi" : "Chicago"),
-    timezone: normalizeTimezone(country, src.timezone),
+    country: normalizeCountry(src.country),
+    city: normalizeCity(src.city),
+    timezone: normalizeTimezone(src.timezone) || getBrowserTimezone(),
     latitude: asNumber(src.latitude),
     longitude: asNumber(src.longitude),
     accountEnabled:
@@ -359,7 +342,9 @@ function normalizeSurahs(payload: unknown): SurahItem[] {
       number: asNumber(item.number) ?? NaN,
       nameEnglish: asString(item.nameEnglish) ?? "",
     }))
-    .filter((item) => Number.isFinite(item.number) && item.number >= 1 && !!item.nameEnglish);
+    .filter(
+      (item) => Number.isFinite(item.number) && item.number >= 1 && !!item.nameEnglish
+    );
 }
 
 function normalizeDevices(payload: unknown): Device[] {
@@ -418,10 +403,10 @@ async function saveSettings(payload: JsonRecord) {
   });
 }
 
-async function geocodeLocation(city: string, country: CountryCode) {
+async function geocodeLocation(city: string, country: string) {
   const params = new URLSearchParams({
     city: city.trim(),
-    country,
+    country: country.trim(),
   });
 
   const res = await apiFetch(`/api/geocode?${params.toString()}`);
@@ -430,7 +415,7 @@ async function geocodeLocation(city: string, country: CountryCode) {
   if (!res.ok) {
     throw new Error(
       (isRecord(data) && asString(data.error)) ||
-        "Could not geocode the selected city."
+        "Could not geocode the selected location."
     );
   }
 
@@ -449,7 +434,7 @@ async function geocodeLocation(city: string, country: CountryCode) {
   return {
     lat,
     lng,
-    timezone: normalizeTimezone(country, timezone),
+    timezone: timezone ?? null,
   };
 }
 
@@ -579,22 +564,21 @@ export default function Settings({
     });
   };
 
-  const handleCountryChange = (country: CountryCode) => {
+  const handleLocationFieldChange = (
+    key: "country" | "city" | "timezone",
+    value: string
+  ) => {
     setSettings((prev) => {
       if (!prev) return prev;
 
-      const nextTimezone =
-        country === "PK"
-          ? "Asia/Karachi"
-          : prev.timezone === "Asia/Karachi"
-          ? "America/Chicago"
-          : normalizeTimezone(country, prev.timezone);
-
       return {
         ...prev,
-        country,
-        timezone: nextTimezone,
-        city: prev.city || (country === "PK" ? "Karachi" : "Chicago"),
+        [key]:
+          key === "country"
+            ? normalizeCountry(value)
+            : key === "city"
+            ? value
+            : value,
         latitude: null,
         longitude: null,
       };
@@ -609,17 +593,27 @@ export default function Settings({
     setError(null);
 
     try {
-      if (!settings.city.trim()) {
+      const normalizedCountry = normalizeCountry(settings.country);
+      const normalizedCity = normalizeCity(settings.city);
+      const typedTimezone = normalizeTimezone(settings.timezone);
+
+      if (!normalizedCountry) {
+        throw new Error("Country is required.");
+      }
+
+      if (!normalizedCity) {
         throw new Error("City is required.");
       }
 
-      const geo = await geocodeLocation(settings.city, settings.country);
+      const geo = await geocodeLocation(normalizedCity, normalizedCountry);
 
       const syncedSettings: UserSettings = {
         ...settings,
+        country: normalizedCountry,
+        city: normalizedCity,
+        timezone: typedTimezone || geo.timezone || getBrowserTimezone(),
         latitude: geo.lat,
         longitude: geo.lng,
-        timezone: geo.timezone,
       };
 
       const payload: JsonRecord = {
@@ -758,7 +752,7 @@ export default function Settings({
           <div>
             <h1 className="text-white text-xl mb-1">Settings</h1>
             <p className="text-slate-400 text-sm">
-              Sect, calculation, location sync, per-prayer Adhan, and schedules.
+              Sect, calculation, worldwide location sync, per-prayer Adhan, and schedules.
             </p>
           </div>
 
@@ -911,24 +905,15 @@ export default function Settings({
                   <h2 className="text-white text-lg">Location</h2>
 
                   <div className="space-y-2">
-                    <Label className="text-slate-200">Country</Label>
-                    <Select
+                    <Label className="text-slate-200">Country or region</Label>
+                    <Input
+                      className="bg-slate-900 border-slate-700 text-slate-100"
                       value={settings.country}
-                      onValueChange={(v: string) =>
-                        handleCountryChange(v === "PK" ? "PK" : "US")
+                      onChange={(e) =>
+                        handleLocationFieldChange("country", e.target.value)
                       }
-                    >
-                      <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-900 border-slate-700">
-                        {COUNTRY_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      placeholder="Example: US, PK, Canada, United Kingdom"
+                    />
                   </div>
 
                   <div className="space-y-2">
@@ -936,32 +921,26 @@ export default function Settings({
                     <Input
                       className="bg-slate-900 border-slate-700 text-slate-100"
                       value={settings.city}
-                      onChange={(e) => {
-                        updateField("city", e.target.value);
-                        updateField("latitude", null);
-                        updateField("longitude", null);
-                      }}
-                      placeholder={settings.country === "PK" ? "Karachi" : "Chicago"}
+                      onChange={(e) =>
+                        handleLocationFieldChange("city", e.target.value)
+                      }
+                      placeholder="Example: Chicago, Karachi, London, Dubai"
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-slate-200">Time zone</Label>
-                    <Select
+                    <Label className="text-slate-200">Timezone</Label>
+                    <Input
+                      className="bg-slate-900 border-slate-700 text-slate-100"
                       value={settings.timezone}
-                      onValueChange={(v: string) => updateField("timezone", v)}
-                    >
-                      <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-900 border-slate-700">
-                        {TIMEZONE_OPTIONS[settings.country].map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      onChange={(e) =>
+                        handleLocationFieldChange("timezone", e.target.value)
+                      }
+                      placeholder="Example: America/Chicago, Asia/Karachi, Europe/London"
+                    />
+                    <p className="text-xs text-slate-400">
+                      Use an IANA timezone name. If left blank, geocoding can supply one on save.
+                    </p>
                   </div>
 
                   <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm">
@@ -969,7 +948,7 @@ export default function Settings({
                     <div className="text-slate-400">
                       {settings.latitude != null && settings.longitude != null
                         ? `${settings.latitude.toFixed(6)}, ${settings.longitude.toFixed(6)}`
-                        : "Will be refreshed from your city when you save settings."}
+                        : "Will be refreshed from your country and city when you save settings."}
                     </div>
                   </div>
                 </div>
