@@ -11,8 +11,11 @@ on:
       - "backend/data/**"
       - "backend/library/**"
       - "backend/audio/**"
+      - "backend/prisma/**"
+      - "backend/prisma.config.ts"
       - "backend/package.json"
       - "backend/package-lock.json"
+      - "backend/Dockerfile"
       - ".github/workflows/deploy_backend.yml"
   workflow_dispatch:
 
@@ -38,6 +41,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Stage backend package
+        shell: bash
         run: |
           rm -rf deploy
           mkdir -p deploy
@@ -46,30 +50,37 @@ jobs:
           cp backend/package.json deploy/
           cp backend/package-lock.json deploy/
 
-          cp -R backend/db deploy/db
-          cp -R backend/scripts deploy/scripts
-          cp -R backend/migrations deploy/migrations
-          cp -R backend/data deploy/data
-          cp -R backend/library deploy/library
-          cp -R backend/audio deploy/audio
+          [ -f backend/prisma.config.ts ] && cp backend/prisma.config.ts deploy/ || true
+          [ -d backend/db ] && cp -R backend/db deploy/db || true
+          [ -d backend/scripts ] && cp -R backend/scripts deploy/scripts || true
+          [ -d backend/migrations ] && cp -R backend/migrations deploy/migrations || true
+          [ -d backend/data ] && cp -R backend/data deploy/data || true
+          [ -d backend/library ] && cp -R backend/library deploy/library || true
+          [ -d backend/audio ] && cp -R backend/audio deploy/audio || true
+          [ -d backend/prisma ] && cp -R backend/prisma deploy/prisma || true
 
-      - name: Install production deps in staged package
+      - name: Install production dependencies in staged package
+        shell: bash
         run: |
           cd deploy
-          npm ci --omit=dev
+          npm ci --omit=dev --ignore-scripts
 
       - name: Inspect staged package
+        shell: bash
         run: |
           cd deploy
-          find . -maxdepth 3 -type f | sort | grep -E 'package.json|index.js|scripts/|migrations/|db/'
+          find . -maxdepth 4 -type f | sort | grep -E 'package.json|package-lock.json|index.js|scripts/|migrations/|db/|prisma/|data/|library/|audio/' || true
 
       - name: Create deploy zip
+        shell: bash
         run: |
           cd deploy
           zip -r ../backend_deploy.zip .
 
       - name: Inspect deploy zip
-        run: unzip -l backend_deploy.zip | grep -E 'package.json|index.js|scripts/|migrations/'
+        shell: bash
+        run: |
+          unzip -l backend_deploy.zip | grep -E 'package.json|package-lock.json|index.js|scripts/|migrations/|db/|prisma/|data/|library/|audio/' || true
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
