@@ -5,7 +5,7 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
-import { AlexaIcon, GoogleIcon, AppleIcon } from "../shared/BrandIcons";
+import { AlexaIcon, AppleIcon, GoogleIcon } from "../shared/BrandIcons";
 import {
   apiFetch,
   clearStoredAmazonToken,
@@ -18,27 +18,28 @@ import {
   getAmazonReturnUrl,
 } from "../../lib/amazonLogin";
 
-declare global {
-  interface Window {
-    amazon?: any;
-  }
-}
+type AmazonAuthorizeResponse = {
+  access_token?: string;
+  error?: string;
+  error_description?: string;
+  [key: string]: unknown;
+};
 
 type PlatformKey = "alexa" | "google" | "apple";
 
-interface OnboardingData {
+type OnboardingData = {
   connectedPlatforms?: PlatformKey[];
   tokens?: Record<string, string>;
-}
+};
 
-interface Props {
+type Props = {
   onboardingData?: OnboardingData;
   setOnboardingData?: (data: OnboardingData) => void;
-}
+};
 
 type IntegrationStatus = {
-  userKey: string;
-  alexa: {
+  userKey?: string;
+  alexa?: {
     connected: boolean;
     linkedAt: string | null;
     displayName: string | null;
@@ -54,8 +55,7 @@ const LS_TOKENS = "adhan_tokens";
 function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
     return fallback;
   }
@@ -73,16 +73,10 @@ export default function Step2ConnectAccounts({
 
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(
-    null
-  );
+  const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
 
-  const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(
-    () =>
-      readJson<PlatformKey[]>(
-        LS_CONNECTED,
-        onboardingData?.connectedPlatforms ?? []
-      )
+  const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(() =>
+    readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
   );
 
   const [tokens, setTokens] = useState<Record<string, string>>(() =>
@@ -102,21 +96,21 @@ export default function Step2ConnectAccounts({
       {
         key: "alexa" as const,
         name: "Amazon Alexa",
-        desc: "Control Adhan & reminders using Alexa devices.",
+        desc: "Required for backend-linked Adhan playback and protected settings.",
         Icon: AlexaIcon,
         badge: "Required",
       },
       {
         key: "google" as const,
         name: "Google",
-        desc: "Calendar + reminders (coming soon).",
+        desc: "Calendar and reminders support will be added later.",
         Icon: GoogleIcon,
         badge: "Soon",
       },
       {
         key: "apple" as const,
         name: "Apple",
-        desc: "iOS notifications (coming soon).",
+        desc: "Apple notifications support will be added later.",
         Icon: AppleIcon,
         badge: "Soon",
       },
@@ -127,9 +121,7 @@ export default function Step2ConnectAccounts({
   const isConnected = (key: PlatformKey) => connectedPlatforms.includes(key);
 
   const markConnected = (key: PlatformKey) => {
-    setConnectedPlatforms((prev) =>
-      prev.includes(key) ? prev : [...prev, key]
-    );
+    setConnectedPlatforms((prev) => (prev.includes(key) ? prev : [...prev, key]));
   };
 
   const markDisconnected = (key: PlatformKey) => {
@@ -167,7 +159,10 @@ export default function Step2ConnectAccounts({
   }
 
   useEffect(() => {
-    refreshServerStatus();
+    if (getStoredAmazonToken()) {
+      markConnected("alexa");
+    }
+    void refreshServerStatus();
   }, []);
 
   async function connectAlexa() {
@@ -192,8 +187,8 @@ export default function Step2ConnectAccounts({
     try {
       await ensureAmazonSdk();
 
-      const tokenResp: any = await new Promise((resolve, reject) => {
-        window.amazon.Login.authorize(
+      const tokenResp = await new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
+        window.amazon?.Login?.authorize?.(
           {
             client_id: clientId,
             scope: "profile",
@@ -202,19 +197,24 @@ export default function Step2ConnectAccounts({
             popup: true,
             state: `adhan_${Date.now()}`,
           },
-          (res: any) => {
+          (res: AmazonAuthorizeResponse | null) => {
             if (!res) {
-              return reject(new Error("No response from Amazon login."));
+              reject(new Error("No response from Amazon login."));
+              return;
             }
-            if (res.error) {
-              return reject(new Error(res.error_description || res.error));
+
+            if (typeof res.error === "string") {
+              reject(new Error(String(res.error_description || res.error)));
+              return;
             }
+
             resolve(res);
           }
         );
       });
 
       const accessToken: string | undefined = tokenResp?.access_token;
+
       if (!accessToken) {
         throw new Error("Amazon did not return an access token.");
       }
@@ -228,16 +228,14 @@ export default function Step2ConnectAccounts({
 
       if (!linkRes.ok) {
         const msg = await linkRes.text().catch(() => "");
-        throw new Error(
-          `Backend link failed (${linkRes.status}). ${msg}`.trim()
-        );
+        throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
       }
 
       setTokens((prev) => ({ ...prev, alexa: accessToken }));
       markConnected("alexa");
       await refreshServerStatus();
-    } catch (e: any) {
-      setError(e?.message || "Alexa connection failed.");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Alexa connection failed.");
     } finally {
       setLoadingKey(null);
     }
@@ -250,7 +248,7 @@ export default function Step2ConnectAccounts({
     try {
       await apiFetch("/api/integrations/alexa/disconnect", {
         method: "POST",
-      }).catch(() => {});
+      }).catch(() => undefined);
 
       try {
         window.amazon?.Login?.logout?.();
@@ -267,12 +265,18 @@ export default function Step2ConnectAccounts({
   }
 
   async function handleConnect(key: PlatformKey) {
-    if (key === "alexa") return connectAlexa();
+    if (key === "alexa") {
+      await connectAlexa();
+      return;
+    }
     setError(`${key.toUpperCase()} integration is coming soon.`);
   }
 
   async function handleDisconnect(key: PlatformKey) {
-    if (key === "alexa") return disconnectAlexa();
+    if (key === "alexa") {
+      await disconnectAlexa();
+      return;
+    }
     markDisconnected(key);
   }
 
@@ -285,6 +289,8 @@ export default function Step2ConnectAccounts({
     navigate("/onboarding/step3");
   }
 
+  const canContinue = isConnected("alexa") || !!serverStatus?.alexa?.connected;
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
       <div className="mx-auto max-w-3xl px-6 py-10">
@@ -296,8 +302,8 @@ export default function Step2ConnectAccounts({
         <div className="mt-8">
           <h1 className="text-2xl font-semibold">Connect your accounts</h1>
           <p className="mt-2 text-muted-foreground">
-            Amazon Alexa is required for this production build so your settings
-            and prayer times can load from the backend.
+            Amazon Alexa is required so your settings, devices, and prayer times can
+            be loaded from Azure-backed APIs.
           </p>
         </div>
 
@@ -312,9 +318,7 @@ export default function Step2ConnectAccounts({
             const connected = isConnected(platform.key);
             const busy = loadingKey === platform.key;
             const serverConnected =
-              platform.key === "alexa"
-                ? !!serverStatus?.alexa?.connected
-                : false;
+              platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
 
             return (
               <div
@@ -329,56 +333,43 @@ export default function Step2ConnectAccounts({
                   <div>
                     <div className="flex items-center gap-2">
                       <div className="font-medium">{platform.name}</div>
-                      {platform.badge && (
-                        <Badge variant="secondary">{platform.badge}</Badge>
-                      )}
+                      <Badge variant="secondary">{platform.badge}</Badge>
                       {connected && <Badge>Connected</Badge>}
-                      {serverConnected && (
-                        <Badge variant="outline">Server linked</Badge>
-                      )}
+                      {serverConnected && <Badge variant="outline">Server linked</Badge>}
                     </div>
 
-                    <div className="text-sm text-muted-foreground">
-                      {platform.desc}
-                    </div>
+                    <div className="text-sm text-muted-foreground">{platform.desc}</div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {!connected ? (
-                    <Button
-                      onClick={() => handleConnect(platform.key)}
-                      disabled={busy}
-                      variant={
-                        platform.key === "alexa" ? "default" : "secondary"
-                      }
-                    >
-                      {busy ? "Connecting..." : "Connect"}
-                    </Button>
-                  ) : (
-                    <Button
-                      onClick={() => handleDisconnect(platform.key)}
-                      disabled={busy}
-                      variant="outline"
-                    >
-                      {busy ? "Disconnecting..." : "Disconnect"}
-                    </Button>
-                  )}
-                </div>
+                {!connected ? (
+                  <Button
+                    onClick={() => void handleConnect(platform.key)}
+                    disabled={busy}
+                    variant={platform.key === "alexa" ? "default" : "secondary"}
+                  >
+                    {busy ? "Connecting..." : "Connect"}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => void handleDisconnect(platform.key)}
+                    disabled={busy}
+                    variant="outline"
+                  >
+                    {busy ? "Disconnecting..." : "Disconnect"}
+                  </Button>
+                )}
               </div>
             );
           })}
         </div>
 
         <div className="mt-10 flex items-center justify-between">
-          <Button
-            variant="ghost"
-            onClick={() => navigate("/onboarding/step1")}
-          >
+          <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>
             Back
           </Button>
 
-          <Button onClick={handleContinue} disabled={!isConnected("alexa")}>
+          <Button onClick={handleContinue} disabled={!canContinue}>
             Continue
           </Button>
         </div>

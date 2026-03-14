@@ -1,14 +1,17 @@
 {
-  "name": "Adhan Home",
-  "short_name": "AdhanHome",
-  "description": "Prayer times, Adhan alerts, duas, surahs, qiblah and mosque tools.",
+  "name": "The Coded Adhan App",
+  "short_name": "Adhan App",
+  "description": "Prayer times, Adhan playback, duas, surahs, qiblah, and mosque tools.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "background_color": "#020617",
+  "theme_color": "#020617",
   "lang": "en",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/pwa-192.png",
