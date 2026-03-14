@@ -48,9 +48,9 @@ function isTransientSqlError(err) {
   const num = Number(err?.number);
 
   return (
-    num === 40613 || // database unavailable / serverless resume
-    num === 40197 || // service encountered an error
-    num === 40501 || // service busy / throttling
+    num === 40613 ||
+    num === 40197 ||
+    num === 40501 ||
     num === 49918 ||
     num === 49919 ||
     num === 49920 ||
