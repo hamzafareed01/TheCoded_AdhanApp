@@ -95,7 +95,7 @@ type SummaryData = {
   quiet: QuietHours;
   accountEnabled: boolean;
   prayerConfigs: PrayerConfig[];
-  selectedDeviceCount: number;
+  linkedDeviceCount: number;
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -303,7 +303,7 @@ export default function Step6Summary({
           "07:00"
         : "07:00";
 
-    const selectedDeviceCount = Array.isArray(devicesValue)
+    const linkedDeviceCount = Array.isArray(devicesValue)
       ? devicesValue.length
       : 0;
 
@@ -331,7 +331,7 @@ export default function Step6Summary({
       },
       accountEnabled: onboardingData?.accountEnabled !== false,
       prayerConfigs: normalizePrayerConfigs(onboardingData?.prayerConfigs),
-      selectedDeviceCount,
+      linkedDeviceCount,
     };
   }, [onboardingData]);
 
@@ -568,8 +568,8 @@ export default function Step6Summary({
             </div>
 
             <div>
-              <div className="text-muted-foreground">Selected Devices</div>
-              <div className="font-medium">{summary.selectedDeviceCount}</div>
+              <div className="text-muted-foreground">Linked Devices</div>
+              <div className="font-medium">{summary.linkedDeviceCount}</div>
             </div>
           </div>
         </div>

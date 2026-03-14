@@ -1,4 +1,3 @@
-// backend/scripts/migrate.js
 const fs = require("fs");
 const path = require("path");
 const { sql, getPool, closePool } = require("../db/sql");
@@ -87,7 +86,6 @@ async function applyMigration(pool, migrationsDir, file) {
   try {
     for (let i = 0; i < batches.length; i += 1) {
       const batch = batches[i];
-
       await new sql.Request(tx).query(`
         SET XACT_ABORT ON;
         ${batch}

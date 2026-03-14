@@ -91,10 +91,6 @@ type SettingsShape = {
   mosqueCity?: string | null;
 };
 
-type SettingsResponse = SettingsShape & {
-  settings?: SettingsShape;
-};
-
 type TodayShape = {
   location?: {
     city?: string;
@@ -143,32 +139,29 @@ function safeReadJson<T>(key: string, fallback: T): T {
   }
 }
 
+function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item): item is JsonObject => isObject(item))
+    .map((item) => ({
+      prayerName: asString(item.prayerName) ?? "",
+      enabled: item.enabled !== false,
+      quietEnabled:
+        typeof item.quietEnabled === "boolean" ? item.quietEnabled : false,
+      quietFrom: asString(item.quietFrom),
+      quietTo: asString(item.quietTo),
+      adhanReciterId:
+        typeof item.adhanReciterId === "string" ? item.adhanReciterId : null,
+    }))
+    .filter((item) => !!item.prayerName);
+}
+
 function normalizeSettings(payload: unknown): SettingsShape | null {
   if (!isObject(payload)) return null;
 
-  const root = payload as SettingsResponse;
+  const root = payload;
   const src = isObject(root.settings) ? root.settings : root;
-
-  const prayerConfigs: PrayerConfig[] = Array.isArray(src.prayerConfigs)
-    ? src.prayerConfigs
-        .filter((item): item is PrayerConfig => isObject(item))
-        .map((item) => ({
-          prayerName:
-            typeof item.prayerName === "string" ? item.prayerName : "",
-          enabled: item.enabled !== false,
-          quietEnabled:
-            typeof item.quietEnabled === "boolean" ? item.quietEnabled : false,
-          quietFrom:
-            typeof item.quietFrom === "string" ? item.quietFrom : undefined,
-          quietTo:
-            typeof item.quietTo === "string" ? item.quietTo : undefined,
-          adhanReciterId:
-            typeof item.adhanReciterId === "string"
-              ? item.adhanReciterId
-              : null,
-        }))
-        .filter((item) => !!item.prayerName)
-    : [];
 
   return {
     city: asString(src.city),
@@ -177,7 +170,7 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
     latitude: asNumber(src.latitude),
     longitude: asNumber(src.longitude),
     accountEnabled: src.accountEnabled === true,
-    prayerConfigs,
+    prayerConfigs: normalizePrayerConfigs(src.prayerConfigs),
     mosqueId: typeof src.mosqueId === "string" ? src.mosqueId : null,
     mosqueName: typeof src.mosqueName === "string" ? src.mosqueName : null,
     mosqueAddress:
@@ -189,7 +182,7 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
 function normalizeToday(payload: unknown): TodayShape | null {
   if (!isObject(payload)) return null;
 
-  const src = payload as JsonObject;
+  const src = payload;
   const location = isObject(src.location) ? src.location : null;
 
   return {
@@ -225,8 +218,7 @@ function normalizeDevices(payload: unknown): Device[] {
     .map((item) => ({
       id: typeof item.id === "string" ? item.id : "",
       name: typeof item.name === "string" ? item.name : "",
-      platform:
-        typeof item.platform === "string" ? item.platform : undefined,
+      platform: typeof item.platform === "string" ? item.platform : undefined,
     }))
     .filter((item) => item.id && item.name);
 }
@@ -377,9 +369,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     todayData?.prayers24 || todayData?.prayers12 || null;
 
   const activeTimeZone =
-    todayData?.location?.timezone ||
-    userSettings?.timezone ||
-    "Etc/UTC";
+    todayData?.location?.timezone || userSettings?.timezone || "Etc/UTC";
 
   useEffect(() => {
     async function loadSettingsAndDevices() {
@@ -514,13 +504,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         }
       }
 
-      const effectiveNowSeconds =
-        nextIdx === 0 ? nowSeconds : nextIdx === -1 ? nowSeconds : nowSeconds;
-
       const adjustedNowSeconds =
-        prevEntry && prevEntry.seconds > effectiveNowSeconds
-          ? effectiveNowSeconds + 24 * 3600
-          : effectiveNowSeconds;
+        prevEntry && prevEntry.seconds > nowSeconds
+          ? nowSeconds + 24 * 3600
+          : nowSeconds;
 
       setNextPrayerCode(nextEntry.code);
       setNextPrayerTimeDisplay(
@@ -701,7 +688,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           </div>
 
           <p className="text-slate-500 text-sm">
-            Play a sample Adhan on your selected device. If it&apos;s inside quiet
+            Play a sample Adhan on a linked Alexa device. If it&apos;s inside quiet
             hours, it should stay muted.
           </p>
         </div>
@@ -789,7 +776,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               )}
 
               <p className="text-slate-400 text-sm mb-4">
-                {deviceCount} device(s) active for Adhan
+                {deviceCount} linked Alexa device(s) available
               </p>
 
               <Button
