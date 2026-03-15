@@ -129,8 +129,26 @@ function clampNumber(value, min, max, fallback) {
 }
 
 function normalizeTimeString(value, fallback) {
-  const s = String(value || "").trim();
-  return /^\d{2}:\d{2}$/.test(s) ? s : fallback;
+  const raw = String(value || "").trim();
+
+  if (/^\d{2}:\d{2}:\d{2}$/.test(raw)) {
+    return raw;
+  }
+
+  if (/^\d{2}:\d{2}$/.test(raw)) {
+    return `${raw}:00`;
+  }
+
+  const fb = String(fallback || "").trim();
+  if (/^\d{2}:\d{2}:\d{2}$/.test(fb)) {
+    return fb;
+  }
+
+  if (/^\d{2}:\d{2}$/.test(fb)) {
+    return `${fb}:00`;
+  }
+
+  return "22:00:00";
 }
 
 function getRegionCode(value) {
@@ -1244,6 +1262,24 @@ async function handleSaveUserSettings(req, res) {
       const prayerName = String(pc.prayerName || pc.prayer_name || "").toLowerCase();
       if (!PRAYERS.includes(prayerName)) continue;
 
+      const setEnabled =
+        hasOwn(pc, "enabled") || hasOwn(pc, "enabled");
+      const setOffsetMin =
+        hasOwn(pc, "offsetMin") || hasOwn(pc, "offset_min");
+      const setQuietEnabled =
+        hasOwn(pc, "quietEnabled") || hasOwn(pc, "quiet_enabled");
+      const setQuietFrom =
+        hasOwn(pc, "quietFrom") || hasOwn(pc, "quiet_from");
+      const setQuietTo =
+        hasOwn(pc, "quietTo") || hasOwn(pc, "quiet_to");
+      const setAdhanReciterId =
+        hasOwn(pc, "adhanReciterId") || hasOwn(pc, "adhan_reciter_id");
+      const setAfterAdhan =
+        hasOwn(pc, "afterAdhan") ||
+        hasOwn(pc, "after_type") ||
+        hasOwn(pc, "after_payload") ||
+        hasOwn(pc, "after_payload_json");
+
       const rawAfterType = String(
         pc.afterAdhan?.type || pc.after_type || "none"
       ).toLowerCase();
@@ -1259,37 +1295,79 @@ async function handleSaveUserSettings(req, res) {
         .request()
         .input("user_id", sql.UniqueIdentifier, userId)
         .input("prayer_name", sql.NVarChar(10), prayerName)
-        .input("enabled", sql.Bit, pc.enabled === false ? 0 : 1)
-        .input("offset_min", sql.Int, Number(pc.offsetMin ?? pc.offset_min ?? 0))
-        .input("quiet_enabled", sql.Bit, pc.quietEnabled ? 1 : 0)
+
+        .input("set_enabled", sql.Bit, setEnabled ? 1 : 0)
+        .input(
+          "enabled",
+          sql.Bit,
+          setEnabled ? (pc.enabled === false ? 0 : 1) : null
+        )
+
+        .input("set_offset_min", sql.Bit, setOffsetMin ? 1 : 0)
+        .input(
+          "offset_min",
+          sql.Int,
+          setOffsetMin ? Number(pc.offsetMin ?? pc.offset_min ?? 0) : null
+        )
+
+        .input("set_quiet_enabled", sql.Bit, setQuietEnabled ? 1 : 0)
+        .input(
+          "quiet_enabled",
+          sql.Bit,
+          setQuietEnabled ? (pc.quietEnabled ? 1 : 0) : null
+        )
+
+        .input("set_quiet_from", sql.Bit, setQuietFrom ? 1 : 0)
         .input(
           "quiet_from",
           sql.Time,
-          pc.quietFrom ? normalizeTimeString(pc.quietFrom, "22:00") : null
+          setQuietFrom
+            ? normalizeTimeString(pc.quietFrom ?? pc.quiet_from, "22:00")
+            : null
         )
+
+        .input("set_quiet_to", sql.Bit, setQuietTo ? 1 : 0)
         .input(
           "quiet_to",
           sql.Time,
-          pc.quietTo ? normalizeTimeString(pc.quietTo, "07:00") : null
+          setQuietTo
+            ? normalizeTimeString(pc.quietTo ?? pc.quiet_to, "07:00")
+            : null
         )
+
+        .input("set_adhan_reciter_id", sql.Bit, setAdhanReciterId ? 1 : 0)
         .input(
           "adhan_reciter_id",
           sql.NVarChar(64),
-          pc.adhanReciterId ? String(pc.adhanReciterId) : null
+          setAdhanReciterId
+            ? (pc.adhanReciterId ? String(pc.adhanReciterId) : null)
+            : null
         )
-        .input("after_type", sql.NVarChar(16), afterType)
-        .input("after_payload_json", sql.NVarChar(sql.MAX), afterPayloadJson)
+
+        .input("set_after_type", sql.Bit, setAfterAdhan ? 1 : 0)
+        .input(
+          "after_type",
+          sql.NVarChar(16),
+          setAfterAdhan ? afterType : null
+        )
+
+        .input("set_after_payload_json", sql.Bit, setAfterAdhan ? 1 : 0)
+        .input(
+          "after_payload_json",
+          sql.NVarChar(sql.MAX),
+          setAfterAdhan ? afterPayloadJson : null
+        )
         .query(`
           UPDATE dbo.prayer_configs
           SET
-            enabled = @enabled,
-            offset_min = @offset_min,
-            quiet_enabled = @quiet_enabled,
-            quiet_from = @quiet_from,
-            quiet_to = @quiet_to,
-            adhan_reciter_id = @adhan_reciter_id,
-            after_type = @after_type,
-            after_payload_json = @after_payload_json,
+            enabled = CASE WHEN @set_enabled = 1 THEN @enabled ELSE enabled END,
+            offset_min = CASE WHEN @set_offset_min = 1 THEN @offset_min ELSE offset_min END,
+            quiet_enabled = CASE WHEN @set_quiet_enabled = 1 THEN @quiet_enabled ELSE quiet_enabled END,
+            quiet_from = CASE WHEN @set_quiet_from = 1 THEN @quiet_from ELSE quiet_from END,
+            quiet_to = CASE WHEN @set_quiet_to = 1 THEN @quiet_to ELSE quiet_to END,
+            adhan_reciter_id = CASE WHEN @set_adhan_reciter_id = 1 THEN @adhan_reciter_id ELSE adhan_reciter_id END,
+            after_type = CASE WHEN @set_after_type = 1 THEN @after_type ELSE after_type END,
+            after_payload_json = CASE WHEN @set_after_payload_json = 1 THEN @after_payload_json ELSE after_payload_json END,
             updated_at = SYSUTCDATETIME()
           WHERE user_id = @user_id AND prayer_name = @prayer_name
         `);
