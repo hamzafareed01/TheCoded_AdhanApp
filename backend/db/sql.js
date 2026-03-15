@@ -28,17 +28,20 @@ function getConfig() {
     database,
     port,
     pool: {
-      max: 10,
+      max: 5,
       min: 0,
       idleTimeoutMillis: 30000,
+      acquireTimeoutMillis: 60000,
+      createTimeoutMillis: 60000,
+      createRetryIntervalMillis: 500,
     },
     options: {
       encrypt: true,
       trustServerCertificate: false,
       enableArithAbort: true,
     },
-    connectionTimeout: 30000,
-    requestTimeout: 30000,
+    connectionTimeout: 45000,
+    requestTimeout: 45000,
   };
 }
 
@@ -48,9 +51,9 @@ function isTransientSqlError(err) {
   const num = Number(err?.number);
 
   return (
-    num === 40613 ||
-    num === 40197 ||
-    num === 40501 ||
+    num === 40613 || // database unavailable / serverless resume
+    num === 40197 || // service encountered an error
+    num === 40501 || // service busy / throttling
     num === 49918 ||
     num === 49919 ||
     num === 49920 ||
@@ -88,7 +91,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function connectWithRetry(maxAttempts = 6) {
+async function connectWithRetry(maxAttempts = 8) {
   let lastErr = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -125,7 +128,7 @@ async function connectWithRetry(maxAttempts = 6) {
         break;
       }
 
-      const delayMs = 750 * Math.pow(2, attempt - 1);
+      const delayMs = Math.min(6000, 750 * Math.pow(2, attempt - 1));
       console.warn(
         `Azure SQL connect attempt ${attempt}/${maxAttempts} failed. Retrying in ${delayMs}ms...`,
         err?.message || err
