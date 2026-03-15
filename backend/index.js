@@ -1099,48 +1099,49 @@ async function handleSaveUserSettings(req, res) {
     isha: currentProfile.offset_isha || 0,
   });
 
-  const profileReq = pool.request().input("user_id", sql.UniqueIdentifier, userId);
+  const profileReq = pool.request();
 
-  if (sect !== undefined) {
-    profileReq.input("sect", sql.NVarChar(10), String(sect).toUpperCase());
-  }
-  if (calc !== undefined) {
-    profileReq.input("calc", sql.NVarChar(50), String(calc));
-  }
-  if (madhhab !== undefined) {
-    profileReq.input("madhhab", sql.NVarChar(20), String(madhhab));
-  }
-  if (high !== undefined) {
-    profileReq.input("high", sql.NVarChar(30), String(high));
-  }
-  if (language !== undefined) {
-    profileReq.input("language", sql.NVarChar(10), String(language));
-  }
-  if (country !== undefined) {
-    profileReq.input("country", sql.NVarChar(64), country);
-  }
-  if (city !== undefined) {
-    profileReq.input("city", sql.NVarChar(128), city || null);
-  }
-  if (timezone !== undefined) {
-    profileReq.input("timezone", sql.NVarChar(64), timezone || null);
-  }
-  if (latitude !== undefined) {
-    profileReq.input("latitude", sql.Float, latitude);
-  }
-  if (longitude !== undefined) {
-    profileReq.input("longitude", sql.Float, longitude);
-  }
-  if (accountEnabled !== undefined) {
-    profileReq.input("account_enabled", sql.Bit, accountEnabled ? 1 : 0);
-  }
-  if (useMosqueLocation !== undefined) {
-    profileReq.input(
-      "use_mosque_location",
-      sql.Bit,
-      useMosqueLocation ? 1 : 0
-    );
-  }
+  profileReq.input("user_id", sql.UniqueIdentifier, userId);
+  profileReq.input(
+    "sect",
+    sql.NVarChar(10),
+    sect !== undefined ? String(sect).toUpperCase() : null
+  );
+  profileReq.input(
+    "calc",
+    sql.NVarChar(50),
+    calc !== undefined ? String(calc) : null
+  );
+  profileReq.input(
+    "madhhab",
+    sql.NVarChar(20),
+    madhhab !== undefined ? String(madhhab) : null
+  );
+  profileReq.input(
+    "high",
+    sql.NVarChar(30),
+    high !== undefined ? String(high) : null
+  );
+  profileReq.input(
+    "language",
+    sql.NVarChar(10),
+    language !== undefined ? String(language) : null
+  );
+  profileReq.input("country", sql.NVarChar(64), country ?? null);
+  profileReq.input("city", sql.NVarChar(128), city ?? null);
+  profileReq.input("timezone", sql.NVarChar(64), timezone ?? null);
+  profileReq.input("latitude", sql.Float, latitude ?? null);
+  profileReq.input("longitude", sql.Float, longitude ?? null);
+  profileReq.input(
+    "account_enabled",
+    sql.Bit,
+    accountEnabled !== undefined ? (accountEnabled ? 1 : 0) : null
+  );
+  profileReq.input(
+    "use_mosque_location",
+    sql.Bit,
+    useMosqueLocation !== undefined ? (useMosqueLocation ? 1 : 0) : null
+  );
 
   profileReq.input("off_fajr", sql.Int, offsets.fajr);
   profileReq.input("off_dhuhr", sql.Int, offsets.dhuhr);
