@@ -11,7 +11,11 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Label } from "../ui/label";
-import { apiFetch, getStoredAmazonToken } from "../../lib/api";
+import {
+  apiFetch,
+  getStoredAmazonToken,
+  subscribeToAmazonAuthChanges,
+} from "../../lib/api";
 import { MapPin, Search, CheckCircle2, Navigation2 } from "lucide-react";
 
 type QuietHours = {
@@ -222,6 +226,9 @@ export default function MosqueSelector({
   onboardingData,
   setOnboardingData,
 }: MosqueSelectorProps) {
+  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
+    !!getStoredAmazonToken()
+  );
   const [settings, setSettings] = useState<UserSettings | null>(null);
 
   const [mosques, setMosques] = useState<Mosque[]>([]);
@@ -245,9 +252,18 @@ export default function MosqueSelector({
     [mosques, selectedMosqueId]
   );
 
+  useEffect(() => {
+    return subscribeToAmazonAuthChanges(() => {
+      setHasAmazonToken(!!getStoredAmazonToken());
+    });
+  }, []);
+
   async function refreshSettings() {
     const res = await apiFetch("/api/user/settings");
     if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error("Your Amazon session expired. Please reconnect Amazon.");
+      }
       throw new Error(`Failed to load settings (${res.status})`);
     }
 
@@ -313,7 +329,9 @@ export default function MosqueSelector({
       }
     } catch (err) {
       console.error(err);
-      setMosquesError("Unable to load mosques from server.");
+      setMosquesError(
+        err instanceof Error ? err.message : "Unable to load mosques from server."
+      );
       setMosques([]);
     } finally {
       setMosquesLoading(false);
@@ -323,8 +341,8 @@ export default function MosqueSelector({
   useEffect(() => {
     const load = async () => {
       try {
-        const token = getStoredAmazonToken();
-        if (!token) {
+        if (!hasAmazonToken) {
+          setSettings(null);
           setError(
             "Please connect Amazon in onboarding step 2 before choosing a mosque."
           );
@@ -339,12 +357,14 @@ export default function MosqueSelector({
         }
       } catch (err) {
         console.error(err);
-        setError("Unable to load settings from server.");
+        setError(
+          err instanceof Error ? err.message : "Unable to load settings from server."
+        );
       }
     };
 
     void load();
-  }, []);
+  }, [hasAmazonToken]);
 
   const handleSearchClick = async () => {
     await fetchMosques(searchQuery);
@@ -430,7 +450,7 @@ export default function MosqueSelector({
       setSaveMessage("Mosque selection saved.");
     } catch (err) {
       console.error(err);
-      setError("Could not save mosque. Please try again.");
+      setError(err instanceof Error ? err.message : "Could not save mosque. Please try again.");
     } finally {
       setSaving(false);
     }

@@ -12,7 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
-import { apiFetch, getStoredAmazonToken } from "../../lib/api";
+import {
+  apiFetch,
+  getStoredAmazonToken,
+  subscribeToAmazonAuthChanges,
+} from "../../lib/api";
 
 type Sect = "SUNNI" | "SHIA";
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
@@ -442,6 +446,9 @@ export default function Settings({
   onboardingData,
   setOnboardingData,
 }: SettingsProps) {
+  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
+    !!getStoredAmazonToken()
+  );
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [reciters, setReciters] = useState<Reciter[]>([]);
   const [duas, setDuas] = useState<DuaItem[]>([]);
@@ -471,12 +478,18 @@ export default function Settings({
   const offsetsRows = useMemo(() => PRAYERS, []);
 
   useEffect(() => {
+    return subscribeToAmazonAuthChanges(() => {
+      setHasAmazonToken(!!getStoredAmazonToken());
+    });
+  }, []);
+
+  useEffect(() => {
     async function loadAll() {
       try {
         setError(null);
 
-        const token = getStoredAmazonToken();
-        if (!token) {
+        if (!hasAmazonToken) {
+          setSettings(null);
           setError("Please connect Amazon in onboarding step 2 to use settings.");
           return;
         }
@@ -491,6 +504,9 @@ export default function Settings({
           ]);
 
         if (!settingsRes.ok) {
+          if (settingsRes.status === 401) {
+            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
+          }
           throw new Error(`Failed to load settings (${settingsRes.status})`);
         }
 
@@ -528,7 +544,7 @@ export default function Settings({
     }
 
     void loadAll();
-  }, []);
+  }, [hasAmazonToken]);
 
   async function loadSchedules() {
     const res = await apiFetch("/api/user/schedules");
@@ -573,12 +589,7 @@ export default function Settings({
 
       return {
         ...prev,
-        [key]:
-          key === "country"
-            ? normalizeCountry(value)
-            : key === "city"
-            ? value
-            : value,
+        [key]: key === "country" ? normalizeCountry(value) : value,
         latitude: null,
         longitude: null,
       };

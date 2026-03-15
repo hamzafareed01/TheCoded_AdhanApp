@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
-import { apiFetch, getStoredAmazonToken } from "../../lib/api";
+import {
+  apiFetch,
+  getStoredAmazonToken,
+  subscribeToAmazonAuthChanges,
+} from "../../lib/api";
 import TestAdhanButton from "./TestAdhanButton";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
@@ -333,16 +337,16 @@ function getConnectedPlatforms(
   const fromLocal = safeReadJson<string[]>("adhan_connected_platforms", []);
   const merged = new Set<string>([...fromOnboarding, ...fromLocal]);
 
-  if (hasAmazonToken) {
-    merged.add("alexa");
-  }
-
-  return Array.from(merged);
+  return Array.from(merged).filter(
+    (platform) => platform !== "alexa" || hasAmazonToken
+  );
 }
 
 export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const navigate = useNavigate();
-  const hasAmazonToken = !!getStoredAmazonToken();
+  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
+    !!getStoredAmazonToken()
+  );
 
   const [todayData, setTodayData] = useState<TodayShape | null>(null);
   const [loadingToday, setLoadingToday] = useState(true);
@@ -356,6 +360,12 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
   const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    return subscribeToAmazonAuthChanges(() => {
+      setHasAmazonToken(!!getStoredAmazonToken());
+    });
+  }, []);
 
   const connectedPlatforms = useMemo(
     () => getConnectedPlatforms(onboardingData, hasAmazonToken),
@@ -389,6 +399,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         ]);
 
         if (!settingsRes.ok) {
+          if (settingsRes.status === 401) {
+            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
+          }
           throw new Error(`Settings request failed (${settingsRes.status})`);
         }
 
@@ -403,7 +416,11 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         }
       } catch (err) {
         console.error("Failed to load settings/devices:", err);
-        setSettingsError("Could not load your automation settings.");
+        setSettingsError(
+          err instanceof Error
+            ? err.message
+            : "Could not load your automation settings."
+        );
         setUserSettings(null);
         setDeviceCount(0);
       }
@@ -427,6 +444,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
         const res = await apiFetch("/api/prayer-times/today");
         if (!res.ok) {
+          if (res.status === 401) {
+            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
+          }
           throw new Error(`Prayer times request failed (${res.status})`);
         }
 
@@ -434,7 +454,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         setTodayData(normalizeToday(data));
       } catch (err) {
         console.error("Failed to load prayer times:", err);
-        setTodayError("Could not load prayer times.");
+        setTodayError(
+          err instanceof Error ? err.message : "Could not load prayer times."
+        );
         setTodayData(null);
       } finally {
         setLoadingToday(false);

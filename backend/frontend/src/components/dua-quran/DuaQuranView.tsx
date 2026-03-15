@@ -6,6 +6,8 @@ import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { apiFetch } from "../../lib/api";
 
+type JsonRecord = Record<string, unknown>;
+
 type Dua = {
   id: string;
   category: string;
@@ -18,7 +20,6 @@ type Dua = {
 };
 
 type SurahSummary = {
-  id: number;
   number: number;
   nameArabic: string;
   nameEnglish: string;
@@ -37,7 +38,6 @@ type Verse = {
 };
 
 type SurahDetail = {
-  id: number;
   number: number;
   nameArabic: string;
   nameEnglish: string;
@@ -47,6 +47,130 @@ type SurahDetail = {
   surahAudioUrl?: string;
   verses: Verse[];
 };
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeDuas(payload: unknown): Dua[] {
+  if (!isRecord(payload) || !Array.isArray(payload.categories)) return [];
+
+  const out: Dua[] = [];
+
+  for (const category of payload.categories) {
+    if (!isRecord(category) || !Array.isArray(category.items)) continue;
+
+    const categoryTitle = asString(category.title) ?? asString(category.name) ?? "Dua";
+
+    for (const item of category.items) {
+      if (!isRecord(item)) continue;
+
+      const id = asString(item.id);
+      const title = asString(item.title);
+      const textArabic =
+        asString(item.textArabic) ?? asString(item.arabic) ?? asString(item.text_arabic);
+      const textTranslation =
+        asString(item.textTranslation) ??
+        asString(item.translation) ??
+        asString(item.text_translation);
+
+      if (!id || !title || !textArabic || !textTranslation) continue;
+
+      out.push({
+        id,
+        category: categoryTitle,
+        title,
+        textArabic,
+        textTransliteration:
+          asString(item.textTransliteration) ??
+          asString(item.transliteration) ??
+          asString(item.text_transliteration) ??
+          undefined,
+        textTranslation,
+        audioUrl:
+          asString(item.audioUrl) ?? asString(item.audio_url) ?? asString(item.audio) ?? undefined,
+        tags: Array.isArray(item.tags)
+          ? item.tags.filter((tag): tag is string => typeof tag === "string")
+          : undefined,
+      });
+    }
+  }
+
+  return out;
+}
+
+function normalizeSurahSummaries(payload: unknown): SurahSummary[] {
+  if (!isRecord(payload) || !Array.isArray(payload.surahs)) return [];
+
+  return payload.surahs
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => ({
+      number: asNumber(item.number) ?? NaN,
+      nameArabic: asString(item.nameArabic) ?? asString(item.name) ?? "",
+      nameEnglish: asString(item.nameEnglish) ?? "",
+      englishNameTranslation:
+        asString(item.englishNameTranslation) ??
+        asString(item.translationEnglish) ??
+        "",
+      ayahCount: asNumber(item.ayahCount) ?? asNumber(item.ayahs) ?? 0,
+      revelationType: asString(item.revelationType) ?? "",
+    }))
+    .filter(
+      (item) =>
+        Number.isFinite(item.number) && item.number >= 1 && item.nameArabic && item.nameEnglish
+    );
+}
+
+function normalizeSurahDetail(payload: unknown): SurahDetail | null {
+  const root = isRecord(payload) ? payload : {};
+  const src = isRecord(root.surah) ? root.surah : root;
+  if (!isRecord(src)) return null;
+
+  const ayahs = Array.isArray(src.ayahs) ? src.ayahs : Array.isArray(src.verses) ? src.verses : [];
+  const verses: Verse[] = ayahs
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item) => ({
+      numberInSurah: asNumber(item.numberInSurah) ?? NaN,
+      textArabic: asString(item.textArabic) ?? asString(item.arabic) ?? asString(item.text) ?? "",
+      textTranslation:
+        asString(item.textTranslation) ?? asString(item.translation) ?? null,
+      textTransliteration:
+        asString(item.textTransliteration) ?? asString(item.transliteration) ?? null,
+      audioUrl: asString(item.audioUrl) ?? asString(item.audio) ?? null,
+      audioVariants: Array.isArray(item.audioVariants)
+        ? item.audioVariants.filter((v): v is string => typeof v === "string")
+        : undefined,
+    }))
+    .filter((item) => Number.isFinite(item.numberInSurah) && !!item.textArabic);
+
+  const number = asNumber(src.number);
+  const nameArabic = asString(src.nameArabic) ?? asString(src.name);
+  const nameEnglish = asString(src.nameEnglish);
+
+  if (!number || !nameArabic || !nameEnglish) {
+    return null;
+  }
+
+  return {
+    number,
+    nameArabic,
+    nameEnglish,
+    englishNameTranslation:
+      asString(src.englishNameTranslation) ?? asString(src.translationEnglish) ?? "",
+    ayahCount: verses.length || asNumber(src.ayahCount) || 0,
+    revelationType: asString(src.revelationType) ?? "",
+    surahAudioUrl: asString(src.surahAudioUrl) ?? undefined,
+    verses,
+  };
+}
 
 export default function DuaQuranView() {
   const [duas, setDuas] = useState<Dua[]>([]);
@@ -58,14 +182,12 @@ export default function DuaQuranView() {
   const [error, setError] = useState<string | null>(null);
   const [showVerses, setShowVerses] = useState(true);
 
-  // Whole-surah playback state
   const [playingSurahId, setPlayingSurahId] = useState<number | null>(null);
   const [currentAyahIdx, setCurrentAyahIdx] = useState(0);
   const surahAudioRef = useRef<HTMLAudioElement | null>(null);
   const singleAyahAudioRef = useRef<HTMLAudioElement | null>(null);
   const playbackSessionRef = useRef(0);
 
-  // ✅ HARD-LOCK page scroll while this view is mounted
   useEffect(() => {
     const prevHtmlOverflow = document.documentElement.style.overflow;
     const prevBodyOverflow = document.body.style.overflow;
@@ -79,7 +201,6 @@ export default function DuaQuranView() {
     };
   }, []);
 
-  // Clean-up on unmount
   useEffect(() => {
     return () => {
       stopSurahPlayback();
@@ -104,14 +225,14 @@ export default function DuaQuranView() {
         const duasJson = await duasRes.json();
         const surahJson = await surahRes.json();
 
-        setDuas(duasJson.duas || []);
-        const list: SurahSummary[] = surahJson.surahs || [];
+        setDuas(normalizeDuas(duasJson));
+        const list = normalizeSurahSummaries(surahJson);
         setSurahs(list);
 
         if (list.length > 0) {
           const first = list[0];
-          setSelectedSurahId(first.id);
-          loadSurahDetail(first.id);
+          setSelectedSurahId(first.number);
+          await loadSurahDetail(first.number);
         }
       } catch (err) {
         console.error(err);
@@ -121,11 +242,13 @@ export default function DuaQuranView() {
       }
     }
 
-    load();
+    void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadSurahDetail(id: number) {
+    if (!Number.isFinite(id) || id < 1) return;
+
     try {
       setLoadingSurahDetail(true);
       setError(null);
@@ -133,7 +256,8 @@ export default function DuaQuranView() {
 
       const res = await apiFetch(`/api/quran/surahs/${id}`);
       if (!res.ok) throw new Error(`Surah detail HTTP ${res.status}`);
-      const data: SurahDetail = await res.json();
+      const data = normalizeSurahDetail(await res.json());
+      if (!data) throw new Error("Invalid surah detail payload.");
 
       setSelectedSurah(data);
     } catch (err) {
@@ -147,7 +271,7 @@ export default function DuaQuranView() {
   function handleSelectSurah(id: number) {
     if (id === selectedSurahId) return;
     setSelectedSurahId(id);
-    loadSurahDetail(id);
+    void loadSurahDetail(id);
   }
 
   function handlePlayAyah(audioUrl?: string | null) {
@@ -211,12 +335,12 @@ export default function DuaQuranView() {
   function togglePlayWholeSurah() {
     if (!selectedSurah || !selectedSurah.verses?.length) return;
 
-    if (playingSurahId === selectedSurah.id) {
+    if (playingSurahId === selectedSurah.number) {
       stopSurahPlayback();
       return;
     }
 
-    setPlayingSurahId(selectedSurah.id);
+    setPlayingSurahId(selectedSurah.number);
     setCurrentAyahIdx(0);
     const sessionId = ++playbackSessionRef.current;
     playAyahIndex(0, selectedSurah.verses, sessionId);
@@ -244,20 +368,15 @@ export default function DuaQuranView() {
     setCurrentAyahIdx(0);
   }
 
-  const quranSurahs = surahs;
-
   return (
-    // ✅ Viewport-locked container: page can’t grow -> no page scrolling
     <div className="fixed inset-0 bg-slate-950 overflow-hidden">
       <div className="h-full w-full py-6 px-4 md:px-8">
         <div className="max-w-7xl mx-auto h-full flex flex-col min-h-0">
-          {/* Top nav */}
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4 shrink-0">
             <Logo />
             <Navigation />
           </div>
 
-          {/* Header */}
           <header className="mb-4 shrink-0">
             <h1 className="text-3xl md:text-4xl font-semibold text-white mb-2">
               Dua & Qur’an
@@ -273,9 +392,7 @@ export default function DuaQuranView() {
             </div>
           )}
 
-          {/* Two columns take remaining height */}
           <div className="grid lg:grid-cols-2 gap-6 flex-1 min-h-0">
-            {/* LEFT: DUAS */}
             <section className="flex flex-col min-h-0">
               <div className="shrink-0">
                 <div className="flex items-center gap-2 mb-2">
@@ -289,7 +406,6 @@ export default function DuaQuranView() {
                 </p>
               </div>
 
-              {/* ✅ RED-BOX behavior: scroll only inside this panel */}
               <div className="flex-1 min-h-0 rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
                   {duas.map((dua) => (
@@ -333,7 +449,7 @@ export default function DuaQuranView() {
                             size="sm"
                             variant="outline"
                             className="shrink-0 border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700"
-                            onClick={() => handlePlayAyah(`${dua.audioUrl}`)}
+                            onClick={() => handlePlayAyah(dua.audioUrl)}
                           >
                             <Headphones className="w-4 h-4 mr-1" />
                             Play
@@ -352,7 +468,6 @@ export default function DuaQuranView() {
               </div>
             </section>
 
-            {/* RIGHT: QURAN */}
             <section className="flex flex-col min-h-0">
               <div className="shrink-0">
                 <div className="flex items-center gap-2 mb-2">
@@ -366,24 +481,23 @@ export default function DuaQuranView() {
                 </p>
               </div>
 
-              {/* ✅ RED-BOX behavior: scroll only inside this panel */}
               <div className="flex-1 min-h-0 rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
                   {loadingSurahs && (
                     <p className="text-slate-400 text-sm">Loading surahs…</p>
                   )}
 
-                  {quranSurahs.map((s) => {
-                    const isActive = s.id === selectedSurahId;
+                  {surahs.map((s) => {
+                    const isActive = s.number === selectedSurahId;
                     return (
                       <div
-                        key={s.id}
+                        key={s.number}
                         className="rounded-2xl bg-slate-900/80 border border-slate-800"
                       >
                         <div className="flex items-center justify-between px-4 md:px-5 py-3">
                           <div
                             className="flex flex-col gap-1 cursor-pointer"
-                            onClick={() => handleSelectSurah(s.id)}
+                            onClick={() => handleSelectSurah(s.number)}
                           >
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm text-slate-400">
@@ -409,7 +523,7 @@ export default function DuaQuranView() {
                                 onClick={togglePlayWholeSurah}
                               >
                                 <Play className="w-4 h-4 mr-1" />
-                                {playingSurahId === selectedSurah.id ? "Stop" : "Play Surah"}
+                                {playingSurahId === selectedSurah.number ? "Stop" : "Play Surah"}
                               </Button>
                             )}
 
@@ -418,7 +532,7 @@ export default function DuaQuranView() {
                               variant="outline"
                               className="border-slate-700 text-slate-200 bg-slate-800 hover:bg-slate-700"
                               onClick={() => {
-                                if (!isActive) handleSelectSurah(s.id);
+                                if (!isActive) handleSelectSurah(s.number);
                                 setShowVerses((prev) => (isActive ? !prev : true));
                               }}
                             >
@@ -448,7 +562,7 @@ export default function DuaQuranView() {
                             {!loadingSurahDetail &&
                               selectedSurah.verses.map((v) => {
                                 const isCurrentAyah =
-                                  playingSurahId === selectedSurah.id &&
+                                  playingSurahId === selectedSurah.number &&
                                   selectedSurah.verses[currentAyahIdx]?.numberInSurah ===
                                     v.numberInSurah;
 
@@ -471,7 +585,7 @@ export default function DuaQuranView() {
                                           size="sm"
                                           variant="ghost"
                                           className="text-emerald-400 hover:text-emerald-300 hover:bg-transparent px-2 py-1"
-                                          onClick={() => handlePlayAyah(v.audioUrl || undefined)}
+                                          onClick={() => handlePlayAyah(v.audioUrl)}
                                         >
                                           <Headphones className="w-4 h-4 mr-1" />
                                           Play

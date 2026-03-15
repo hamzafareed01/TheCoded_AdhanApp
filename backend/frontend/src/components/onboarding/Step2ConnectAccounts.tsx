@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../ui/button";
@@ -10,6 +10,7 @@ import {
   apiFetch,
   clearStoredAmazonToken,
   getStoredAmazonToken,
+  restoreAmazonTokenFromUrl,
   setStoredAmazonToken,
 } from "../../lib/api";
 import {
@@ -143,7 +144,9 @@ export default function Step2ConnectAccounts({
     try {
       const resp = await apiFetch("/api/integrations");
       if (!resp.ok) {
-        setServerStatus(null);
+        if (resp.status === 401) {
+          setServerStatus(null);
+        }
         return;
       }
 
@@ -158,11 +161,49 @@ export default function Step2ConnectAccounts({
     }
   }
 
-  useEffect(() => {
-    if (getStoredAmazonToken()) {
-      markConnected("alexa");
+  async function completeAlexaLogin(accessToken: string) {
+    setStoredAmazonToken(accessToken);
+
+    const linkRes = await apiFetch("/api/integrations/alexa/login", {
+      method: "POST",
+      body: JSON.stringify({ accessToken }),
+    });
+
+    if (!linkRes.ok) {
+      const msg = await linkRes.text().catch(() => "");
+      throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
     }
-    void refreshServerStatus();
+
+    setTokens((prev) => ({ ...prev, alexa: accessToken }));
+    markConnected("alexa");
+    await refreshServerStatus();
+  }
+
+  useEffect(() => {
+    const boot = async () => {
+      const restoredToken = restoreAmazonTokenFromUrl();
+
+      if (restoredToken) {
+        try {
+          setLoadingKey("alexa");
+          setError(null);
+          await completeAlexaLogin(restoredToken);
+        } catch (e: unknown) {
+          setError(e instanceof Error ? e.message : "Alexa connection failed.");
+        } finally {
+          setLoadingKey(null);
+        }
+        return;
+      }
+
+      if (getStoredAmazonToken()) {
+        markConnected("alexa");
+      }
+
+      await refreshServerStatus();
+    };
+
+    void boot();
   }, []);
 
   async function connectAlexa() {
@@ -214,26 +255,11 @@ export default function Step2ConnectAccounts({
       });
 
       const accessToken: string | undefined = tokenResp?.access_token;
-
       if (!accessToken) {
         throw new Error("Amazon did not return an access token.");
       }
 
-      setStoredAmazonToken(accessToken);
-
-      const linkRes = await apiFetch("/api/integrations/alexa/login", {
-        method: "POST",
-        body: JSON.stringify({ accessToken }),
-      });
-
-      if (!linkRes.ok) {
-        const msg = await linkRes.text().catch(() => "");
-        throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
-      }
-
-      setTokens((prev) => ({ ...prev, alexa: accessToken }));
-      markConnected("alexa");
-      await refreshServerStatus();
+      await completeAlexaLogin(accessToken);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
     } finally {

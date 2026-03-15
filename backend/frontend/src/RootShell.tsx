@@ -16,7 +16,12 @@ import QiblahFinder from "./components/qiblah/QiblahFinder";
 import AlexaSetup from "./components/alexa/AlexaSetup";
 
 import type { AppUser } from "./types/AppUser";
-import { apiFetch, getStoredAmazonToken } from "./lib/api";
+import {
+  apiFetch,
+  getStoredAmazonToken,
+  restoreAmazonTokenFromUrl,
+  subscribeToAmazonAuthChanges,
+} from "./lib/api";
 
 type RootShellProps = {
   user?: AppUser | null;
@@ -112,7 +117,9 @@ function readStoredOnboardingState(): OnboardingState {
             ? location.useMosqueLocation
             : base.location.useMosqueLocation,
       },
-      prayerSettings: isRecord(parsed.prayerSettings) ? parsed.prayerSettings : base.prayerSettings,
+      prayerSettings: isRecord(parsed.prayerSettings)
+        ? parsed.prayerSettings
+        : base.prayerSettings,
       devices: Array.isArray(parsed.devices)
         ? parsed.devices.filter((x): x is string => typeof x === "string")
         : base.devices,
@@ -131,9 +138,20 @@ export default function RootShell({ user }: RootShellProps) {
   const [onboardingData, setOnboardingData] = useState<OnboardingState>(() =>
     readStoredOnboardingState()
   );
+  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(() => {
+    restoreAmazonTokenFromUrl();
+    return !!getStoredAmazonToken();
+  });
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
+  }, []);
+
+  useEffect(() => {
+    return subscribeToAmazonAuthChanges(() => {
+      restoreAmazonTokenFromUrl();
+      setHasAmazonToken(!!getStoredAmazonToken());
+    });
   }, []);
 
   useEffect(() => {
@@ -142,8 +160,7 @@ export default function RootShell({ user }: RootShellProps) {
 
   useEffect(() => {
     async function loadUserSettings() {
-      const token = getStoredAmazonToken();
-      if (!token) return;
+      if (!hasAmazonToken) return;
 
       try {
         const res = await apiFetch("/api/user/settings");
@@ -155,7 +172,9 @@ export default function RootShell({ user }: RootShellProps) {
 
         setOnboardingData((prev) => ({
           ...prev,
-          connectedPlatforms: Array.from(new Set([...prev.connectedPlatforms, "alexa"])),
+          connectedPlatforms: Array.from(
+            new Set([...prev.connectedPlatforms, "alexa"])
+          ),
           location: {
             ...prev.location,
             country: asString(settings.country) ?? prev.location.country,
@@ -209,18 +228,21 @@ export default function RootShell({ user }: RootShellProps) {
     }
 
     void loadUserSettings();
-  }, []);
+  }, [hasAmazonToken]);
 
   const defaultPath = useMemo(() => {
-    return getStoredAmazonToken() ? "/dashboard" : "/onboarding/step1";
-  }, []);
+    return hasAmazonToken ? "/dashboard" : "/onboarding/step1";
+  }, [hasAmazonToken]);
 
   return (
     <Router>
       <div className="min-h-screen bg-slate-950">
         <Routes>
           <Route path="/" element={<Navigate to={defaultPath} replace />} />
-          <Route path="/preview_page_v2.html" element={<Navigate to={defaultPath} replace />} />
+          <Route
+            path="/preview_page_v2.html"
+            element={<Navigate to={defaultPath} replace />}
+          />
 
           <Route
             path="/onboarding/step1"
@@ -277,14 +299,27 @@ export default function RootShell({ user }: RootShellProps) {
             }
           />
 
-          <Route path="/dashboard" element={<Dashboard onboardingData={onboardingData} user={user} />} />
+          <Route
+            path="/dashboard"
+            element={<Dashboard onboardingData={onboardingData} user={user} />}
+          />
           <Route
             path="/mosque"
-            element={<MosqueSelector onboardingData={onboardingData} setOnboardingData={setOnboardingData} />}
+            element={
+              <MosqueSelector
+                onboardingData={onboardingData}
+                setOnboardingData={setOnboardingData}
+              />
+            }
           />
           <Route
             path="/settings"
-            element={<Settings onboardingData={onboardingData} setOnboardingData={setOnboardingData} />}
+            element={
+              <Settings
+                onboardingData={onboardingData}
+                setOnboardingData={setOnboardingData}
+              />
+            }
           />
           <Route path="/alexa-setup" element={<AlexaSetup />} />
           <Route path="/calendar" element={<CalendarView />} />
