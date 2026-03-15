@@ -145,6 +145,8 @@ export default function Step2ConnectAccounts({
       const resp = await apiFetch("/api/integrations");
       if (!resp.ok) {
         if (resp.status === 401) {
+          clearStoredAmazonToken();
+          markDisconnected("alexa");
           setServerStatus(null);
         }
         return;
