@@ -57,6 +57,40 @@ export function clearStoredAmazonToken() {
   window.dispatchEvent(new Event(AUTH_EVENT));
 }
 
+export function restoreAmazonTokenFromUrl(): string | null {
+  if (!isBrowser) return null;
+
+  const parseSource = (rawSource: string) => {
+    const raw = String(rawSource || "").replace(/^#/, "").replace(/^\?/, "");
+    if (!raw) return null;
+
+    const params = new URLSearchParams(raw);
+    const token = params.get("access_token") || params.get("amazon_access_token");
+    const error = params.get("error");
+
+    if (error) {
+      const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+      window.history.replaceState({}, document.title, cleanUrl);
+      return null;
+    }
+
+    if (!token) return null;
+
+    setStoredAmazonToken(token);
+    const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+    window.history.replaceState({}, document.title, cleanUrl);
+    return token;
+  };
+
+  const fromHash = parseSource(window.location.hash || "");
+  if (fromHash) return fromHash;
+
+  const fromSearch = parseSource(window.location.search || "");
+  if (fromSearch) return fromSearch;
+
+  return getStoredAmazonToken();
+}
+
 export function subscribeToAmazonAuthChanges(callback: () => void) {
   if (!isBrowser) return () => {};
 

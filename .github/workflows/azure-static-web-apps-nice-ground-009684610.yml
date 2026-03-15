@@ -2,16 +2,21 @@ name: Azure Static Web Apps CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
     paths:
       - "backend/frontend/**"
       - ".github/workflows/azure-static-web-apps-nice-ground-009684610.yml"
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    branches: [ "main" ]
+    branches:
+      - main
     paths:
       - "backend/frontend/**"
       - ".github/workflows/azure-static-web-apps-nice-ground-009684610.yml"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build_and_deploy_job:
@@ -39,13 +44,11 @@ jobs:
           app_location: "backend/frontend"
           api_location: ""
           output_location: "build"
-          app_build_command: "npm run build"
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     name: Close Pull Request Job
-
     steps:
       - name: Close Pull Request
         id: closepullrequest
@@ -53,5 +56,3 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_NICE_GROUND_009684610 }}
           action: "close"
-          app_location: "backend/frontend"
-          output_location: "build"
