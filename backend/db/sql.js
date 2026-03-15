@@ -1,3 +1,7 @@
+
+
+// db/sql.js - Azure SQL connection pool management with retry logic
+
 require("dotenv").config();
 const sql = require("mssql");
 
