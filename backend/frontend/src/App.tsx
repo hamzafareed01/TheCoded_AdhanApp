@@ -5,6 +5,7 @@ import {
   apiFetch,
   clearStoredAmazonToken,
   getStoredAmazonToken,
+  restoreAmazonTokenFromUrl,
   subscribeToAmazonAuthChanges,
 } from "./lib/api";
 
@@ -21,6 +22,9 @@ export default function App() {
     try {
       const res = await apiFetch("/api/integrations");
       if (!res.ok) {
+        if (res.status === 401) {
+          clearStoredAmazonToken();
+        }
         setUser(null);
         return;
       }
@@ -36,8 +40,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadUser();
-    return subscribeToAmazonAuthChanges(loadUser);
+    restoreAmazonTokenFromUrl();
+    void loadUser();
+    return subscribeToAmazonAuthChanges(() => {
+      restoreAmazonTokenFromUrl();
+      void loadUser();
+    });
   }, [loadUser]);
 
   const onLogout = () => {
