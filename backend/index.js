@@ -151,6 +151,38 @@ function normalizeTimeString(value, fallback) {
   return "22:00:00";
 }
 
+
+function toSqlTime(value, fallback = "00:00:00") {
+  const normalized = normalizeTimeString(value, fallback);
+  const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})$/);
+
+  if (!match) {
+    throw new Error(`Invalid time value: ${value}`);
+  }
+
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+  const ss = Number(match[3]);
+
+  if (
+    !Number.isInteger(hh) ||
+    !Number.isInteger(mm) ||
+    !Number.isInteger(ss) ||
+    hh < 0 ||
+    hh > 23 ||
+    mm < 0 ||
+    mm > 59 ||
+    ss < 0 ||
+    ss > 59
+  ) {
+    throw new Error(`Invalid time value: ${normalized}`);
+  }
+
+  const d = new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
+  return d;
+}
+
+
 function getRegionCode(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -658,11 +690,11 @@ function normalizePlace(place) {
     address: place?.formattedAddress || null,
     location:
       typeof place?.location?.latitude === "number" &&
-      typeof place?.location?.longitude === "number"
+        typeof place?.location?.longitude === "number"
         ? {
-            lat: place.location.latitude,
-            lng: place.location.longitude,
-          }
+          lat: place.location.latitude,
+          lng: place.location.longitude,
+        }
         : null,
   };
 }
@@ -933,8 +965,8 @@ app.get(
     const mosques = dedupeMosques(
       Array.isArray(placesJson?.places)
         ? placesJson.places
-            .map(normalizePlace)
-            .filter((m) => m.placeId && m.name)
+          .map(normalizePlace)
+          .filter((m) => m.placeId && m.name)
         : []
     );
 
@@ -1236,8 +1268,8 @@ async function handleSaveUserSettings(req, res) {
   const quietHours = body.quietHours;
   if (isObject(quietHours)) {
     const quietEnabled = quietHours.enabled ? 1 : 0;
-    const quietFrom = normalizeTimeString(quietHours.from, "22:00");
-    const quietTo = normalizeTimeString(quietHours.to, "07:00");
+    const quietFrom = toSqlTime(quietHours.from, "22:00:00");
+    const quietTo = toSqlTime(quietHours.to, "07:00:00");
 
     await pool
       .request()
@@ -1246,14 +1278,14 @@ async function handleSaveUserSettings(req, res) {
       .input("quiet_from", sql.Time, quietFrom)
       .input("quiet_to", sql.Time, quietTo)
       .query(`
-        UPDATE dbo.prayer_configs
-        SET
-          quiet_enabled = @quiet_enabled,
-          quiet_from = @quiet_from,
-          quiet_to = @quiet_to,
-          updated_at = SYSUTCDATETIME()
-        WHERE user_id = @user_id
-      `);
+      UPDATE dbo.prayer_configs
+      SET
+        quiet_enabled = @quiet_enabled,
+        quiet_from = @quiet_from,
+        quiet_to = @quiet_to,
+        updated_at = SYSUTCDATETIME()
+      WHERE user_id = @user_id
+    `);
   }
 
   const pcs = Array.isArray(body.prayerConfigs) ? body.prayerConfigs : null;
@@ -1262,8 +1294,7 @@ async function handleSaveUserSettings(req, res) {
       const prayerName = String(pc.prayerName || pc.prayer_name || "").toLowerCase();
       if (!PRAYERS.includes(prayerName)) continue;
 
-      const setEnabled =
-        hasOwn(pc, "enabled") || hasOwn(pc, "enabled");
+      const setEnabled = hasOwn(pc, "enabled");
       const setOffsetMin =
         hasOwn(pc, "offsetMin") || hasOwn(pc, "offset_min");
       const setQuietEnabled =
@@ -1322,7 +1353,7 @@ async function handleSaveUserSettings(req, res) {
           "quiet_from",
           sql.Time,
           setQuietFrom
-            ? normalizeTimeString(pc.quietFrom ?? pc.quiet_from, "22:00")
+            ? toSqlTime(pc.quietFrom ?? pc.quiet_from, "22:00:00")
             : null
         )
 
@@ -1331,7 +1362,7 @@ async function handleSaveUserSettings(req, res) {
           "quiet_to",
           sql.Time,
           setQuietTo
-            ? normalizeTimeString(pc.quietTo ?? pc.quiet_to, "07:00")
+            ? toSqlTime(pc.quietTo ?? pc.quiet_to, "07:00:00")
             : null
         )
 
@@ -1426,13 +1457,13 @@ app.get(
 
     const url = hasCoords
       ? `https://api.aladhan.com/v1/timings?latitude=${encodeURIComponent(
-          profile.latitude
-        )}&longitude=${encodeURIComponent(
-          profile.longitude
-        )}&method=${method}&school=${school}`
+        profile.latitude
+      )}&longitude=${encodeURIComponent(
+        profile.longitude
+      )}&method=${method}&school=${school}`
       : `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(
-          city
-        )}&country=${encodeURIComponent(countryForApi)}&method=${method}&school=${school}`;
+        city
+      )}&country=${encodeURIComponent(countryForApi)}&method=${method}&school=${school}`;
 
     const resp = await fetchWithTimeout(url);
     if (!resp.ok) {
