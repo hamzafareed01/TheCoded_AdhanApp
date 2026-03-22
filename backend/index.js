@@ -4,6 +4,7 @@ const helmet = require("helmet");
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 dotenv.config();
 
@@ -17,6 +18,9 @@ const {
   revokeAlexaSkillTokensForUser,
   authenticateAlexaSkillAccessToken,
   rememberAlexaSkillUser,
+  upsertAlexaAppLinkToken,
+  getAlexaAppLinkToken,
+  revokeAlexaAppLinkTokenForUser,
 } = require("./services/alexaOauth");
 const {
   buildRoutineTemplates,
@@ -88,41 +92,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-
-app.get("/healthz", (req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: "adhanhome-api",
-    uptimeSec: Math.round(process.uptime()),
-    time: new Date().toISOString(),
-  });
-});
-
-app.get("/readyz", asyncHandler(async (req, res) => {
-  try {
-    const pool = await getPool({
-      purpose: "readiness-check",
-      maxAttempts: 1,
-      connectionTimeoutMs: 5000,
-      requestTimeoutMs: 5000,
-      poolAcquireTimeoutMs: 5000,
-      poolCreateTimeoutMs: 5000,
-    });
-    await pool.request().query("SELECT 1 AS ok");
-    try { await pool.close(); } catch {}
-    res.status(200).json({ ok: true, db: true, time: new Date().toISOString() });
-  } catch (err) {
-    res.status(503).json({
-      ok: false,
-      db: false,
-      error: String(err?.message || err),
-      time: new Date().toISOString(),
-    });
-  }
-}));
-
-console.log("CORS allowed origins:", allowedOrigins.length ? allowedOrigins : ["*"]);
-
 // -----------------------------
 // Generic helpers
 // -----------------------------
@@ -174,23 +143,6 @@ function parseOptionalNumber(value) {
   if (value === undefined || value === null || value === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
-}
-
-function parseJsonArrayOfStrings(value) {
-  if (Array.isArray(value)) {
-    return value.filter((item) => typeof item === "string" && item.trim().length > 0);
-  }
-
-  if (typeof value !== "string" || !value.trim()) return [];
-
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed)
-      ? parsed.filter((item) => typeof item === "string" && item.trim().length > 0)
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -311,6 +263,372 @@ function normalizeMosqueSearchText(query, countryValue) {
   if (!countryText) return `mosques in ${q}`;
   return `mosques in ${q}, ${countryText}`;
 }
+
+
+const AMAZON_OAUTH_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
+const AMAZON_OAUTH_TOKEN_URL = "https://api.amazon.com/auth/o2/token";
+const DEFAULT_ALEXA_API_ENDPOINTS = [
+  "api.amazonalexa.com",
+  "api.eu.amazonalexa.com",
+  "api.fe.amazonalexa.com",
+];
+const APP_LINK_STATE_TTL_MS = 10 * 60 * 1000;
+
+function getAlexaSkillId() {
+  return String(
+    process.env.ALEXA_SKILL_ID ||
+      process.env.AMAZON_ALEXA_SKILL_ID ||
+      process.env.VITE_ALEXA_SKILL_ID ||
+      ""
+  ).trim();
+}
+
+function getAlexaSkillStage() {
+  const raw = String(process.env.ALEXA_SKILL_STAGE || process.env.AMAZON_ALEXA_SKILL_STAGE || "development")
+    .trim()
+    .toLowerCase();
+  return raw === "live" ? "live" : "development";
+}
+
+function getAppLinkStateSecret() {
+  return String(
+    process.env.ALEXA_APP_LINK_STATE_SECRET ||
+      process.env.ALEXA_OAUTH_CLIENT_SECRET ||
+      process.env.ALEXA_SKILL_CLIENT_SECRET ||
+      "adhancast-app-link-state"
+  );
+}
+
+function base64UrlEncode(value) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value) {
+  const input = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const pad = input.length % 4;
+  const normalized = pad ? input + "=".repeat(4 - pad) : input;
+  return Buffer.from(normalized, "base64").toString("utf8");
+}
+
+function createPkceVerifier() {
+  return base64UrlEncode(crypto.randomBytes(48));
+}
+
+function createPkceChallenge(verifier) {
+  return crypto.createHash("sha256").update(String(verifier || "")).digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function signAppLinkState(payload) {
+  const json = JSON.stringify(payload);
+  const encoded = base64UrlEncode(json);
+  const signature = crypto
+    .createHmac("sha256", getAppLinkStateSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  return `${encoded}.${signature}`;
+}
+
+function verifyAppLinkState(token) {
+  const raw = String(token || "");
+  const splitAt = raw.lastIndexOf(".");
+  if (splitAt <= 0) {
+    const err = new Error("Invalid Alexa linking state.");
+    err.status = 400;
+    throw err;
+  }
+
+  const encoded = raw.slice(0, splitAt);
+  const signature = raw.slice(splitAt + 1);
+  const expected = crypto
+    .createHmac("sha256", getAppLinkStateSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  if (signature !== expected) {
+    const err = new Error("Alexa linking state could not be verified.");
+    err.status = 400;
+    throw err;
+  }
+
+  const payload = JSON.parse(base64UrlDecode(encoded));
+  if (!payload?.userId || !payload?.ts) {
+    const err = new Error("Alexa linking state payload is incomplete.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (Date.now() - Number(payload.ts) > APP_LINK_STATE_TTL_MS) {
+    const err = new Error("Alexa linking request expired. Please try again.");
+    err.status = 400;
+    throw err;
+  }
+
+  return payload;
+}
+
+function getAllowedAppLinkRedirectUris() {
+  const envList = String(process.env.ALEXA_APP_LINK_REDIRECT_URIS || "")
+    .split(",")
+    .map((value) => normalizeOrigin(value) ? new URL(normalizeOrigin(value)).toString().replace(/\/$/, "") : "")
+    .filter(Boolean);
+
+  if (envList.length > 0) return envList;
+
+  return allowedOrigins
+    .map((origin) => `${origin}/onboarding/step2`)
+    .filter(Boolean);
+}
+
+function validateAppLinkRedirectUri(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    const err = new Error("Missing redirect URI for Alexa linking.");
+    err.status = 400;
+    throw err;
+  }
+
+  let normalized;
+  try {
+    normalized = new URL(raw).toString().replace(/\/$/, "");
+  } catch {
+    const err = new Error("Invalid redirect URI for Alexa linking.");
+    err.status = 400;
+    throw err;
+  }
+
+  const allowed = getAllowedAppLinkRedirectUris();
+  if (!allowed.includes(normalized)) {
+    const err = new Error("Redirect URI is not allowed for Alexa linking.");
+    err.status = 400;
+    throw err;
+  }
+
+  return normalized;
+}
+
+async function exchangeAmazonAuthorizationCodeForTokens(params) {
+  const { code, redirectUri, codeVerifier } = params;
+  const oauth = getAlexaOauthConfig();
+  if (!oauth.configured) {
+    const err = new Error("Alexa account linking is not configured on the backend.");
+    err.status = 500;
+    throw err;
+  }
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("code", String(code || ""));
+  body.set("redirect_uri", String(redirectUri || ""));
+  if (codeVerifier) body.set("code_verifier", String(codeVerifier));
+
+  const basic = Buffer.from(`${oauth.clientId}:${oauth.clientSecret}`).toString("base64");
+  const resp = await fetchWithTimeout(
+    AMAZON_OAUTH_TOKEN_URL,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    },
+    20000
+  );
+
+  const data = await resp.json().catch(async () => ({
+    error: await resp.text().catch(() => "Token exchange failed."),
+  }));
+
+  if (!resp.ok || !data?.access_token) {
+    const err = new Error(
+      `Amazon token exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"}`
+    );
+    err.status = 502;
+    throw err;
+  }
+
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || null,
+    scope: data.scope || null,
+    expiresIn: Number(data.expires_in || 3600) || 3600,
+  };
+}
+
+async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
+  const oauth = getAlexaOauthConfig();
+  if (!oauth.configured || !existingRecord?.amazonRefreshToken) return existingRecord;
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "refresh_token");
+  body.set("refresh_token", existingRecord.amazonRefreshToken);
+  const basic = Buffer.from(`${oauth.clientId}:${oauth.clientSecret}`).toString("base64");
+
+  const resp = await fetchWithTimeout(
+    AMAZON_OAUTH_TOKEN_URL,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    },
+    20000
+  );
+
+  const data = await resp.json().catch(async () => ({
+    error: await resp.text().catch(() => "Refresh failed."),
+  }));
+
+  if (!resp.ok || !data?.access_token) {
+    return existingRecord;
+  }
+
+  const expiresAt = new Date(Date.now() + (Number(data.expires_in || 3600) || 3600) * 1000);
+  await upsertAlexaAppLinkToken(pool, {
+    userId,
+    amazonAccessToken: data.access_token,
+    amazonRefreshToken: data.refresh_token || existingRecord.amazonRefreshToken,
+    amazonScope: data.scope || existingRecord.amazonScope,
+    endpointHost: existingRecord.endpointHost,
+    customerUserId: existingRecord.customerUserId,
+    expiresAt,
+  });
+
+  return await getAlexaAppLinkToken(pool, userId);
+}
+
+async function getAlexaCustomerTokenRecord(pool, userId) {
+  let record = await getAlexaAppLinkToken(pool, userId);
+  if (!record || record.revokedAt) return null;
+
+  const expiresAt = record.expiresAt ? new Date(record.expiresAt).getTime() : 0;
+  if (expiresAt && expiresAt > Date.now() + 60_000 && record.amazonAccessToken) {
+    return record;
+  }
+
+  return await refreshStoredAlexaCustomerToken(pool, userId, record);
+}
+
+async function fetchAlexaApiEndpoints(accessToken) {
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+
+  const resp = await fetchWithTimeout("https://api.amazonalexa.com/v1/alexaApiEndpoint", { headers }, 20000);
+  const data = await resp.json().catch(() => ({}));
+  if (resp.ok && Array.isArray(data?.endpoints) && data.endpoints.length > 0) {
+    return data.endpoints;
+  }
+
+  return DEFAULT_ALEXA_API_ENDPOINTS;
+}
+
+async function callAlexaSkillEnablement(params) {
+  const { accessToken, skillId, stage, accountLinkRedirectUri, authCode, authCodeVerifier, preferredEndpoint } = params;
+  const endpoints = preferredEndpoint ? [preferredEndpoint, ...DEFAULT_ALEXA_API_ENDPOINTS.filter((x) => x !== preferredEndpoint)] : await fetchAlexaApiEndpoints(accessToken);
+  let lastError = null;
+
+  for (const endpointHost of endpoints) {
+    const url = `https://${endpointHost}/v1/users/~current/skills/${encodeURIComponent(skillId)}/enablement`;
+    const resp = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          stage,
+          accountLinkRequest: {
+            type: "AUTH_CODE",
+            authCode,
+            redirectUri: accountLinkRedirectUri,
+            ...(authCodeVerifier ? { authCodeVerifier } : {}),
+          },
+        }),
+      },
+      20000
+    );
+
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 201 && data) {
+      return { endpointHost, data };
+    }
+
+    if (resp.status === 400 && data?.code === "incorrectEndpoint") {
+      lastError = new Error(data?.message || "Incorrect endpoint for customer.");
+      continue;
+    }
+
+    const err = new Error(`Alexa enablement failed (${resp.status}): ${data?.message || data?.code || "Unknown error"}`);
+    err.status = resp.status;
+    throw err;
+  }
+
+  if (lastError) throw lastError;
+  throw new Error("Alexa enablement failed before any endpoint responded.");
+}
+
+async function fetchAlexaSkillEnablementStatus(params) {
+  const { accessToken, skillId, preferredEndpoint } = params;
+  const endpoints = preferredEndpoint ? [preferredEndpoint, ...DEFAULT_ALEXA_API_ENDPOINTS.filter((x) => x !== preferredEndpoint)] : await fetchAlexaApiEndpoints(accessToken);
+
+  for (const endpointHost of endpoints) {
+    const url = `https://${endpointHost}/v1/users/~current/skills/${encodeURIComponent(skillId)}/enablement`;
+    const resp = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      },
+      15000
+    );
+
+    if (resp.status === 404) {
+      return { endpointHost, data: { status: "NO_ASSOCIATION", accountLink: { status: "NOT_LINKED" } } };
+    }
+
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok) {
+      return { endpointHost, data };
+    }
+
+    if (resp.status === 400 && data?.code === "incorrectEndpoint") {
+      continue;
+    }
+
+    const err = new Error(`Alexa status lookup failed (${resp.status}): ${data?.message || data?.code || "Unknown error"}`);
+    err.status = resp.status;
+    throw err;
+  }
+
+  return null;
+}
+
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -526,29 +844,6 @@ async function getUserProfileAndPrayers(pool, amazonUserId) {
   };
 }
 
-async function getUserProfileAndPrayersByUserId(pool, userId) {
-  const profileResult = await pool
-    .request()
-    .input("user_id", sql.UniqueIdentifier, userId)
-    .query(`SELECT * FROM dbo.user_profiles WHERE user_id = @user_id`);
-
-  const prayerResult = await pool
-    .request()
-    .input("user_id", sql.UniqueIdentifier, userId)
-    .query(`
-      SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to, adhan_reciter_id, after_type, after_payload_json
-      FROM dbo.prayer_configs
-      WHERE user_id = @user_id
-      ORDER BY prayer_name
-    `);
-
-  return {
-    userId,
-    profile: profileResult.recordset[0] || {},
-    prayers: prayerResult.recordset || [],
-  };
-}
-
 // -----------------------------
 // Prayer helpers
 // -----------------------------
@@ -622,168 +917,6 @@ function maskToDaysArray(mask) {
   return Array.from({ length: 7 }, (_, i) => ((m >> i) & 1) === 1);
 }
 
-function resolveTimingSource(profile) {
-  const hasUserCoords =
-    typeof profile.latitude === "number" &&
-    Number.isFinite(profile.latitude) &&
-    typeof profile.longitude === "number" &&
-    Number.isFinite(profile.longitude);
-
-  const hasMosqueCoords =
-    typeof profile.mosque_lat === "number" &&
-    Number.isFinite(profile.mosque_lat) &&
-    typeof profile.mosque_lng === "number" &&
-    Number.isFinite(profile.mosque_lng);
-
-  if (profile.use_mosque_location && hasMosqueCoords) {
-    return {
-      source: "mosque",
-      latitude: profile.mosque_lat,
-      longitude: profile.mosque_lng,
-      fallbackReason: null,
-    };
-  }
-
-  if (hasUserCoords) {
-    return {
-      source: "personal",
-      latitude: profile.latitude,
-      longitude: profile.longitude,
-      fallbackReason:
-        profile.use_mosque_location && !hasMosqueCoords
-          ? "Saved mosque does not have usable coordinates yet."
-          : null,
-    };
-  }
-
-  return {
-    source: "city",
-    latitude: null,
-    longitude: null,
-    fallbackReason:
-      profile.use_mosque_location && !hasMosqueCoords
-        ? "Saved mosque does not have usable coordinates yet."
-        : null,
-  };
-}
-
-async function computePrayerTimesForProfile(profile, prayers) {
-  const perPrayerOffset = {};
-  const enabledMap = {};
-  for (const r of prayers || []) {
-    perPrayerOffset[r.prayer_name] = r.offset_min || 0;
-    enabledMap[r.prayer_name] = !!r.enabled;
-  }
-
-  const method = mapCalcMethodToAlAdhan(
-    profile.calculation_method || "isna",
-    profile.sect || "SUNNI"
-  );
-  const school = madhhabToSchool(profile.madhhab || "hanafi");
-
-  const city = normalizeQueryText(profile.city || "Chicago");
-  const country = profile.country || "US";
-  const countryForApi = countryLabel(country, "United States");
-  const timing = resolveTimingSource(profile);
-
-  const url =
-    timing.latitude != null && timing.longitude != null
-      ? `https://api.aladhan.com/v1/timings?latitude=${encodeURIComponent(
-          timing.latitude
-        )}&longitude=${encodeURIComponent(
-          timing.longitude
-        )}&method=${method}&school=${school}`
-      : `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(
-          city
-        )}&country=${encodeURIComponent(countryForApi)}&method=${method}&school=${school}`;
-
-  const resp = await fetchWithTimeout(url);
-  if (!resp.ok) {
-    const err = new Error("Prayer API upstream failed");
-    err.status = 502;
-    throw err;
-  }
-
-  const json = await resp.json();
-  const t = json?.data?.timings || {};
-
-  const base24 = {
-    fajr: String(t.Fajr || "").slice(0, 5),
-    sunrise: String(t.Sunrise || "").slice(0, 5),
-    dhuhr: String(t.Dhuhr || "").slice(0, 5),
-    asr: String(t.Asr || "").slice(0, 5),
-    maghrib: String(t.Maghrib || "").slice(0, 5),
-    isha: String(t.Isha || "").slice(0, 5),
-  };
-
-  const globalOffsets = {
-    fajr: profile.offset_fajr || 0,
-    dhuhr: profile.offset_dhuhr || 0,
-    asr: profile.offset_asr || 0,
-    maghrib: profile.offset_maghrib || 0,
-    isha: profile.offset_isha || 0,
-  };
-
-  const adjusted24 = {
-    fajr: addMinutesHHMM(base24.fajr, globalOffsets.fajr + (perPrayerOffset.fajr || 0)),
-    sunrise: base24.sunrise,
-    dhuhr: addMinutesHHMM(base24.dhuhr, globalOffsets.dhuhr + (perPrayerOffset.dhuhr || 0)),
-    asr: addMinutesHHMM(base24.asr, globalOffsets.asr + (perPrayerOffset.asr || 0)),
-    maghrib: addMinutesHHMM(
-      base24.maghrib,
-      globalOffsets.maghrib + (perPrayerOffset.maghrib || 0)
-    ),
-    isha: addMinutesHHMM(base24.isha, globalOffsets.isha + (perPrayerOffset.isha || 0)),
-  };
-
-  const adjusted12 = {
-    fajr: to12h(adjusted24.fajr),
-    sunrise: to12h(adjusted24.sunrise),
-    dhuhr: to12h(adjusted24.dhuhr),
-    asr: to12h(adjusted24.asr),
-    maghrib: to12h(adjusted24.maghrib),
-    isha: to12h(adjusted24.isha),
-  };
-
-  return {
-    location: {
-      city,
-      country,
-      timezone: profile.timezone || "Etc/UTC",
-      latitude: timing.source === "city" ? null : timing.latitude,
-      longitude: timing.source === "city" ? null : timing.longitude,
-    },
-    mosque: {
-      id: profile.mosque_id || null,
-      name: profile.mosque_name || null,
-      address: profile.mosque_address || null,
-      latitude:
-        typeof profile.mosque_lat === "number" && Number.isFinite(profile.mosque_lat)
-          ? profile.mosque_lat
-          : null,
-      longitude:
-        typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
-          ? profile.mosque_lng
-          : null,
-    },
-    method: {
-      sect: profile.sect || "SUNNI",
-      calculationMethod: profile.calculation_method || "isna",
-      madhhab: profile.madhhab || "hanafi",
-    },
-    source: timing.source,
-    sourceDetail: {
-      useMosqueLocation: !!profile.use_mosque_location,
-      fallbackReason: timing.fallbackReason,
-    },
-    enabled: enabledMap,
-    prayers24: adjusted24,
-    prayers12: adjusted12,
-    date: json?.data?.date || null,
-    meta: json?.data?.meta || null,
-  };
-}
-
 // -----------------------------
 // Qiblah helpers
 // -----------------------------
@@ -822,12 +955,11 @@ function computeQiblahBearing(lat, lon) {
 // -----------------------------
 function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
   const rows = Array.isArray(prayerRows) ? prayerRows : [];
-  const selectedAlexaDeviceIds = parseJsonArrayOfStrings(
-    profile.selected_alexa_device_ids_json
-  );
 
   const firstQuietRow =
-    rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) || rows[0] || {};
+    rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) ||
+    rows[0] ||
+    {};
 
   const quietHours = {
     enabled: !!firstQuietRow.quiet_enabled,
@@ -843,7 +975,9 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
   const prayerConfigs = rows.map((r) => {
     let afterPayload = null;
     try {
-      afterPayload = r.after_payload_json ? JSON.parse(r.after_payload_json) : null;
+      afterPayload = r.after_payload_json
+        ? JSON.parse(r.after_payload_json)
+        : null;
     } catch {
       afterPayload = null;
     }
@@ -885,7 +1019,6 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
       typeof profile.longitude === "number" && Number.isFinite(profile.longitude)
         ? profile.longitude
         : null,
-    useMosqueLocation: !!profile.use_mosque_location,
     mosqueId: profile.mosque_id || null,
     mosqueName: profile.mosque_name || null,
     mosqueAddress: profile.mosque_address || null,
@@ -897,7 +1030,6 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
       typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
         ? profile.mosque_lng
         : null,
-    selectedAlexaDeviceIds,
     accountEnabled: !!profile.account_enabled,
     quietHours,
     globalOffsets: {
@@ -1078,6 +1210,33 @@ app.get(
     const pool = await getPool();
     const userId = await ensureUser(pool, p.user_id);
     const skillLink = await getAlexaSkillLinkStatus(pool, userId);
+    const storedAlexaLink = await getAlexaCustomerTokenRecord(pool, userId);
+    const skillId = getAlexaSkillId();
+
+    let enablement = null;
+    if (skillId && storedAlexaLink?.amazonAccessToken) {
+      try {
+        enablement = await fetchAlexaSkillEnablementStatus({
+          accessToken: storedAlexaLink.amazonAccessToken,
+          skillId,
+          preferredEndpoint: storedAlexaLink.endpointHost || null,
+        });
+
+        if (enablement?.endpointHost && enablement.endpointHost !== storedAlexaLink.endpointHost) {
+          await upsertAlexaAppLinkToken(pool, {
+            userId,
+            amazonAccessToken: storedAlexaLink.amazonAccessToken,
+            amazonRefreshToken: storedAlexaLink.amazonRefreshToken,
+            amazonScope: storedAlexaLink.amazonScope,
+            endpointHost: enablement.endpointHost,
+            customerUserId: enablement?.data?.user?.id || storedAlexaLink.customerUserId,
+            expiresAt: storedAlexaLink.expiresAt ? new Date(storedAlexaLink.expiresAt) : null,
+          });
+        }
+      } catch (err) {
+        console.warn("Alexa enablement status lookup failed:", err?.message || err);
+      }
+    }
 
     res.json({
       userKey: p.user_id,
@@ -1090,8 +1249,12 @@ app.get(
         linkedAt: null,
         displayName: p.name || null,
         accountId: p.user_id || null,
-        skillLinked: !!skillLink.linked,
+        skillLinked: enablement?.data?.accountLink?.status === "LINKED" || !!skillLink.linked,
+        skillEnabled: enablement?.data?.status === "ENABLED" || enablement?.data?.status === "ENABLING",
+        skillStatus: enablement?.data?.status || null,
+        skillAccountLinkStatus: enablement?.data?.accountLink?.status || (skillLink.linked ? "LINKED" : "NOT_LINKED"),
         skillLinkExpiresAt: skillLink.expiresAt,
+        appToAppLinked: !!storedAlexaLink?.amazonAccessToken,
       },
       google: {
         connected: false,
@@ -1151,7 +1314,40 @@ app.post(
   asyncHandler(async (req, res) => {
     const pool = await getPool();
     const userId = await ensureUser(pool, req.amazonProfile.user_id);
+    const skillId = getAlexaSkillId();
+    const tokenRecord = await getAlexaCustomerTokenRecord(pool, userId);
+
+    if (skillId && tokenRecord?.amazonAccessToken) {
+      try {
+        const status = await fetchAlexaSkillEnablementStatus({
+          accessToken: tokenRecord.amazonAccessToken,
+          skillId,
+          preferredEndpoint: tokenRecord.endpointHost || null,
+        });
+        const endpointHost = status?.endpointHost || tokenRecord.endpointHost || DEFAULT_ALEXA_API_ENDPOINTS[0];
+        const resp = await fetchWithTimeout(
+          `https://${endpointHost}/v1/users/~current/skills/${encodeURIComponent(skillId)}/enablement`,
+          {
+            method: "DELETE",
+            headers: {
+              Accept: "application/json",
+              Authorization: `Bearer ${tokenRecord.amazonAccessToken}`,
+              "Content-Type": "application/json",
+            },
+          },
+          15000
+        );
+        if (!resp.ok && resp.status !== 404) {
+          const data = await resp.text().catch(() => "");
+          console.warn(`Alexa unlink returned ${resp.status}: ${data}`);
+        }
+      } catch (err) {
+        console.warn("Alexa unlink request failed:", err?.message || err);
+      }
+    }
+
     await revokeAlexaSkillTokensForUser(pool, userId);
+    await revokeAlexaAppLinkTokenForUser(pool, userId);
 
     res.json({ ok: true });
   })
@@ -1165,13 +1361,168 @@ app.get(
     const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const status = await getAlexaSkillLinkStatus(pool, userId);
     const oauth = getAlexaOauthConfig();
+    const skillId = getAlexaSkillId();
+    const tokenRecord = await getAlexaCustomerTokenRecord(pool, userId);
+
+    let enablement = null;
+    if (skillId && tokenRecord?.amazonAccessToken) {
+      try {
+        enablement = await fetchAlexaSkillEnablementStatus({
+          accessToken: tokenRecord.amazonAccessToken,
+          skillId,
+          preferredEndpoint: tokenRecord.endpointHost || null,
+        });
+      } catch (err) {
+        console.warn("Alexa skill status fetch failed:", err?.message || err);
+      }
+    }
 
     res.json({
       configured: oauth.configured,
       clientId: oauth.clientId || null,
       redirectUris: oauth.redirectUris,
+      appRedirectUris: getAllowedAppLinkRedirectUris(),
       invocationName: getSkillInvocationName(),
+      skillId: skillId || null,
+      skillStage: getAlexaSkillStage(),
+      lwaLinked: !!tokenRecord?.amazonAccessToken,
+      lwaExpiresAt: tokenRecord?.expiresAt || null,
+      enablementStatus: enablement?.data?.status || null,
+      accountLinkStatus: enablement?.data?.accountLink?.status || (status.linked ? "LINKED" : "NOT_LINKED"),
+      endpointHost: enablement?.endpointHost || tokenRecord?.endpointHost || null,
+      customerUserId: enablement?.data?.user?.id || tokenRecord?.customerUserId || null,
       ...status,
+    });
+  })
+);
+
+app.post(
+  "/api/alexa/account-linking/start",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const oauth = getAlexaOauthConfig();
+    if (!oauth.configured) {
+      return res.status(500).json({ error: "Alexa account linking is not configured on the backend." });
+    }
+
+    const skillId = getAlexaSkillId();
+    if (!skillId) {
+      return res.status(500).json({ error: "ALEXA_SKILL_ID is missing on the backend." });
+    }
+
+    const pool = await getPool();
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
+    const redirectUri = validateAppLinkRedirectUri(req.body?.redirectUri || req.query?.redirectUri);
+    const codeVerifier = createPkceVerifier();
+    const codeChallenge = createPkceChallenge(codeVerifier);
+    const state = signAppLinkState({
+      userId,
+      redirectUri,
+      ts: Date.now(),
+      nonce: crypto.randomBytes(12).toString("hex"),
+    });
+
+    const query = new URLSearchParams({
+      client_id: oauth.clientId,
+      scope: "alexa::skills:account_linking",
+      response_type: "code",
+      redirect_uri: redirectUri,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    });
+
+    res.json({
+      ok: true,
+      state,
+      codeVerifier,
+      authorizationUrl: `${AMAZON_OAUTH_AUTHORIZE_URL}?${query.toString()}`,
+      redirectUri,
+      skillId,
+      skillStage: getAlexaSkillStage(),
+      invocationName: getSkillInvocationName(),
+    });
+  })
+);
+
+app.post(
+  "/api/alexa/account-linking/complete",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const oauth = getAlexaOauthConfig();
+    if (!oauth.configured) {
+      return res.status(500).json({ error: "Alexa account linking is not configured on the backend." });
+    }
+
+    const skillId = getAlexaSkillId();
+    if (!skillId) {
+      return res.status(500).json({ error: "ALEXA_SKILL_ID is missing on the backend." });
+    }
+
+    const code = String(req.body?.code || "").trim();
+    const state = String(req.body?.state || "").trim();
+    const codeVerifier = String(req.body?.codeVerifier || "").trim();
+    const redirectUri = validateAppLinkRedirectUri(req.body?.redirectUri || req.query?.redirectUri);
+
+    if (!code || !state || !codeVerifier) {
+      return res.status(400).json({ error: "Missing code, state, or PKCE verifier for Alexa linking." });
+    }
+
+    const pool = await getPool();
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
+    const statePayload = verifyAppLinkState(state);
+
+    if (statePayload.userId !== userId) {
+      return res.status(400).json({ error: "Alexa linking state does not match the signed-in user." });
+    }
+
+    if (statePayload.redirectUri !== redirectUri) {
+      return res.status(400).json({ error: "Alexa linking redirect URI does not match the signed-in session." });
+    }
+
+    const amazonTokens = await exchangeAmazonAuthorizationCodeForTokens({
+      code,
+      redirectUri,
+      codeVerifier,
+    });
+
+    const created = await createAlexaAuthorizationCode(pool, {
+      userId,
+      clientId: oauth.clientId,
+      redirectUri: oauth.redirectUris[0],
+      scope: "alexa",
+    });
+
+    const enablement = await callAlexaSkillEnablement({
+      accessToken: amazonTokens.accessToken,
+      skillId,
+      stage: getAlexaSkillStage(),
+      accountLinkRedirectUri: oauth.redirectUris[0],
+      authCode: created.code,
+      authCodeVerifier: null,
+    });
+
+    const expiresAt = new Date(Date.now() + amazonTokens.expiresIn * 1000);
+    await upsertAlexaAppLinkToken(pool, {
+      userId,
+      amazonAccessToken: amazonTokens.accessToken,
+      amazonRefreshToken: amazonTokens.refreshToken,
+      amazonScope: amazonTokens.scope,
+      endpointHost: enablement.endpointHost,
+      customerUserId: enablement?.data?.user?.id || null,
+      expiresAt,
+    });
+
+    const skillLink = await getAlexaSkillLinkStatus(pool, userId);
+    res.json({
+      ok: true,
+      enabled: enablement?.data?.status === "ENABLED",
+      linked: enablement?.data?.accountLink?.status === "LINKED" || !!skillLink.linked,
+      enablementStatus: enablement?.data?.status || null,
+      accountLinkStatus: enablement?.data?.accountLink?.status || null,
+      endpointHost: enablement.endpointHost,
+      customerUserId: enablement?.data?.user?.id || null,
+      invocationName: getSkillInvocationName(),
     });
   })
 );
@@ -1273,21 +1624,6 @@ app.get(
   })
 );
 
-app.get(
-  "/api/alexa/skill/prayer-times",
-  requireAlexaSkillAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const { profile, prayers } = await getUserProfileAndPrayersByUserId(
-      pool,
-      req.skillAuth.userId
-    );
-
-    const result = await computePrayerTimesForProfile(profile, prayers);
-    res.json(result);
-  })
-);
-
 app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
@@ -1307,7 +1643,6 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
-        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -1613,11 +1948,6 @@ async function handleSaveUserSettings(req, res) {
   const useMosqueLocation = hasOwn(body, "useMosqueLocation")
     ? body.useMosqueLocation === true
     : undefined;
-  const hasSelectedAlexaDeviceIds =
-    hasOwn(body, "selectedAlexaDeviceIds") || hasOwn(body, "selectedDeviceIds");
-  const selectedAlexaDeviceIds = parseJsonArrayOfStrings(
-    body.selectedAlexaDeviceIds ?? body.selectedDeviceIds
-  );
 
   const hasMosqueId = hasOwn(body, "mosqueId");
   const hasMosqueName = hasOwn(body, "mosqueName");
@@ -1675,16 +2005,6 @@ async function handleSaveUserSettings(req, res) {
     "use_mosque_location",
     sql.Bit,
     useMosqueLocation !== undefined ? (useMosqueLocation ? 1 : 0) : null
-  );
-  profileReq.input(
-    "set_selected_alexa_device_ids_json",
-    sql.Bit,
-    hasSelectedAlexaDeviceIds ? 1 : 0
-  );
-  profileReq.input(
-    "selected_alexa_device_ids_json",
-    sql.NVarChar(sql.MAX),
-    hasSelectedAlexaDeviceIds ? JSON.stringify(selectedAlexaDeviceIds) : null
   );
 
   profileReq.input("off_fajr", sql.Int, offsets.fajr);
@@ -1744,10 +2064,6 @@ async function handleSaveUserSettings(req, res) {
       latitude = COALESCE(@latitude, latitude),
       longitude = COALESCE(@longitude, longitude),
       use_mosque_location = COALESCE(@use_mosque_location, use_mosque_location),
-      selected_alexa_device_ids_json = CASE
-        WHEN @set_selected_alexa_device_ids_json = 1 THEN @selected_alexa_device_ids_json
-        ELSE selected_alexa_device_ids_json
-      END,
       mosque_id = CASE WHEN @set_mosque_id = 1 THEN @mosque_id ELSE mosque_id END,
       mosque_name = CASE WHEN @set_mosque_name = 1 THEN @mosque_name ELSE mosque_name END,
       mosque_address = CASE WHEN @set_mosque_address = 1 THEN @mosque_address ELSE mosque_address END,
@@ -1930,8 +2246,130 @@ app.get(
     const amazonUserId = req.amazonProfile.user_id;
     const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
 
-    const result = await computePrayerTimesForProfile(profile, prayers);
-    res.json(result);
+    const perPrayerOffset = {};
+    const enabledMap = {};
+    for (const r of prayers) {
+      perPrayerOffset[r.prayer_name] = r.offset_min || 0;
+      enabledMap[r.prayer_name] = !!r.enabled;
+    }
+
+    const method = mapCalcMethodToAlAdhan(
+      profile.calculation_method || "isna",
+      profile.sect || "SUNNI"
+    );
+    const school = madhhabToSchool(profile.madhhab || "hanafi");
+
+    const hasCoords =
+      typeof profile.latitude === "number" &&
+      Number.isFinite(profile.latitude) &&
+      typeof profile.longitude === "number" &&
+      Number.isFinite(profile.longitude);
+
+    const city = normalizeQueryText(profile.city || "Chicago");
+    const country = profile.country || "US";
+    const countryForApi = countryLabel(country, "United States");
+
+    const url = hasCoords
+      ? `https://api.aladhan.com/v1/timings?latitude=${encodeURIComponent(
+        profile.latitude
+      )}&longitude=${encodeURIComponent(
+        profile.longitude
+      )}&method=${method}&school=${school}`
+      : `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(
+        city
+      )}&country=${encodeURIComponent(countryForApi)}&method=${method}&school=${school}`;
+
+    const resp = await fetchWithTimeout(url);
+    if (!resp.ok) {
+      return res.status(502).json({ error: "Prayer API upstream failed" });
+    }
+
+    const json = await resp.json();
+    const t = json?.data?.timings || {};
+
+    const base24 = {
+      fajr: String(t.Fajr || "").slice(0, 5),
+      sunrise: String(t.Sunrise || "").slice(0, 5),
+      dhuhr: String(t.Dhuhr || "").slice(0, 5),
+      asr: String(t.Asr || "").slice(0, 5),
+      maghrib: String(t.Maghrib || "").slice(0, 5),
+      isha: String(t.Isha || "").slice(0, 5),
+    };
+
+    const globalOffsets = {
+      fajr: profile.offset_fajr || 0,
+      dhuhr: profile.offset_dhuhr || 0,
+      asr: profile.offset_asr || 0,
+      maghrib: profile.offset_maghrib || 0,
+      isha: profile.offset_isha || 0,
+    };
+
+    const adjusted24 = {
+      fajr: addMinutesHHMM(
+        base24.fajr,
+        globalOffsets.fajr + (perPrayerOffset.fajr || 0)
+      ),
+      sunrise: base24.sunrise,
+      dhuhr: addMinutesHHMM(
+        base24.dhuhr,
+        globalOffsets.dhuhr + (perPrayerOffset.dhuhr || 0)
+      ),
+      asr: addMinutesHHMM(
+        base24.asr,
+        globalOffsets.asr + (perPrayerOffset.asr || 0)
+      ),
+      maghrib: addMinutesHHMM(
+        base24.maghrib,
+        globalOffsets.maghrib + (perPrayerOffset.maghrib || 0)
+      ),
+      isha: addMinutesHHMM(
+        base24.isha,
+        globalOffsets.isha + (perPrayerOffset.isha || 0)
+      ),
+    };
+
+    const adjusted12 = {
+      fajr: to12h(adjusted24.fajr),
+      sunrise: to12h(adjusted24.sunrise),
+      dhuhr: to12h(adjusted24.dhuhr),
+      asr: to12h(adjusted24.asr),
+      maghrib: to12h(adjusted24.maghrib),
+      isha: to12h(adjusted24.isha),
+    };
+
+    res.json({
+      location: {
+        city,
+        country,
+        timezone: profile.timezone || "Etc/UTC",
+        latitude: hasCoords ? profile.latitude : null,
+        longitude: hasCoords ? profile.longitude : null,
+      },
+      mosque: {
+        id: profile.mosque_id || null,
+        name: profile.mosque_name || null,
+        address: profile.mosque_address || null,
+        latitude:
+          typeof profile.mosque_lat === "number" && Number.isFinite(profile.mosque_lat)
+            ? profile.mosque_lat
+            : null,
+        longitude:
+          typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
+            ? profile.mosque_lng
+            : null,
+      },
+      method: {
+        sect: profile.sect || "SUNNI",
+        calculationMethod: profile.calculation_method || "isna",
+        madhhab: profile.madhhab || "hanafi",
+      },
+      source: hasCoords ? "coordinates" : "city",
+      enabled: enabledMap,
+      prayers24: adjusted24,
+      prayers12: adjusted12,
+      date: json?.data?.date || null,
+      meta: json?.data?.meta || null,
+    });
   })
 );
 
@@ -2136,5 +2574,4 @@ app.use((err, req, res, next) => {
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
   console.log(`AdhanHome API listening on ${port}`);
-  console.log("Startup mode: server-first (migrations run separately via npm run migrate:up)");
 });

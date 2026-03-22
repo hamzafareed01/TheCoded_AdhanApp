@@ -1,10 +1,6 @@
-type LogoProps = {
-  className?: string;
-};
-
-export function Logo({ className = "" }: LogoProps) {
+export function Logo() {
   return (
-    <div className={`flex items-center gap-3 ${className}`}>
+    <div className="flex items-center gap-3">
       <img
         src="/adhancast-logo.png"
         alt="AdhanCast logo"
