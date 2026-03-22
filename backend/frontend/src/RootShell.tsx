@@ -14,6 +14,7 @@ import CalendarView from "./components/calendar/CalendarView";
 import DuaQuranView from "./components/dua-quran/DuaQuranView";
 import QiblahFinder from "./components/qiblah/QiblahFinder";
 import AlexaSetup from "./components/alexa/AlexaSetup";
+import AlexaLinkAuthorize from "./components/alexa/AlexaLinkAuthorize";
 
 import type { AppUser } from "./types/AppUser";
 import {
@@ -203,11 +204,6 @@ export default function RootShell({ user }: RootShellProps) {
           prayerConfigs: Array.isArray(settings.prayerConfigs)
             ? settings.prayerConfigs
             : prev.prayerConfigs,
-          devices: Array.isArray(settings.selectedAlexaDeviceIds)
-            ? settings.selectedAlexaDeviceIds.filter(
-                (x): x is string => typeof x === "string" && x.trim().length > 0
-              )
-            : prev.devices,
           accountEnabled:
             settings.accountEnabled === true ? true : prev.accountEnabled,
           mosque:
@@ -327,6 +323,7 @@ export default function RootShell({ user }: RootShellProps) {
             }
           />
           <Route path="/alexa-setup" element={<AlexaSetup />} />
+          <Route path="/alexa/link" element={<AlexaLinkAuthorize />} />
           <Route path="/calendar" element={<CalendarView />} />
           <Route path="/dua-quran" element={<DuaQuranView />} />
           <Route path="/qiblah" element={<QiblahFinder />} />
