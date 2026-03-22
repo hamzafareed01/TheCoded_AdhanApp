@@ -1,12 +1,19 @@
-import { Moon } from 'lucide-react';
+type LogoProps = {
+  className?: string;
+};
 
-export function Logo({ className = "" }: { className?: string }) {
+export function Logo({ className = "" }: LogoProps) {
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
-        <Moon className="w-5 h-5 text-white" />
+    <div className={`flex items-center gap-3 ${className}`}>
+      <img
+        src="/adhancast-logo.png"
+        alt="AdhanCast logo"
+        className="h-10 w-10 rounded-xl object-cover"
+      />
+      <div className="flex flex-col">
+        <span className="text-lg font-semibold text-white">AdhanCast</span>
+        <span className="text-xs text-white/60">by TheCoded Inc</span>
       </div>
-      <span className="text-white">My Adhan Home <span className="text-slate-400">by TheCoded Inc</span></span>
     </div>
   );
 }
