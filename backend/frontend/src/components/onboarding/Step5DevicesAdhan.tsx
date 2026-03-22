@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Badge } from "../ui/badge";
 import { Switch } from "../ui/switch";
+import { Checkbox } from "../ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -61,6 +62,8 @@ type UserSettingsPayload = {
   prayerConfigs?: unknown;
   accountEnabled?: unknown;
   account_enabled?: unknown;
+  selectedAlexaDeviceIds?: unknown;
+  selectedDeviceIds?: unknown;
 };
 
 type OnboardingData = {
@@ -268,6 +271,11 @@ export default function Step5DevicesAdhan({
     onboardingData.accountEnabled === true
   );
   const [devices, setDevices] = useState<Device[]>([]);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
+    Array.isArray(onboardingData.devices)
+      ? onboardingData.devices.filter((id): id is string => typeof id === "string")
+      : []
+  );
   const [reciters, setReciters] = useState<Reciter[]>([]);
   const [duas, setDuas] = useState<DuaOption[]>([]);
   const [surahs, setSurahs] = useState<SurahOption[]>([]);
@@ -277,13 +285,24 @@ export default function Step5DevicesAdhan({
 
   const canContinue = useMemo(() => {
     const anyReciter = prayerConfigs.some((p) => !!p.adhanReciterId);
-    return accountEnabled && anyReciter && !saving;
-  }, [accountEnabled, prayerConfigs, saving]);
+    const hasValidDeviceSelection =
+      devices.length === 0 || selectedDeviceIds.length > 0;
+    return accountEnabled && anyReciter && hasValidDeviceSelection && !saving;
+  }, [accountEnabled, prayerConfigs, devices.length, selectedDeviceIds.length, saving]);
 
   function updatePrayer(prayerName: PrayerName, patch: Partial<PrayerConfig>) {
     setPrayerConfigs((prev) =>
       prev.map((p) => (p.prayerName === prayerName ? { ...p, ...patch } : p))
     );
+  }
+
+  function toggleSelectedDevice(deviceId: string, checked: boolean) {
+    setSelectedDeviceIds((prev) => {
+      const next = checked
+        ? Array.from(new Set([...prev, deviceId]))
+        : prev.filter((id) => id !== deviceId);
+      return next;
+    });
   }
 
   async function loadAll() {
@@ -328,6 +347,22 @@ export default function Step5DevicesAdhan({
           asBoolean(payload.account_enabled);
 
         setAccountEnabled(enabledValue ?? false);
+
+        const selectedDeviceIdsSource = Array.isArray(settings.selectedAlexaDeviceIds)
+          ? settings.selectedAlexaDeviceIds
+          : Array.isArray(settings.selectedDeviceIds)
+          ? settings.selectedDeviceIds
+          : Array.isArray(payload.selectedAlexaDeviceIds)
+          ? payload.selectedAlexaDeviceIds
+          : payload.selectedDeviceIds;
+
+        if (Array.isArray(selectedDeviceIdsSource)) {
+          setSelectedDeviceIds(
+            selectedDeviceIdsSource.filter(
+              (id): id is string => typeof id === "string" && id.trim().length > 0
+            )
+          );
+        }
 
         const configsSource = Array.isArray(settings.prayerConfigs)
           ? settings.prayerConfigs
@@ -383,6 +418,16 @@ export default function Step5DevicesAdhan({
     void loadAll();
   }, []);
 
+  useEffect(() => {
+    if (devices.length === 0) return;
+
+    setSelectedDeviceIds((prev) => {
+      const filtered = prev.filter((id) => devices.some((device) => device.id === id));
+      if (filtered.length > 0) return filtered;
+      return devices.map((device) => device.id);
+    });
+  }, [devices]);
+
   const handleNext = async () => {
     setError(null);
 
@@ -403,10 +448,16 @@ export default function Step5DevicesAdhan({
       return;
     }
 
+    if (devices.length > 0 && selectedDeviceIds.length === 0) {
+      setError("Please select at least one Alexa device before continuing.");
+      return;
+    }
+
     setSaving(true);
     try {
       const payload: JsonRecord = {
         accountEnabled,
+        selectedAlexaDeviceIds: selectedDeviceIds,
         prayerConfigs: prayerConfigs.map((p) => ({
           prayerName: p.prayerName,
           adhanReciterId: p.adhanReciterId,
@@ -423,7 +474,7 @@ export default function Step5DevicesAdhan({
 
       setOnboardingData({
         ...onboardingData,
-        devices: devices.map((d) => d.id),
+        devices: selectedDeviceIds,
         accountEnabled,
         prayerConfigs,
       });
@@ -510,27 +561,42 @@ export default function Step5DevicesAdhan({
                 </p>
               ) : (
                 <div className="space-y-3">
-                  {devices.map((device) => (
-                    <div
-                      key={device.id}
-                      className="flex items-center gap-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700"
-                    >
-                      <div className="flex-1">
-                        <div className="text-white">{device.name}</div>
-                        <div className="text-slate-400 text-sm">
-                          {device.platform ? device.platform.toUpperCase() : "ALEXA"}
+                  {devices.map((device) => {
+                    const checked = selectedDeviceIds.includes(device.id);
+
+                    return (
+                      <label
+                        key={device.id}
+                        className={`flex items-center gap-4 p-4 bg-slate-800/50 rounded-lg border cursor-pointer transition-colors ${
+                          checked
+                            ? "border-emerald-500/50 bg-emerald-500/10"
+                            : "border-slate-700"
+                        }`}
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) =>
+                            toggleSelectedDevice(device.id, value === true)
+                          }
+                        />
+                        <div className="flex-1">
+                          <div className="text-white">{device.name}</div>
+                          <div className="text-slate-400 text-sm">
+                            {device.platform ? device.platform.toUpperCase() : "ALEXA"}
+                          </div>
                         </div>
-                      </div>
-                      <Badge variant="secondary">Linked</Badge>
-                    </div>
-                  ))}
+                        <Badge variant="secondary">
+                          {checked ? "Selected" : "Linked"}
+                        </Badge>
+                      </label>
+                    );
+                  })}
                 </div>
               )}
 
               <p className="text-xs text-slate-400 mt-4">
-                Linked devices are shown from your backend account. This screen
-                does not fake a saved per-device target setting that your backend
-                does not currently persist.
+                Selected devices are now saved to your backend profile so later
+                playback routing can use the same stored targets consistently.
               </p>
             </TabsContent>
 

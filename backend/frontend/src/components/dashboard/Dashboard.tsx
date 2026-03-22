@@ -87,6 +87,7 @@ type SettingsShape = {
   timezone?: string;
   latitude?: number | null;
   longitude?: number | null;
+  useMosqueLocation?: boolean;
   accountEnabled?: boolean;
   prayerConfigs?: PrayerConfig[];
   mosqueId?: string | null;
@@ -102,11 +103,19 @@ type TodayShape = {
     timezone?: string;
     latitude?: number | null;
     longitude?: number | null;
+    label?: string;
   };
   prayers12?: PrayerMap;
   prayers24?: PrayerMap;
   enabled?: Partial<Record<PrayerCode, boolean>>;
   source?: string;
+  sourceDetail?: {
+    preferred?: string;
+    actual?: string;
+    useMosqueLocation?: boolean;
+    label?: string;
+    fallbackReason?: string | null;
+  };
   date?: unknown;
   meta?: unknown;
 };
@@ -173,6 +182,7 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
     timezone: asString(src.timezone),
     latitude: asNumber(src.latitude),
     longitude: asNumber(src.longitude),
+    useMosqueLocation: src.useMosqueLocation === true,
     accountEnabled: src.accountEnabled === true,
     prayerConfigs: normalizePrayerConfigs(src.prayerConfigs),
     mosqueId: typeof src.mosqueId === "string" ? src.mosqueId : null,
@@ -197,6 +207,7 @@ function normalizeToday(payload: unknown): TodayShape | null {
           timezone: asString(location.timezone),
           latitude: asNumber(location.latitude),
           longitude: asNumber(location.longitude),
+          label: asString(location.label),
         }
       : undefined,
     prayers12: isObject(src.prayers12) ? (src.prayers12 as PrayerMap) : undefined,
@@ -205,9 +216,34 @@ function normalizeToday(payload: unknown): TodayShape | null {
       ? (src.enabled as Partial<Record<PrayerCode, boolean>>)
       : undefined,
     source: asString(src.source),
+    sourceDetail: isObject(src.sourceDetail)
+      ? {
+          preferred: asString(src.sourceDetail.preferred),
+          actual: asString(src.sourceDetail.actual),
+          useMosqueLocation:
+            typeof src.sourceDetail.useMosqueLocation === "boolean"
+              ? src.sourceDetail.useMosqueLocation
+              : undefined,
+          label: asString(src.sourceDetail.label),
+          fallbackReason:
+            typeof src.sourceDetail.fallbackReason === "string"
+              ? src.sourceDetail.fallbackReason
+              : null,
+        }
+      : undefined,
     date: src.date,
     meta: src.meta,
   };
+}
+
+function describeTimingSource(todayData: TodayShape | null, userSettings: SettingsShape | null) {
+  const label = todayData?.sourceDetail?.label;
+  if (label) return label;
+  if (todayData?.source === "mosque") return "Mosque coordinates";
+  if (todayData?.source === "user") return "Personal coordinates";
+  if (todayData?.source === "city") return "City fallback";
+  if (userSettings?.useMosqueLocation) return "Mosque preferred";
+  return "Personal location";
 }
 
 function normalizeDevices(payload: unknown): Device[] {
@@ -603,6 +639,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
       : null;
 
+  const timingSourceLabel = describeTimingSource(todayData, userSettings);
+  const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
+
   if (!hasAmazonToken) {
     return (
       <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
@@ -660,9 +699,15 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 {locationLabel ? ` for ${locationLabel}` : ""}.
               </p>
 
-              {todayData?.source && (
+              {timingSourceLabel && (
                 <p className="text-slate-500 text-xs mt-2">
-                  Prayer source: {todayData.source}
+                  Prayer source: {timingSourceLabel}
+                </p>
+              )}
+
+              {timingFallbackReason && (
+                <p className="text-amber-400 text-xs mt-1">
+                  {timingFallbackReason}
                 </p>
               )}
 
