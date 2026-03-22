@@ -400,6 +400,111 @@ async function revokeAlexaSkillTokensForUser(pool, userId) {
     `);
 }
 
+
+async function upsertAlexaAppLinkToken(pool, params) {
+  const {
+    userId,
+    amazonAccessToken,
+    amazonRefreshToken,
+    amazonScope,
+    endpointHost,
+    customerUserId,
+    expiresAt,
+  } = params;
+
+  await pool
+    .request()
+    .input('user_id', sql.UniqueIdentifier, userId)
+    .input('amazon_access_token', sql.NVarChar(sql.MAX), normalizeText(amazonAccessToken) || null)
+    .input('amazon_refresh_token', sql.NVarChar(sql.MAX), normalizeText(amazonRefreshToken) || null)
+    .input('amazon_scope', sql.NVarChar(1000), normalizeText(amazonScope) || null)
+    .input('endpoint_host', sql.NVarChar(255), normalizeText(endpointHost) || null)
+    .input('customer_user_id', sql.NVarChar(255), normalizeText(customerUserId) || null)
+    .input('expires_at', sql.DateTime2, expiresAt || null)
+    .query(`
+      MERGE dbo.alexa_app_link_tokens AS target
+      USING (SELECT @user_id AS user_id) AS source
+      ON target.user_id = source.user_id
+      WHEN MATCHED THEN
+        UPDATE SET
+          amazon_access_token = @amazon_access_token,
+          amazon_refresh_token = COALESCE(@amazon_refresh_token, target.amazon_refresh_token),
+          amazon_scope = COALESCE(@amazon_scope, target.amazon_scope),
+          endpoint_host = COALESCE(@endpoint_host, target.endpoint_host),
+          customer_user_id = COALESCE(@customer_user_id, target.customer_user_id),
+          expires_at = @expires_at,
+          revoked_at = NULL,
+          updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN
+        INSERT (
+          user_id,
+          amazon_access_token,
+          amazon_refresh_token,
+          amazon_scope,
+          endpoint_host,
+          customer_user_id,
+          expires_at
+        )
+        VALUES (
+          @user_id,
+          @amazon_access_token,
+          @amazon_refresh_token,
+          @amazon_scope,
+          @endpoint_host,
+          @customer_user_id,
+          @expires_at
+        );
+    `);
+}
+
+async function getAlexaAppLinkToken(pool, userId) {
+  const result = await pool
+    .request()
+    .input('user_id', sql.UniqueIdentifier, userId)
+    .query(`
+      SELECT TOP 1
+        user_id,
+        amazon_access_token,
+        amazon_refresh_token,
+        amazon_scope,
+        endpoint_host,
+        customer_user_id,
+        expires_at,
+        revoked_at,
+        created_at,
+        updated_at
+      FROM dbo.alexa_app_link_tokens
+      WHERE user_id = @user_id
+    `);
+
+  const row = result.recordset[0];
+  if (!row) return null;
+
+  return {
+    userId: row.user_id,
+    amazonAccessToken: row.amazon_access_token || null,
+    amazonRefreshToken: row.amazon_refresh_token || null,
+    amazonScope: row.amazon_scope || null,
+    endpointHost: row.endpoint_host || null,
+    customerUserId: row.customer_user_id || null,
+    expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+    revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+async function revokeAlexaAppLinkTokenForUser(pool, userId) {
+  await pool
+    .request()
+    .input('user_id', sql.UniqueIdentifier, userId)
+    .query(`
+      UPDATE dbo.alexa_app_link_tokens
+      SET revoked_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
+      WHERE user_id = @user_id AND revoked_at IS NULL
+    `);
+}
+
 async function authenticateAlexaSkillAccessToken(pool, accessToken) {
   const token = normalizeText(accessToken);
   if (!token) return null;
@@ -461,4 +566,7 @@ module.exports = {
   revokeAlexaSkillTokensForUser,
   authenticateAlexaSkillAccessToken,
   rememberAlexaSkillUser,
+  upsertAlexaAppLinkToken,
+  getAlexaAppLinkToken,
+  revokeAlexaAppLinkTokenForUser,
 };
