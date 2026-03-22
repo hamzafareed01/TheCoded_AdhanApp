@@ -11,6 +11,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Label } from "../ui/label";
+import { Switch } from "../ui/switch";
 import {
   apiFetch,
   getStoredAmazonToken,
@@ -35,6 +36,7 @@ type UserSettings = {
   country: string;
   city: string;
   timezone: string;
+  useMosqueLocation: boolean;
   mosqueId: string | null;
   quietHours: QuietHours;
   latitude?: number | null;
@@ -131,6 +133,7 @@ function normalizeSettings(payload: unknown): UserSettings {
     country: normalizeCountry(src.country),
     city: normalizeCity(src.city),
     timezone: normalizeTimezone(src.timezone),
+    useMosqueLocation: asBoolean(src.useMosqueLocation) ?? false,
     mosqueId: asString(src.mosqueId),
     quietHours: {
       enabled: asBoolean(quietSource.enabled) ?? false,
@@ -377,6 +380,52 @@ export default function MosqueSelector({
     }
   };
 
+  const handleTimingPreferenceChange = async (checked: boolean) => {
+    if (!settings) return;
+
+    try {
+      setSaving(true);
+      setError(null);
+      setSaveMessage(null);
+
+      const res = await apiFetch("/api/user/settings", {
+        method: "POST",
+        body: JSON.stringify({ useMosqueLocation: checked }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || "Failed to save timing preference");
+      }
+
+      const updatedSettings = await refreshSettings();
+      setOnboardingData({
+        ...onboardingData,
+        location: {
+          ...(isRecord(onboardingData.location) ? onboardingData.location : {}),
+          country: updatedSettings.country,
+          city: updatedSettings.city,
+          timezone: updatedSettings.timezone,
+          useMosqueLocation: updatedSettings.useMosqueLocation,
+        },
+      });
+      setSaveMessage(
+        checked
+          ? "Mosque timing preference saved."
+          : "Personal location timing preference saved."
+      );
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not save timing preference. Please try again."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!selectedMosqueId) {
       setError("Please select a mosque first.");
@@ -415,6 +464,7 @@ export default function MosqueSelector({
         mosqueAddress: mosqueToSave?.address ?? null,
         mosqueLat: mosqueToSave?.location?.lat ?? null,
         mosqueLng: mosqueToSave?.location?.lng ?? null,
+        useMosqueLocation: settings.useMosqueLocation,
       };
 
       const res = await apiFetch("/api/user/settings", {
@@ -444,6 +494,7 @@ export default function MosqueSelector({
           city: updatedSettings.city,
           country: updatedSettings.country,
           timezone: updatedSettings.timezone,
+          useMosqueLocation: updatedSettings.useMosqueLocation,
         },
       });
 
@@ -472,6 +523,27 @@ export default function MosqueSelector({
               while keeping your own saved city and timezone intact.
             </p>
           </div>
+
+          {settings && (
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3">
+              <div>
+                <p className="text-white text-sm">Use selected mosque for prayer times</p>
+                <p className="text-slate-400 text-xs">
+                  When this is on, the dashboard and backend prayer API will prefer saved mosque coordinates.
+                </p>
+              </div>
+              <Switch
+                checked={settings.useMosqueLocation}
+                disabled={saving}
+                onCheckedChange={(checked: boolean) => {
+                  setSettings((prev) =>
+                    prev ? { ...prev, useMosqueLocation: checked } : prev
+                  );
+                  void handleTimingPreferenceChange(checked);
+                }}
+              />
+            </div>
+          )}
 
           {error && (
             <div className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-md px-3 py-2">

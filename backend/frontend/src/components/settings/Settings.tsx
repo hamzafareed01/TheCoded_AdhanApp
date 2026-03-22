@@ -52,6 +52,13 @@ type UserSettings = {
   timezone: string;
   latitude: number | null;
   longitude: number | null;
+  useMosqueLocation: boolean;
+  mosqueId?: string | null;
+  mosqueName?: string | null;
+  mosqueAddress?: string | null;
+  mosqueLat?: number | null;
+  mosqueLng?: number | null;
+  selectedAlexaDeviceIds?: string[];
   accountEnabled: boolean;
   globalOffsets: Offsets;
   prayerConfigs: PrayerConfig[];
@@ -283,6 +290,17 @@ function normalizeSettings(payload: unknown): UserSettings {
     timezone: normalizeTimezone(src.timezone) || getBrowserTimezone(),
     latitude: asNumber(src.latitude),
     longitude: asNumber(src.longitude),
+    useMosqueLocation: asBoolean(src.useMosqueLocation) ?? false,
+    mosqueId: asString(src.mosqueId),
+    mosqueName: asString(src.mosqueName),
+    mosqueAddress: asString(src.mosqueAddress),
+    mosqueLat: asNumber(src.mosqueLat),
+    mosqueLng: asNumber(src.mosqueLng),
+    selectedAlexaDeviceIds: Array.isArray(src.selectedAlexaDeviceIds)
+      ? src.selectedAlexaDeviceIds.filter(
+          (id): id is string => typeof id === "string" && id.trim().length > 0
+        )
+      : [],
     accountEnabled:
       asBoolean(src.accountEnabled) ??
       asBoolean(src.account_enabled) ??
@@ -639,6 +657,7 @@ export default function Settings({
         timezone: syncedSettings.timezone,
         latitude: syncedSettings.latitude,
         longitude: syncedSettings.longitude,
+        useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
         globalOffsets: syncedSettings.globalOffsets,
         prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
@@ -681,6 +700,7 @@ export default function Settings({
           timezone: syncedSettings.timezone,
           latitude: syncedSettings.latitude,
           longitude: syncedSettings.longitude,
+          useMosqueLocation: syncedSettings.useMosqueLocation,
         },
         accountEnabled: syncedSettings.accountEnabled,
         prayerConfigs: syncedSettings.prayerConfigs,
@@ -960,6 +980,41 @@ export default function Settings({
                       {settings.latitude != null && settings.longitude != null
                         ? `${settings.latitude.toFixed(6)}, ${settings.longitude.toFixed(6)}`
                         : "Will be refreshed from your country and city when you save settings."}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-lg border border-slate-700 px-4 py-3">
+                    <div>
+                      <Label className="text-slate-200">Use selected mosque for prayer times</Label>
+                      <p className="text-xs text-slate-400">
+                        When enabled, the dashboard and prayer API will use saved mosque coordinates whenever they exist.
+                      </p>
+                      {settings.mosqueName ? (
+                        <p className="text-xs text-emerald-400 mt-2">
+                          Saved mosque: {settings.mosqueName}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-500 mt-2">
+                          No mosque selected yet. The app will fall back to your personal location.
+                        </p>
+                      )}
+                    </div>
+                    <Switch
+                      checked={settings.useMosqueLocation}
+                      onCheckedChange={(v: boolean) =>
+                        updateField("useMosqueLocation", v)
+                      }
+                    />
+                  </div>
+
+                  <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm">
+                    <div className="text-slate-200 mb-1">Current timing source rule</div>
+                    <div className="text-slate-400">
+                      {settings.useMosqueLocation
+                        ? settings.mosqueLat != null && settings.mosqueLng != null
+                          ? "Mosque coordinates will be used."
+                          : "Mosque timing is preferred, but it will fall back to your saved personal location until mosque coordinates are available."
+                        : "Your saved personal location will be used."}
                     </div>
                   </div>
                 </div>

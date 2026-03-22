@@ -203,6 +203,11 @@ export default function RootShell({ user }: RootShellProps) {
           prayerConfigs: Array.isArray(settings.prayerConfigs)
             ? settings.prayerConfigs
             : prev.prayerConfigs,
+          devices: Array.isArray(settings.selectedAlexaDeviceIds)
+            ? settings.selectedAlexaDeviceIds.filter(
+                (x): x is string => typeof x === "string" && x.trim().length > 0
+              )
+            : prev.devices,
           accountEnabled:
             settings.accountEnabled === true ? true : prev.accountEnabled,
           mosque:

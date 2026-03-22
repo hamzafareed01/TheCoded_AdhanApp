@@ -474,6 +474,84 @@ function parseOffsetsFromBody(body, fallback) {
   return out;
 }
 
+function hasFiniteCoordinates(lat, lng) {
+  return (
+    typeof lat === "number" &&
+    Number.isFinite(lat) &&
+    typeof lng === "number" &&
+    Number.isFinite(lng)
+  );
+}
+
+function normalizeTimingSource(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "mosque" || raw === "masjid") return "mosque";
+  if (
+    raw === "user" ||
+    raw === "personal" ||
+    raw === "personal_location" ||
+    raw === "user_location" ||
+    raw === "coordinates"
+  ) {
+    return "user";
+  }
+  if (raw === "city") return "city";
+  return null;
+}
+
+function resolveTimingSource(profile) {
+  const useMosqueLocation =
+    profile?.use_mosque_location === true ||
+    profile?.use_mosque_location === 1;
+
+  const preferredSource = useMosqueLocation ? "mosque" : "user";
+  const hasMosqueCoords = hasFiniteCoordinates(profile?.mosque_lat, profile?.mosque_lng);
+  const hasUserCoords = hasFiniteCoordinates(profile?.latitude, profile?.longitude);
+
+  if (useMosqueLocation && hasMosqueCoords) {
+    return {
+      preferredSource,
+      actualSource: "mosque",
+      useMosqueLocation,
+      latitude: profile.mosque_lat,
+      longitude: profile.mosque_lng,
+      hasCoordinates: true,
+      label: profile?.mosque_name
+        ? `Mosque coordinates · ${profile.mosque_name}`
+        : "Mosque coordinates",
+      fallbackReason: null,
+    };
+  }
+
+  if (hasUserCoords) {
+    return {
+      preferredSource,
+      actualSource: "user",
+      useMosqueLocation,
+      latitude: profile.latitude,
+      longitude: profile.longitude,
+      hasCoordinates: true,
+      label: "Personal coordinates",
+      fallbackReason: useMosqueLocation
+        ? "Mosque timing was requested, but the mosque does not have saved coordinates yet."
+        : null,
+    };
+  }
+
+  return {
+    preferredSource,
+    actualSource: "city",
+    useMosqueLocation,
+    latitude: null,
+    longitude: null,
+    hasCoordinates: false,
+    label: "City fallback",
+    fallbackReason: useMosqueLocation
+      ? "Mosque timing was requested, but the mosque and user location do not have saved coordinates yet."
+      : "User coordinates are not saved yet, so city fallback is being used.",
+  };
+}
+
 function mapCalcMethodToAlAdhan(method, sect) {
   const m = String(method || "").toLowerCase();
 
@@ -545,6 +623,21 @@ function computeQiblahBearing(lat, lon) {
 // -----------------------------
 function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
   const rows = Array.isArray(prayerRows) ? prayerRows : [];
+  const timing = resolveTimingSource(profile);
+
+  let selectedAlexaDeviceIds = [];
+  try {
+    const parsed = profile?.selected_alexa_device_ids_json
+      ? JSON.parse(profile.selected_alexa_device_ids_json)
+      : [];
+    selectedAlexaDeviceIds = Array.isArray(parsed)
+      ? parsed
+          .filter((value) => typeof value === "string" && value.trim())
+          .map((value) => String(value).trim())
+      : [];
+  } catch {
+    selectedAlexaDeviceIds = [];
+  }
 
   const firstQuietRow =
     rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) ||
@@ -620,6 +713,10 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
       typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
         ? profile.mosque_lng
         : null,
+    useMosqueLocation: timing.useMosqueLocation,
+    timingSource: timing.preferredSource,
+    resolvedTimingSource: timing.actualSource,
+    selectedAlexaDeviceIds,
     accountEnabled: !!profile.account_enabled,
     quietHours,
     globalOffsets: {
@@ -1131,9 +1228,31 @@ async function handleSaveUserSettings(req, res) {
   const latitude = parseOptionalNumber(body.latitude);
   const longitude = parseOptionalNumber(body.longitude);
   const accountEnabled = body.accountEnabled ?? body.account_enabled;
+  const requestedTimingSource = normalizeTimingSource(
+    body.timingSource || body.timing_source
+  );
   const useMosqueLocation = hasOwn(body, "useMosqueLocation")
     ? body.useMosqueLocation === true
+    : requestedTimingSource === "mosque"
+    ? true
+    : requestedTimingSource === "user"
+    ? false
     : undefined;
+
+  const hasSelectedAlexaDeviceIds =
+    hasOwn(body, "selectedAlexaDeviceIds") || hasOwn(body, "selectedDeviceIds");
+  const selectedAlexaDeviceIdsSource = hasOwn(body, "selectedAlexaDeviceIds")
+    ? body.selectedAlexaDeviceIds
+    : body.selectedDeviceIds;
+  const selectedAlexaDeviceIds = Array.isArray(selectedAlexaDeviceIdsSource)
+    ? Array.from(
+        new Set(
+          selectedAlexaDeviceIdsSource
+            .filter((value) => typeof value === "string" && value.trim())
+            .map((value) => String(value).trim())
+        )
+      )
+    : [];
 
   const hasMosqueId = hasOwn(body, "mosqueId");
   const hasMosqueName = hasOwn(body, "mosqueName");
@@ -1234,6 +1353,17 @@ async function handleSaveUserSettings(req, res) {
     "mosque_lng",
     sql.Float,
     hasMosqueLng ? parseOptionalNumber(body.mosqueLng) ?? null : null
+  );
+
+  profileReq.input(
+    "set_selected_alexa_device_ids_json",
+    sql.Bit,
+    hasSelectedAlexaDeviceIds ? 1 : 0
+  );
+  profileReq.input(
+    "selected_alexa_device_ids_json",
+    sql.NVarChar(sql.MAX),
+    hasSelectedAlexaDeviceIds ? JSON.stringify(selectedAlexaDeviceIds) : null
   );
 
   await profileReq.query(`
@@ -1445,21 +1575,16 @@ app.get(
     );
     const school = madhhabToSchool(profile.madhhab || "hanafi");
 
-    const hasCoords =
-      typeof profile.latitude === "number" &&
-      Number.isFinite(profile.latitude) &&
-      typeof profile.longitude === "number" &&
-      Number.isFinite(profile.longitude);
-
+    const timing = resolveTimingSource(profile);
     const city = normalizeQueryText(profile.city || "Chicago");
     const country = profile.country || "US";
     const countryForApi = countryLabel(country, "United States");
 
-    const url = hasCoords
+    const url = timing.hasCoordinates
       ? `https://api.aladhan.com/v1/timings?latitude=${encodeURIComponent(
-        profile.latitude
+        timing.latitude
       )}&longitude=${encodeURIComponent(
-        profile.longitude
+        timing.longitude
       )}&method=${method}&school=${school}`
       : `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(
         city
@@ -1528,8 +1653,12 @@ app.get(
         city,
         country,
         timezone: profile.timezone || "Etc/UTC",
-        latitude: hasCoords ? profile.latitude : null,
-        longitude: hasCoords ? profile.longitude : null,
+        latitude: timing.hasCoordinates ? timing.latitude : null,
+        longitude: timing.hasCoordinates ? timing.longitude : null,
+        label:
+          timing.actualSource === "mosque"
+            ? profile.mosque_name || city
+            : city,
       },
       mosque: {
         id: profile.mosque_id || null,
@@ -1549,7 +1678,14 @@ app.get(
         calculationMethod: profile.calculation_method || "isna",
         madhhab: profile.madhhab || "hanafi",
       },
-      source: hasCoords ? "coordinates" : "city",
+      source: timing.actualSource,
+      sourceDetail: {
+        preferred: timing.preferredSource,
+        actual: timing.actualSource,
+        useMosqueLocation: timing.useMosqueLocation,
+        label: timing.label,
+        fallbackReason: timing.fallbackReason,
+      },
       enabled: enabledMap,
       prayers24: adjusted24,
       prayers12: adjusted12,
