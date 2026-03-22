@@ -1,6 +1,4 @@
-
-
-// db/sql.js - Azure SQL connection pool management with retry logic
+// db/sql.js - Azure SQL connection pool management with retry logic that can be tuned per call
 
 require("dotenv").config();
 const sql = require("mssql");
@@ -8,7 +6,14 @@ const sql = require("mssql");
 let pool = null;
 let poolPromise = null;
 
-function getConfig() {
+function numberFromEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function getConfig(overrides = {}) {
   const server = process.env.DB_SERVER;
   const database = process.env.DB_NAME;
   const user = process.env.DB_USER;
@@ -25,6 +30,22 @@ function getConfig() {
     throw new Error("DB_PORT must be a valid number");
   }
 
+  const connectionTimeout = Number.isFinite(overrides.connectionTimeoutMs)
+    ? overrides.connectionTimeoutMs
+    : numberFromEnv("DB_CONNECTION_TIMEOUT_MS", 15000);
+
+  const requestTimeout = Number.isFinite(overrides.requestTimeoutMs)
+    ? overrides.requestTimeoutMs
+    : numberFromEnv("DB_REQUEST_TIMEOUT_MS", 15000);
+
+  const poolAcquireTimeout = Number.isFinite(overrides.poolAcquireTimeoutMs)
+    ? overrides.poolAcquireTimeoutMs
+    : numberFromEnv("DB_POOL_ACQUIRE_TIMEOUT_MS", 20000);
+
+  const poolCreateTimeout = Number.isFinite(overrides.poolCreateTimeoutMs)
+    ? overrides.poolCreateTimeoutMs
+    : numberFromEnv("DB_POOL_CREATE_TIMEOUT_MS", 20000);
+
   return {
     user,
     password,
@@ -32,20 +53,20 @@ function getConfig() {
     database,
     port,
     pool: {
-      max: 5,
-      min: 0,
-      idleTimeoutMillis: 30000,
-      acquireTimeoutMillis: 60000,
-      createTimeoutMillis: 60000,
-      createRetryIntervalMillis: 500,
+      max: numberFromEnv("DB_POOL_MAX", 5),
+      min: numberFromEnv("DB_POOL_MIN", 0),
+      idleTimeoutMillis: numberFromEnv("DB_POOL_IDLE_TIMEOUT_MS", 30000),
+      acquireTimeoutMillis: poolAcquireTimeout,
+      createTimeoutMillis: poolCreateTimeout,
+      createRetryIntervalMillis: numberFromEnv("DB_POOL_CREATE_RETRY_INTERVAL_MS", 500),
     },
     options: {
       encrypt: true,
       trustServerCertificate: false,
       enableArithAbort: true,
     },
-    connectionTimeout: 45000,
-    requestTimeout: 45000,
+    connectionTimeout,
+    requestTimeout,
   };
 }
 
@@ -55,9 +76,9 @@ function isTransientSqlError(err) {
   const num = Number(err?.number);
 
   return (
-    num === 40613 || // database unavailable / serverless resume
-    num === 40197 || // service encountered an error
-    num === 40501 || // service busy / throttling
+    num === 40613 ||
+    num === 40197 ||
+    num === 40501 ||
     num === 49918 ||
     num === 49919 ||
     num === 49920 ||
@@ -95,14 +116,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function connectWithRetry(maxAttempts = 8) {
+async function connectWithRetry(options = {}) {
+  const maxAttempts = Number.isFinite(options.maxAttempts)
+    ? options.maxAttempts
+    : numberFromEnv("DB_CONNECT_MAX_ATTEMPTS", 3);
+  const purpose = options.purpose ? String(options.purpose) : "request";
   let lastErr = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let connectionPool = null;
 
     try {
-      const config = getConfig();
+      const config = getConfig(options);
       connectionPool = new sql.ConnectionPool(config);
       const connectedPool = await connectionPool.connect();
 
@@ -111,6 +136,10 @@ async function connectWithRetry(maxAttempts = 8) {
         pool = null;
         poolPromise = null;
       });
+
+      if (attempt > 1) {
+        console.log(`Azure SQL connected on retry ${attempt}/${maxAttempts} for ${purpose}.`);
+      }
 
       return connectedPool;
     } catch (err) {
@@ -125,6 +154,7 @@ async function connectWithRetry(maxAttempts = 8) {
       }
 
       if (isPermanentConfigError(err)) {
+        console.error(`Azure SQL permanent configuration error during ${purpose}:`, err?.message || err);
         break;
       }
 
@@ -132,9 +162,11 @@ async function connectWithRetry(maxAttempts = 8) {
         break;
       }
 
-      const delayMs = Math.min(6000, 750 * Math.pow(2, attempt - 1));
+      const baseDelay = numberFromEnv("DB_CONNECT_RETRY_BASE_MS", 500);
+      const maxDelay = numberFromEnv("DB_CONNECT_RETRY_MAX_MS", 2500);
+      const delayMs = Math.min(maxDelay, baseDelay * Math.pow(2, attempt - 1));
       console.warn(
-        `Azure SQL connect attempt ${attempt}/${maxAttempts} failed. Retrying in ${delayMs}ms...`,
+        `Azure SQL connect attempt ${attempt}/${maxAttempts} failed during ${purpose}. Retrying in ${delayMs}ms...`,
         err?.message || err
       );
       await sleep(delayMs);
@@ -144,27 +176,31 @@ async function connectWithRetry(maxAttempts = 8) {
   throw lastErr;
 }
 
-async function getPool() {
-  if (pool && pool.connected) {
-    return pool;
-  }
+async function getPool(options = {}) {
+  if (!options || Object.keys(options).length === 0) {
+    if (pool && pool.connected) {
+      return pool;
+    }
 
-  if (poolPromise) {
+    if (poolPromise) {
+      return poolPromise;
+    }
+
+    poolPromise = connectWithRetry({ purpose: "shared-pool" })
+      .then((connectedPool) => {
+        pool = connectedPool;
+        return connectedPool;
+      })
+      .catch((err) => {
+        pool = null;
+        poolPromise = null;
+        throw err;
+      });
+
     return poolPromise;
   }
 
-  poolPromise = connectWithRetry()
-    .then((connectedPool) => {
-      pool = connectedPool;
-      return connectedPool;
-    })
-    .catch((err) => {
-      pool = null;
-      poolPromise = null;
-      throw err;
-    });
-
-  return poolPromise;
+  return connectWithRetry(options);
 }
 
 async function closePool() {

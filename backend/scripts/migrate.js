@@ -4,8 +4,6 @@ const path = require("path");
 const { sql, getPool } = require("../db/sql");
 
 function splitOnGo(sqlText) {
-  // Split on lines that contain only "GO" (case-insensitive), with optional whitespace.
-  // This mimics how SSMS/sqlcmd treat GO.
   const lines = sqlText.split(/\r?\n/);
   const batches = [];
   let current = [];
@@ -40,47 +38,62 @@ async function ensureMigrationsTable(pool) {
 }
 
 async function main() {
-  const pool = await getPool();
-  await ensureMigrationsTable(pool);
+  console.log("Starting migrations...");
+  const pool = await getPool({
+    purpose: "migration",
+    maxAttempts: Number(process.env.MIGRATION_DB_CONNECT_MAX_ATTEMPTS || 8),
+    connectionTimeoutMs: Number(process.env.MIGRATION_DB_CONNECTION_TIMEOUT_MS || 45000),
+    requestTimeoutMs: Number(process.env.MIGRATION_DB_REQUEST_TIMEOUT_MS || 45000),
+    poolAcquireTimeoutMs: Number(process.env.MIGRATION_DB_POOL_ACQUIRE_TIMEOUT_MS || 60000),
+    poolCreateTimeoutMs: Number(process.env.MIGRATION_DB_POOL_CREATE_TIMEOUT_MS || 60000),
+  });
 
-  const dir = path.join(__dirname, "..", "migrations");
-  const files = fs
-    .readdirSync(dir)
-    .filter((f) => /^\d+_.+\.sql$/i.test(f))
-    .sort();
+  try {
+    await ensureMigrationsTable(pool);
 
-  const applied = await pool.request().query(`SELECT filename FROM dbo.__migrations`);
-  const appliedSet = new Set(applied.recordset.map((r) => r.filename));
+    const dir = path.join(__dirname, "..", "migrations");
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => /^\d+_.+\.sql$/i.test(f))
+      .sort();
 
-  for (const file of files) {
-    if (appliedSet.has(file)) continue;
+    const applied = await pool.request().query(`SELECT filename FROM dbo.__migrations`);
+    const appliedSet = new Set(applied.recordset.map((r) => r.filename));
 
-    const text = fs.readFileSync(path.join(dir, file), "utf8");
-    const batches = splitOnGo(text);
+    for (const file of files) {
+      if (appliedSet.has(file)) continue;
 
-    const tx = new sql.Transaction(pool);
-    await tx.begin();
-    try {
-      for (const batch of batches) {
-        // Use .query for each batch; GO is already handled.
-        await new sql.Request(tx).query(batch);
+      const text = fs.readFileSync(path.join(dir, file), "utf8");
+      const batches = splitOnGo(text);
+
+      const tx = new sql.Transaction(pool);
+      await tx.begin();
+      try {
+        for (const batch of batches) {
+          await new sql.Request(tx).query(batch);
+        }
+
+        await new sql.Request(tx)
+          .input("filename", sql.NVarChar(255), file)
+          .query(`INSERT INTO dbo.__migrations(filename) VALUES (@filename)`);
+
+        await tx.commit();
+        console.log(`Applied migration: ${file}`);
+      } catch (e) {
+        await tx.rollback();
+        console.error(`Failed migration: ${file}`);
+        throw e;
       }
+    }
 
-      await new sql.Request(tx)
-        .input("filename", sql.NVarChar(255), file)
-        .query(`INSERT INTO dbo.__migrations(filename) VALUES (@filename)`);
-
-      await tx.commit();
-      console.log(`✅ Applied: ${file}`);
-    } catch (e) {
-      await tx.rollback();
-      console.error(`❌ Failed: ${file}`);
-      throw e;
+    console.log("Migrations complete.");
+  } finally {
+    try {
+      await pool.close();
+    } catch (err) {
+      console.warn("Error closing migration SQL pool:", err?.message || err);
     }
   }
-
-  console.log("✅ Migrations complete.");
-  await pool.close();
 }
 
 main().catch((err) => {
