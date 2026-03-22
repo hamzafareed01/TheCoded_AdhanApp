@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
+import { Checkbox } from "../ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -598,6 +599,19 @@ export default function Settings({
     });
   };
 
+  const toggleSelectedDevice = (deviceId: string, checked: boolean) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const next = checked
+        ? Array.from(new Set([...(prev.selectedAlexaDeviceIds ?? []), deviceId]))
+        : (prev.selectedAlexaDeviceIds ?? []).filter((id) => id !== deviceId);
+      return {
+        ...prev,
+        selectedAlexaDeviceIds: next,
+      };
+    });
+  };
+
   const handleLocationFieldChange = (
     key: "country" | "city" | "timezone",
     value: string
@@ -659,6 +673,7 @@ export default function Settings({
         longitude: syncedSettings.longitude,
         useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
+        selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
         globalOffsets: syncedSettings.globalOffsets,
         prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
           prayerName: pc.prayerName,
@@ -703,6 +718,7 @@ export default function Settings({
           useMosqueLocation: syncedSettings.useMosqueLocation,
         },
         accountEnabled: syncedSettings.accountEnabled,
+        devices: syncedSettings.selectedAlexaDeviceIds ?? [],
         prayerConfigs: syncedSettings.prayerConfigs,
       });
 
@@ -929,6 +945,45 @@ export default function Settings({
                         }
                       />
                     </div>
+                  </div>
+
+                  <div className="border-t border-slate-800 pt-6">
+                    <h3 className="text-white text-lg mb-3">Alexa devices</h3>
+                    {devices.length === 0 ? (
+                      <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm text-slate-400">
+                        No linked Alexa devices were returned yet. Reconnect Amazon in onboarding if needed.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {devices.map((device) => {
+                          const checked = (settings.selectedAlexaDeviceIds ?? []).includes(device.id);
+                          return (
+                            <label
+                              key={device.id}
+                              className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 cursor-pointer ${
+                                checked
+                                  ? "border-emerald-500/50 bg-emerald-500/10"
+                                  : "border-slate-700"
+                              }`}
+                            >
+                              <div>
+                                <div className="text-slate-100">{device.name}</div>
+                                <div className="text-xs text-slate-400">Selected devices can use your Adhan Home Alexa playback flow.</div>
+                              </div>
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(value) =>
+                                  toggleSelectedDevice(device.id, value === true)
+                                }
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-400 mt-3">
+                      These selections are saved in your account and checked by the Alexa skill at runtime.
+                    </p>
                   </div>
                 </div>
 

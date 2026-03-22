@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { Check, Copy } from "lucide-react";
+import { Badge } from "../ui/badge";
+import { Check, Copy, Link2 } from "lucide-react";
+import { apiFetch } from "../../lib/api";
 
 type Template = {
   id: string;
@@ -12,44 +14,82 @@ type Template = {
   phrase: string;
 };
 
+type LinkStatus = {
+  configured?: boolean;
+  linked?: boolean;
+  expiresAt?: string | null;
+  lastUsedAt?: string | null;
+  invocationName?: string | null;
+};
+
+const FALLBACK_TEMPLATES: Template[] = [
+  {
+    id: "fajr",
+    title: "Fajr Adhan",
+    routineName: "Adhan Home – Fajr Adhan",
+    phrase: "open adhan home and play fajr adhan",
+  },
+  {
+    id: "dhuhr",
+    title: "Dhuhr Adhan",
+    routineName: "Adhan Home – Dhuhr Adhan",
+    phrase: "open adhan home and play dhuhr adhan",
+  },
+  {
+    id: "asr",
+    title: "Asr Adhan",
+    routineName: "Adhan Home – Asr Adhan",
+    phrase: "open adhan home and play asr adhan",
+  },
+  {
+    id: "maghrib",
+    title: "Maghrib Adhan",
+    routineName: "Adhan Home – Maghrib Adhan",
+    phrase: "open adhan home and play maghrib adhan",
+  },
+  {
+    id: "isha",
+    title: "Isha Adhan",
+    routineName: "Adhan Home – Isha Adhan",
+    phrase: "open adhan home and play isha adhan",
+  },
+];
+
 export default function AlexaSetup() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<Template[]>(FALLBACK_TEMPLATES);
+  const [status, setStatus] = useState<LinkStatus | null>(null);
 
-  const templates: Template[] = useMemo(
-    () => [
-      {
-        id: "fajr",
-        title: "Fajr Adhan",
-        routineName: "Adhan Home – Fajr",
-        phrase: "open adhan home and play fajr adhan",
-      },
-      {
-        id: "dhuhr",
-        title: "Dhuhr Adhan",
-        routineName: "Adhan Home – Dhuhr",
-        phrase: "open adhan home and play dhuhr adhan",
-      },
-      {
-        id: "asr",
-        title: "Asr Adhan",
-        routineName: "Adhan Home – Asr",
-        phrase: "open adhan home and play asr adhan",
-      },
-      {
-        id: "maghrib",
-        title: "Maghrib Adhan",
-        routineName: "Adhan Home – Maghrib",
-        phrase: "open adhan home and play maghrib adhan",
-      },
-      {
-        id: "isha",
-        title: "Isha Adhan",
-        routineName: "Adhan Home – Isha",
-        phrase: "open adhan home and play isha adhan",
-      },
-    ],
-    []
-  );
+  useEffect(() => {
+    async function load() {
+      try {
+        const [templatesRes, statusRes] = await Promise.all([
+          apiFetch("/api/alexa/routines/templates"),
+          apiFetch("/api/alexa/account-linking/status"),
+        ]);
+
+        if (templatesRes.ok) {
+          const payload = (await templatesRes.json()) as { templates?: Template[] };
+          if (Array.isArray(payload.templates) && payload.templates.length > 0) {
+            setTemplates(payload.templates);
+          }
+        }
+
+        if (statusRes.ok) {
+          const payload = (await statusRes.json()) as LinkStatus;
+          setStatus(payload);
+        }
+      } catch {
+        // keep fallback UI
+      }
+    }
+
+    void load();
+  }, []);
+
+  const canCopyLinkingUrl = useMemo(() => {
+    return typeof window !== "undefined";
+  }, []);
 
   async function copy(text: string, id: string) {
     try {
@@ -66,6 +106,10 @@ export default function AlexaSetup() {
     setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1200);
   }
 
+  const accountLinkPage = canCopyLinkingUrl
+    ? `${window.location.origin}/alexa/link`
+    : "/alexa/link";
+
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
       <div className="max-w-7xl mx-auto">
@@ -75,38 +119,80 @@ export default function AlexaSetup() {
             <div>
               <div className="text-slate-100 font-semibold text-lg">Alexa Setup</div>
               <div className="text-slate-400 text-sm">
-                Create routines using ready-to-copy phrases.
+                Skill linking + routine phrases for prayer-based Alexa playback.
               </div>
             </div>
           </div>
           <Navigation />
         </div>
 
+        <div className="grid lg:grid-cols-3 gap-4 mb-6">
+          <Card className="bg-slate-900/40 border-slate-800 lg:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-slate-100">Current status</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-slate-300">
+              <div className="flex flex-wrap gap-2">
+                <Badge variant={status?.configured ? "default" : "secondary"}>
+                  {status?.configured ? "OAuth configured" : "OAuth not configured"}
+                </Badge>
+                <Badge variant={status?.linked ? "default" : "secondary"}>
+                  {status?.linked ? "Skill linked" : "Skill not linked yet"}
+                </Badge>
+              </div>
+              <div>
+                Invocation name: <span className="text-slate-100">{status?.invocationName || "adhan home"}</span>
+              </div>
+              {status?.expiresAt ? (
+                <div>Skill token expires: <span className="text-slate-100">{new Date(status.expiresAt).toLocaleString()}</span></div>
+              ) : null}
+              {status?.lastUsedAt ? (
+                <div>Last Alexa skill use: <span className="text-slate-100">{new Date(status.lastUsedAt).toLocaleString()}</span></div>
+              ) : null}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                Adhan Home now supports backend OAuth/account linking and a real skill playback endpoint.
+                Alexa routines still need to be created in the Alexa app because Amazon does not provide a
+                public API for third-party routine creation.
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-slate-900/40 border-slate-800">
+            <CardHeader>
+              <CardTitle className="text-slate-100">Console values</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-slate-300">
+              <div>
+                Authorization URL:
+                <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 font-mono text-xs text-slate-100 break-all">
+                  {accountLinkPage}
+                </div>
+              </div>
+              <Button variant="secondary" className="w-full" onClick={() => copy(accountLinkPage, "link-url")}> 
+                {copiedId === "link-url" ? (
+                  <span className="inline-flex items-center gap-2"><Check className="w-4 h-4" /> Copied</span>
+                ) : (
+                  <span className="inline-flex items-center gap-2"><Link2 className="w-4 h-4" /> Copy auth URL</span>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
         <Card className="bg-slate-900/40 border-slate-800">
           <CardHeader>
-            <CardTitle className="text-slate-100">How to create a routine (exact steps)</CardTitle>
+            <CardTitle className="text-slate-100">How to create a routine</CardTitle>
           </CardHeader>
           <CardContent className="text-slate-200 space-y-2">
             <ol className="list-decimal ml-5 space-y-2">
-              <li>Open the <b>Alexa</b> mobile app.</li>
-              <li>Tap <b>More</b> → <b>Routines</b>.</li>
-              <li>Tap <b>+</b> (Add routine).</li>
-              <li>Set the routine name (use the template’s suggested name).</li>
-              <li>
-                Tap <b>When this happens</b> → <b>Schedule</b> → pick a time.
-              </li>
-              <li>
-                Tap <b>Add action</b> → <b>Custom</b> → paste the phrase from below.
-              </li>
-              <li>
-                Under <b>From</b>, choose the Echo device that should play the adhan.
-              </li>
-              <li>Save.</li>
+              <li>Open the <b>Alexa</b> app and enable the Adhan Home skill.</li>
+              <li>Complete account linking when Alexa opens the Adhan Home authorization page.</li>
+              <li>Tap <b>More</b> → <b>Routines</b> → <b>+</b>.</li>
+              <li>Pick a routine name and the correct prayer time trigger.</li>
+              <li>Tap <b>Add action</b> → <b>Custom</b> → paste the phrase from below.</li>
+              <li>Under <b>From</b>, choose the Echo device that should play the Adhan.</li>
+              <li>Save and test the routine once manually.</li>
             </ol>
-
-            <div className="text-slate-400 text-sm mt-3">
-              Tip: Add a “Volume” action before the custom phrase if you want it louder/quieter.
-            </div>
           </CardContent>
         </Card>
 
@@ -123,11 +209,7 @@ export default function AlexaSetup() {
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 font-mono text-sm text-slate-100">
                   {t.phrase}
                 </div>
-                <Button
-                  variant="secondary"
-                  className="w-full"
-                  onClick={() => copy(t.phrase, t.id)}
-                >
+                <Button variant="secondary" className="w-full" onClick={() => copy(t.phrase, t.id)}>
                   {copiedId === t.id ? (
                     <span className="inline-flex items-center gap-2">
                       <Check className="w-4 h-4" /> Copied
@@ -142,17 +224,6 @@ export default function AlexaSetup() {
             </Card>
           ))}
         </div>
-
-        <Card className="mt-6 bg-slate-900/40 border-slate-800">
-          <CardHeader>
-            <CardTitle className="text-slate-100">Troubleshooting</CardTitle>
-          </CardHeader>
-          <CardContent className="text-slate-200 space-y-2">
-            <div>• If Alexa can’t find the skill: Alexa app → Skills → Your Skills → Dev Skills → enable <b>Adhan Home</b>.</div>
-            <div>• If routines don’t play on the right Echo: open the routine and set <b>From</b> to the correct device.</div>
-            <div>• “Mute devices while adhan plays” isn’t fully supported; best workaround is routine volume controls.</div>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
