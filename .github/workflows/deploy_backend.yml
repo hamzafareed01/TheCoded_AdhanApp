@@ -11,6 +11,7 @@ on:
       - "backend/data/**"
       - "backend/library/**"
       - "backend/audio/**"
+      - "backend/services/**"
       - "backend/package.json"
       - "backend/package-lock.json"
       - ".github/workflows/deploy_backend.yml"
@@ -53,6 +54,7 @@ jobs:
           cp -R backend/data deploy/data
           cp -R backend/library deploy/library
           cp -R backend/audio deploy/audio
+          cp -R backend/services deploy/services
 
       - name: Install production deps in staged package
         run: |
