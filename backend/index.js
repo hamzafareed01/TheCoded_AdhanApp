@@ -88,6 +88,41 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
+
+app.get("/healthz", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "adhanhome-api",
+    uptimeSec: Math.round(process.uptime()),
+    time: new Date().toISOString(),
+  });
+});
+
+app.get("/readyz", asyncHandler(async (req, res) => {
+  try {
+    const pool = await getPool({
+      purpose: "readiness-check",
+      maxAttempts: 1,
+      connectionTimeoutMs: 5000,
+      requestTimeoutMs: 5000,
+      poolAcquireTimeoutMs: 5000,
+      poolCreateTimeoutMs: 5000,
+    });
+    await pool.request().query("SELECT 1 AS ok");
+    try { await pool.close(); } catch {}
+    res.status(200).json({ ok: true, db: true, time: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({
+      ok: false,
+      db: false,
+      error: String(err?.message || err),
+      time: new Date().toISOString(),
+    });
+  }
+}));
+
+console.log("CORS allowed origins:", allowedOrigins.length ? allowedOrigins : ["*"]);
+
 // -----------------------------
 // Generic helpers
 // -----------------------------
@@ -2101,4 +2136,5 @@ app.use((err, req, res, next) => {
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
   console.log(`AdhanHome API listening on ${port}`);
+  console.log("Startup mode: server-first (migrations run separately via npm run migrate:up)");
 });
