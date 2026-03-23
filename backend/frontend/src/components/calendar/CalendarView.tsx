@@ -1,11 +1,17 @@
-// frontend/src/components/calendar/CalendarView.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react";
-import { apiFetch, apiUrl } from "../../lib/api";
+import {
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  MapPin,
+  MoonStar,
+} from "lucide-react";
+import { apiFetch } from "../../lib/api";
 
 type PrayerTimes = {
   fajr: string;
@@ -17,14 +23,38 @@ type PrayerTimes = {
 };
 
 type DayEntry = {
-  date: string; // YYYY-MM-DD
-  source: "calculation" | "mosque" | string;
+  date: string;
+  source: "calculation" | "mosque" | "personal" | "city" | string;
   prayers: PrayerTimes;
 };
 
 type CalendarResponse = {
-  location: { city: string; country: string };
-  month: string; // YYYY-MM
+  location?: {
+    city?: string;
+    country?: string;
+    timezone?: string;
+    label?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+  };
+  mosque?: {
+    id?: string | null;
+    name?: string | null;
+    address?: string | null;
+  };
+  method?: {
+    sect?: string;
+    calculationMethod?: string;
+    madhhab?: string;
+  };
+  sourceDetail?: {
+    preferred?: string;
+    actual?: string;
+    useMosqueLocation?: boolean;
+    label?: string;
+    fallbackReason?: string | null;
+  };
+  month: string;
   days: DayEntry[];
 };
 
@@ -37,16 +67,34 @@ function monthKeyFromDate(d: Date) {
 }
 
 function buildDate(y: number, mIndex: number, day: number) {
-  return new Date(y, mIndex, day, 12, 0, 0); // noon avoids DST edge cases
+  return new Date(y, mIndex, day, 12, 0, 0);
 }
 
 function isoDate(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
+function titleCase(value?: string | null) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase()) || "—";
+}
+
+function sourceBadgeClass(source?: string) {
+  if (source === "mosque") {
+    return "bg-emerald-600/20 text-emerald-300 border border-emerald-600/30";
+  }
+  if (source === "personal") {
+    return "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30";
+  }
+  return "bg-slate-800/60 text-slate-200 border border-slate-700";
+}
+
 export default function CalendarView() {
   const today = useMemo(() => new Date(), []);
-  const [activeMonth, setActiveMonth] = useState<Date>(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [activeMonth, setActiveMonth] = useState<Date>(
+    new Date(today.getFullYear(), today.getMonth(), 1)
+  );
   const [data, setData] = useState<CalendarResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,12 +112,11 @@ export default function CalendarView() {
 
   const selectedDay = dayMap.get(selectedDate) || null;
 
-  // Build a 6x7 calendar grid starting from Sunday of the first week
   const gridDates = useMemo(() => {
     const y = activeMonth.getFullYear();
     const m = activeMonth.getMonth();
     const firstOfMonth = buildDate(y, m, 1);
-    const firstDow = firstOfMonth.getDay(); // 0=Sun
+    const firstDow = firstOfMonth.getDay();
     const start = buildDate(y, m, 1 - firstDow);
 
     const cells: Date[] = [];
@@ -86,13 +133,22 @@ export default function CalendarView() {
       setLoading(true);
       setError(null);
 
-      const res = await apiFetch(`/api/prayer-times/month?month=${encodeURIComponent(key)}`);
-      if (!res.ok) throw new Error(`Failed to load calendar (${res.status})`);
+      const res = await apiFetch(
+        `/api/prayer-times/month?month=${encodeURIComponent(key)}`
+      );
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error(
+            "The backend deployed right now does not expose /api/prayer-times/month yet. Deploy the patched backend first."
+          );
+        }
+        throw new Error(`Failed to load calendar (${res.status})`);
+      }
 
       const json = (await res.json()) as CalendarResponse;
       setData(json);
 
-      // If user switched months, default selectedDate to today if in month, otherwise first day
       const inMonth = json.days.some((d) => d.date === todayStr);
       if (monthKey === key && inMonth) setSelectedDate(todayStr);
       else setSelectedDate(`${key}-01`);
@@ -106,7 +162,7 @@ export default function CalendarView() {
   };
 
   useEffect(() => {
-    fetchMonth(monthKey);
+    void fetchMonth(monthKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [monthKey]);
 
@@ -122,20 +178,28 @@ export default function CalendarView() {
   };
 
   const activeMonthLabel = useMemo(() => {
-    return activeMonth.toLocaleString(undefined, { month: "long", year: "numeric" });
+    return activeMonth.toLocaleString(undefined, {
+      month: "long",
+      year: "numeric",
+    });
   }, [activeMonth]);
+
+  const sourceLabel = data?.sourceDetail?.label || "Prayer calculation";
+  const locationLabel = data?.location?.label
+    ? data.location.label
+    : data?.location?.city
+    ? `${data.location.city}${data.location.country ? `, ${data.location.country}` : ""}`
+    : "Saved location";
 
   return (
     <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
       <div className="max-w-7xl mx-auto">
-        {/* Top nav */}
         <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
           <Logo />
           <Navigation />
         </div>
 
-        {/* Heading */}
-        <header className="mb-6">
+        <header className="mb-6 space-y-4">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-slate-900 border border-slate-800">
               <CalendarIcon className="text-emerald-400" size={20} />
@@ -143,13 +207,42 @@ export default function CalendarView() {
             <div>
               <h1 className="text-white text-2xl md:text-3xl">Prayer Calendar</h1>
               <p className="text-slate-400 text-sm md:text-base">
-                Click any day to view prayer times. Use the arrows to navigate months.
+                Grid view for advance prayer planning. The month syncs with your
+                saved location, sect, offsets, and mosque timing preference.
               </p>
             </div>
           </div>
+
+          <div className="grid md:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Timing source</div>
+              <div className="text-slate-100 font-medium">{sourceLabel}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Location</div>
+              <div className="text-slate-100 font-medium">{locationLabel}</div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Sect</div>
+              <div className="text-slate-100 font-medium">
+                {titleCase(data?.method?.sect || "Sunni")}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Method</div>
+              <div className="text-slate-100 font-medium">
+                {titleCase(data?.method?.calculationMethod || "isna")}
+              </div>
+            </div>
+          </div>
+
+          {data?.sourceDetail?.fallbackReason && (
+            <div className="rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-amber-300 text-sm">
+              {data.sourceDetail.fallbackReason}
+            </div>
+          )}
         </header>
 
-        {/* Controls */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
           <div className="flex items-center gap-2">
             <Button
@@ -179,7 +272,6 @@ export default function CalendarView() {
           </Button>
         </div>
 
-        {/* Status */}
         {loading && (
           <div className="text-slate-300 bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-6">
             Loading month…
@@ -191,12 +283,13 @@ export default function CalendarView() {
           </div>
         )}
 
-        <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-6">
-          {/* Month grid */}
+        <div className="grid lg:grid-cols-[1.15fr_0.85fr] gap-6">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
             <div className="grid grid-cols-7 gap-2 mb-2 text-xs text-slate-400 px-1">
-              {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d) => (
-                <div key={d} className="text-center">{d}</div>
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                <div key={d} className="text-center">
+                  {d}
+                </div>
               ))}
             </div>
 
@@ -206,15 +299,14 @@ export default function CalendarView() {
                 const inMonth = d.getMonth() === activeMonth.getMonth();
                 const isToday = dIso === todayStr;
                 const isSelected = dIso === selectedDate;
+                const entry = dayMap.get(dIso);
+                const hasData = !!entry;
 
-                const hasData = dayMap.has(dIso);
-                const source = dayMap.get(dIso)?.source;
-
-                const base =
-                  "rounded-xl border px-2 py-2 text-sm text-center cursor-pointer select-none";
                 const style = [
-                  base,
-                  inMonth ? "bg-slate-950/30 border-slate-800 text-slate-100" : "bg-slate-950/10 border-slate-900 text-slate-600",
+                  "rounded-xl border px-2 py-2 text-center cursor-pointer select-none transition-colors min-h-[92px] flex flex-col justify-between",
+                  inMonth
+                    ? "bg-slate-950/30 border-slate-800 text-slate-100"
+                    : "bg-slate-950/10 border-slate-900 text-slate-600",
                   isSelected ? "ring-2 ring-emerald-500" : "",
                   isToday ? "border-emerald-500/60" : "",
                 ].join(" ");
@@ -224,15 +316,30 @@ export default function CalendarView() {
                     key={dIso}
                     className={style}
                     onClick={() => setSelectedDate(dIso)}
-                    title={hasData ? `Source: ${source}` : "No data"}
+                    title={hasData ? `Source: ${entry?.source}` : "No data"}
                   >
-                    <div className="font-medium">{d.getDate()}</div>
-                    {hasData && (
-                      <div className="mt-1 flex justify-center">
-                        <Badge className={source === "mosque" ? "bg-emerald-600/20 text-emerald-300 border border-emerald-600/30" : "bg-slate-800/60 text-slate-200 border border-slate-700"}>
-                          {source === "mosque" ? "Mosque" : "Calc"}
-                        </Badge>
+                    <div>
+                      <div className="font-medium">{d.getDate()}</div>
+                      {hasData && (
+                        <div className="mt-1 flex justify-center">
+                          <Badge className={sourceBadgeClass(entry?.source)}>
+                            {entry?.source === "mosque"
+                              ? "Mosque"
+                              : entry?.source === "personal"
+                              ? "Personal"
+                              : "Calc"}
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
+
+                    {hasData && inMonth ? (
+                      <div className="hidden md:block mt-2 text-[10px] leading-4 text-slate-300">
+                        <div>F {entry?.prayers.fajr}</div>
+                        <div>M {entry?.prayers.maghrib}</div>
                       </div>
+                    ) : (
+                      <div />
                     )}
                   </div>
                 );
@@ -240,39 +347,80 @@ export default function CalendarView() {
             </div>
           </div>
 
-          {/* Day details */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-            <h2 className="text-white text-xl mb-1">Day Details</h2>
-            <p className="text-slate-400 text-sm mb-4">{selectedDate}</p>
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+              <h2 className="text-white text-xl mb-1">Day Details</h2>
+              <p className="text-slate-400 text-sm mb-4">{selectedDate}</p>
 
-            {!selectedDay ? (
-              <div className="text-slate-300">
-                No prayer times loaded for this day.
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-300">Source</span>
-                  <Badge className={selectedDay.source === "mosque" ? "bg-emerald-600/20 text-emerald-300 border border-emerald-600/30" : "bg-slate-800/60 text-slate-200 border border-slate-700"}>
-                    {selectedDay.source === "mosque" ? "Mosque Timetable" : "Calculation"}
-                  </Badge>
-                </div>
-
-                {([
-                  ["Fajr", selectedDay.prayers.fajr],
-                  ["Sunrise", selectedDay.prayers.sunrise],
-                  ["Dhuhr", selectedDay.prayers.dhuhr],
-                  ["Asr", selectedDay.prayers.asr],
-                  ["Maghrib", selectedDay.prayers.maghrib],
-                  ["Isha", selectedDay.prayers.isha],
-                ] as const).map(([label, value]) => (
-                  <div key={label} className="flex items-center justify-between bg-slate-950/40 border border-slate-800 rounded-xl px-4 py-3">
-                    <span className="text-slate-300">{label}</span>
-                    <span className="text-white font-semibold">{value}</span>
+              {!selectedDay ? (
+                <div className="text-slate-300">No prayer times loaded for this day.</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-300">Source</span>
+                    <Badge className={sourceBadgeClass(selectedDay.source)}>
+                      {titleCase(selectedDay.source)}
+                    </Badge>
                   </div>
-                ))}
+
+                  {([
+                    ["Fajr", selectedDay.prayers.fajr],
+                    ["Sunrise", selectedDay.prayers.sunrise],
+                    ["Dhuhr", selectedDay.prayers.dhuhr],
+                    ["Asr", selectedDay.prayers.asr],
+                    ["Maghrib", selectedDay.prayers.maghrib],
+                    ["Isha", selectedDay.prayers.isha],
+                  ] as const).map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="flex items-center justify-between bg-slate-950/40 border border-slate-800 rounded-xl px-4 py-3"
+                    >
+                      <span className="text-slate-300">{label}</span>
+                      <span className="text-white font-semibold">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-start gap-3">
+                <MapPin className="w-4 h-4 text-emerald-400 mt-1" />
+                <div>
+                  <div className="text-white text-sm font-medium">Effective location</div>
+                  <div className="text-slate-400 text-sm">{locationLabel}</div>
+                  {data?.location?.timezone && (
+                    <div className="text-slate-500 text-xs mt-1">
+                      Timezone: {data.location.timezone}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
+
+              <div className="flex items-start gap-3">
+                <MoonStar className="w-4 h-4 text-cyan-400 mt-1" />
+                <div>
+                  <div className="text-white text-sm font-medium">Prayer method</div>
+                  <div className="text-slate-400 text-sm">
+                    {titleCase(data?.method?.sect || "Sunni")} · {titleCase(
+                      data?.method?.madhhab || "hanafi"
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <Clock3 className="w-4 h-4 text-amber-400 mt-1" />
+                <div>
+                  <div className="text-white text-sm font-medium">Mosque override</div>
+                  <div className="text-slate-400 text-sm">
+                    {data?.sourceDetail?.useMosqueLocation
+                      ? data?.mosque?.name || "Mosque timing preference is on"
+                      : "Using personal location timing"}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

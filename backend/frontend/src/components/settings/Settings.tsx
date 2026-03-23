@@ -71,11 +71,13 @@ type Reciter = {
   country?: string | null;
   style?: string | null;
   type?: string;
+  sect?: string | null;
 };
 
 type DuaItem = {
   id: string;
   title: string;
+  tags?: string[];
 };
 
 type SurahItem = {
@@ -152,16 +154,6 @@ function getBrowserTimezone(): string {
   } catch {
     return "Etc/UTC";
   }
-}
-
-function defaultOffsets(): Offsets {
-  return {
-    fajr: 0,
-    dhuhr: 0,
-    asr: 0,
-    maghrib: 0,
-    isha: 0,
-  };
 }
 
 function defaultPrayerConfigs(): PrayerConfig[] {
@@ -332,6 +324,7 @@ function normalizeReciters(payload: unknown): Reciter[] {
       country: asString(item.country),
       style: asString(item.style),
       type: asString(item.type) ?? undefined,
+      sect: asString(item.sect),
     }))
     .filter((item) => item.id && item.name);
 }
@@ -349,7 +342,10 @@ function normalizeDuas(payload: unknown): DuaItem[] {
 
       const id = asString(item.id) ?? "";
       const title = asString(item.title) ?? "";
-      if (id && title) flat.push({ id, title });
+      const tags = Array.isArray(item.tags)
+        ? item.tags.filter((tag): tag is string => typeof tag === "string")
+        : undefined;
+      if (id && title) flat.push({ id, title, tags });
     }
   }
 
@@ -461,6 +457,13 @@ async function geocodeLocation(city: string, country: string) {
   };
 }
 
+function isAfterAdhanDua(dua: DuaItem) {
+  if (dua.id === "after_adhan") return true;
+  const tags = Array.isArray(dua.tags) ? dua.tags.join(" ").toLowerCase() : "";
+  const title = dua.title.toLowerCase();
+  return title.includes("after adhan") || tags.includes("after adhan") || tags.includes("adhan");
+}
+
 export default function Settings({
   onboardingData,
   setOnboardingData,
@@ -495,6 +498,14 @@ export default function Settings({
   const [newDeviceId, setNewDeviceId] = useState<string>(NONE_VALUE);
 
   const offsetsRows = useMemo(() => PRAYERS, []);
+  const afterAdhanDuas = useMemo(
+    () => duas.filter(isAfterAdhanDua),
+    [duas]
+  );
+  const recitersSorted = useMemo(
+    () => [...reciters].sort((a, b) => a.name.localeCompare(b.name)),
+    [reciters]
+  );
 
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
@@ -722,7 +733,11 @@ export default function Settings({
         prayerConfigs: syncedSettings.prayerConfigs,
       });
 
-      setSaveMessage("Settings saved and location synced.");
+      setSaveMessage(
+        syncedSettings.useMosqueLocation
+          ? "Settings saved. Dashboard, Calendar, and Alexa timing flows will prefer the saved mosque when coordinates are available."
+          : "Settings saved. Personal location prayer timings are now active."
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not save settings.");
     } finally {
@@ -799,8 +814,35 @@ export default function Settings({
           <div>
             <h1 className="text-white text-xl mb-1">Settings</h1>
             <p className="text-slate-400 text-sm">
-              Sect, calculation, worldwide location sync, per-prayer Adhan, and schedules.
+              Prayer timing source, Sunni or Shia calculation mode, worldwide location sync, per-prayer Adhan, and schedules.
             </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-4">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3">
+              <div className="text-slate-200 text-sm font-medium">Timing rule</div>
+              <div className="text-slate-400 text-xs mt-1">
+                {settings?.useMosqueLocation
+                  ? settings?.mosqueName
+                    ? `Mosque override is enabled for ${settings.mosqueName}.`
+                    : "Mosque override is enabled, but no saved mosque coordinates are available yet."
+                  : "Personal location from onboarding and settings is active."}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3">
+              <div className="text-slate-200 text-sm font-medium">Sect toggle</div>
+              <div className="text-slate-400 text-xs mt-1">
+                Sunni and Shia use different timing calculation rules. Your selected Adhan voices still stay available to both.
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3">
+              <div className="text-slate-200 text-sm font-medium">After Adhan audio</div>
+              <div className="text-slate-400 text-xs mt-1">
+                Only the After Adhan dua is offered for playback. Other duas remain readable in the Dua &amp; Qur’an page.
+              </div>
+            </div>
           </div>
 
           {error && (
@@ -821,22 +863,41 @@ export default function Settings({
             <>
               <div className="grid md:grid-cols-2 gap-6">
                 <div className="space-y-4">
-                  <h2 className="text-white text-lg">Sect & Calculation</h2>
+                  <h2 className="text-white text-lg">Sect &amp; Calculation</h2>
 
                   <div className="space-y-2">
-                    <Label className="text-slate-200">Sect</Label>
-                    <Select
-                      value={settings.sect}
-                      onValueChange={(v: string) => updateField("sect", v as Sect)}
-                    >
-                      <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-900 border-slate-700">
-                        <SelectItem value="SUNNI">Sunni</SelectItem>
-                        <SelectItem value="SHIA">Shia</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-slate-200">Prayer timing mode</Label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => updateField("sect", "SUNNI")}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+                          settings.sect === "SUNNI"
+                            ? "border-emerald-500 bg-emerald-500/10 text-white"
+                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                        }`}
+                      >
+                        <div className="font-medium">Sunni</div>
+                        <div className="text-xs text-slate-400 mt-1">
+                          Standard Sunni calculation flow.
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => updateField("sect", "SHIA")}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+                          settings.sect === "SHIA"
+                            ? "border-emerald-500 bg-emerald-500/10 text-white"
+                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                        }`}
+                      >
+                        <div className="font-medium">Shia</div>
+                        <div className="text-xs text-slate-400 mt-1">
+                          Jafari-style timing calculation flow.
+                        </div>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2">
@@ -878,6 +939,9 @@ export default function Settings({
                         <SelectItem value="tehran">Tehran</SelectItem>
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-slate-500">
+                      When Shia mode is enabled, the backend timing calculation switches to the Shia/Jafari prayer method.
+                    </p>
                   </div>
 
                   <div className="space-y-2">
@@ -1042,7 +1106,7 @@ export default function Settings({
                     <div>
                       <Label className="text-slate-200">Use selected mosque for prayer times</Label>
                       <p className="text-xs text-slate-400">
-                        When enabled, the dashboard and prayer API will use saved mosque coordinates whenever they exist.
+                        When enabled, the dashboard, calendar, and prayer API use saved mosque coordinates whenever they exist.
                       </p>
                       {settings.mosqueName ? (
                         <p className="text-xs text-emerald-400 mt-2">
@@ -1067,9 +1131,16 @@ export default function Settings({
                     <div className="text-slate-400">
                       {settings.useMosqueLocation
                         ? settings.mosqueLat != null && settings.mosqueLng != null
-                          ? "Mosque coordinates will be used."
+                          ? "Mosque coordinates will be used first."
                           : "Mosque timing is preferred, but it will fall back to your saved personal location until mosque coordinates are available."
                         : "Your saved personal location will be used."}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm">
+                    <div className="text-slate-200 mb-1">Adhan voice availability</div>
+                    <div className="text-slate-400">
+                      All uploaded Sunni and Shia Adhan voices stay selectable for any user. Sect only changes prayer timing calculation.
                     </div>
                   </div>
                 </div>
@@ -1174,19 +1245,23 @@ export default function Settings({
                           <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                             <SelectValue placeholder="Select reciter" />
                           </SelectTrigger>
-                          <SelectContent className="bg-slate-900 border-slate-700">
+                          <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
                             <SelectItem value={NONE_VALUE}>
                               No reciter selected
                             </SelectItem>
-                            {reciters.map((r) => (
+                            {recitersSorted.map((r) => (
                               <SelectItem key={r.id} value={r.id}>
                                 {r.name}
+                                {r.sect ? ` · ${r.sect}` : ""}
                                 {r.country ? ` · ${r.country}` : ""}
                                 {r.style ? ` · ${r.style}` : ""}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
+                        <p className="text-xs text-slate-500">
+                          All uploaded voices are available to both Sunni and Shia users.
+                        </p>
                       </div>
 
                       <div className="space-y-2">
@@ -1233,7 +1308,7 @@ export default function Settings({
                               <SelectItem value={NONE_VALUE}>
                                 No Dua selected
                               </SelectItem>
-                              {duas.map((d) => (
+                              {afterAdhanDuas.map((d) => (
                                 <SelectItem key={d.id} value={d.id}>
                                   {d.title}
                                 </SelectItem>
@@ -1356,9 +1431,10 @@ export default function Settings({
                         </SelectTrigger>
                         <SelectContent className="bg-slate-900 border-slate-700">
                           <SelectItem value={NONE_VALUE}>Default</SelectItem>
-                          {reciters.map((r) => (
+                          {recitersSorted.map((r) => (
                             <SelectItem key={r.id} value={r.id}>
                               {r.name}
+                              {r.sect ? ` · ${r.sect}` : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -1421,7 +1497,7 @@ export default function Settings({
                           <div className="text-slate-100">
                             {s.payload?.title
                               ? s.payload.title
-                              : `Tilawat · Surah ${s.payload.surahNumber}`}{" "}
+                              : `Tilawat · Surah ${s.payload.surahNumber}`} {" "}
                             · {s.timeOfDay}
                           </div>
                           <div className="text-xs text-slate-400">

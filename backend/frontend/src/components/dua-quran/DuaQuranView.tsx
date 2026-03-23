@@ -1,7 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import { BookOpen, Headphones, Play, ChevronDown, ChevronUp } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  BookOpen,
+  Headphones,
+  Play,
+  ChevronDown,
+  ChevronUp,
+  Search,
+} from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { apiFetch } from "../../lib/api";
@@ -172,6 +180,12 @@ function normalizeSurahDetail(payload: unknown): SurahDetail | null {
   };
 }
 
+function includesQuery(parts: Array<string | undefined | null>, query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return parts.some((part) => String(part || "").toLowerCase().includes(q));
+}
+
 export default function DuaQuranView() {
   const [duas, setDuas] = useState<Dua[]>([]);
   const [surahs, setSurahs] = useState<SurahSummary[]>([]);
@@ -181,6 +195,9 @@ export default function DuaQuranView() {
   const [loadingSurahDetail, setLoadingSurahDetail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showVerses, setShowVerses] = useState(true);
+  const [duaQuery, setDuaQuery] = useState("");
+  const [quranQuery, setQuranQuery] = useState("");
+  const [verseQuery, setVerseQuery] = useState("");
 
   const [playingSurahId, setPlayingSurahId] = useState<number | null>(null);
   const [currentAyahIdx, setCurrentAyahIdx] = useState(0);
@@ -206,7 +223,6 @@ export default function DuaQuranView() {
       stopSurahPlayback();
       stopSingleAyahPlayback();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -243,7 +259,6 @@ export default function DuaQuranView() {
     }
 
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadSurahDetail(id: number) {
@@ -260,6 +275,7 @@ export default function DuaQuranView() {
       if (!data) throw new Error("Invalid surah detail payload.");
 
       setSelectedSurah(data);
+      setVerseQuery("");
     } catch (err) {
       console.error(err);
       setError("Could not load that surah. Please try again.");
@@ -343,7 +359,8 @@ export default function DuaQuranView() {
     setPlayingSurahId(selectedSurah.number);
     setCurrentAyahIdx(0);
     const sessionId = ++playbackSessionRef.current;
-    playAyahIndex(0, selectedSurah.verses, sessionId);
+    const versesToPlay = filteredVerses.length > 0 ? filteredVerses : selectedSurah.verses;
+    playAyahIndex(0, versesToPlay, sessionId);
   }
 
   function stopSingleAyahPlayback() {
@@ -368,6 +385,61 @@ export default function DuaQuranView() {
     setCurrentAyahIdx(0);
   }
 
+  const filteredDuas = useMemo(
+    () =>
+      duas.filter((dua) =>
+        includesQuery(
+          [
+            dua.category,
+            dua.title,
+            dua.textArabic,
+            dua.textTransliteration,
+            dua.textTranslation,
+            ...(dua.tags || []),
+          ],
+          duaQuery
+        )
+      ),
+    [duas, duaQuery]
+  );
+
+  const filteredSurahs = useMemo(
+    () =>
+      surahs.filter((surah) =>
+        includesQuery(
+          [
+            String(surah.number),
+            surah.nameEnglish,
+            surah.nameArabic,
+            surah.englishNameTranslation,
+            surah.revelationType,
+          ],
+          quranQuery
+        )
+      ),
+    [surahs, quranQuery]
+  );
+
+  const filteredVerses = useMemo(() => {
+    if (!selectedSurah) return [];
+    return selectedSurah.verses.filter((verse) =>
+      includesQuery(
+        [
+          String(verse.numberInSurah),
+          verse.textArabic,
+          verse.textTransliteration,
+          verse.textTranslation,
+        ],
+        verseQuery
+      )
+    );
+  }, [selectedSurah, verseQuery]);
+
+  const duaAudioNote = useMemo(
+    () => duas.some((dua) => !!dua.audioUrl),
+    [duas]
+  );
+
   return (
     <div className="fixed inset-0 bg-slate-950 overflow-hidden">
       <div className="h-full w-full py-6 px-4 md:px-8">
@@ -379,10 +451,10 @@ export default function DuaQuranView() {
 
           <header className="mb-4 shrink-0">
             <h1 className="text-3xl md:text-4xl font-semibold text-white mb-2">
-              Dua & Qur’an
+              Dua &amp; Qur’an
             </h1>
-            <p className="text-slate-300 text-base md:text-lg max-w-2xl">
-              Easy to read and listen – perfect for elders or anyone who prefers audio.
+            <p className="text-slate-300 text-base md:text-lg max-w-3xl">
+              Search daily duas and browse the Qur’an with a fixed background and scrollable reading panels. Only the After Adhan dua uses dedicated dua audio here.
             </p>
           </header>
 
@@ -402,13 +474,27 @@ export default function DuaQuranView() {
                   </h2>
                 </div>
                 <p className="text-slate-400 text-sm md:text-base mb-3">
-                  Short supplications for daily routines, with audio playback.
+                  Search by title, category, Arabic text, transliteration, translation, or tags.
                 </p>
+                <div className="relative mb-4">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <Input
+                    value={duaQuery}
+                    onChange={(e) => setDuaQuery(e.target.value)}
+                    placeholder="Search duas, keywords, or daily routine..."
+                    className="pl-10 bg-slate-900 border-slate-700 text-slate-100"
+                  />
+                </div>
+                {duaAudioNote && (
+                  <p className="text-xs text-slate-500 mb-3">
+                    Audio buttons appear only for duas that have mapped audio files.
+                  </p>
+                )}
               </div>
 
               <div className="flex-1 min-h-0 rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
-                  {duas.map((dua) => (
+                  {filteredDuas.map((dua) => (
                     <div
                       key={dua.id}
                       className="rounded-2xl bg-slate-900/80 border border-slate-800 px-4 md:px-5 py-4"
@@ -419,6 +505,9 @@ export default function DuaQuranView() {
                             <h3 className="text-lg md:text-xl font-semibold text-white">
                               {dua.title}
                             </h3>
+                            <Badge className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-xs">
+                              {dua.category}
+                            </Badge>
                             {dua.tags?.map((tag) => (
                               <Badge
                                 key={tag}
@@ -459,9 +548,9 @@ export default function DuaQuranView() {
                     </div>
                   ))}
 
-                  {duas.length === 0 && !loadingSurahs && (
+                  {filteredDuas.length === 0 && !loadingSurahs && (
                     <p className="text-slate-500 text-sm">
-                      No duas found yet. We’ll add more supplications soon in shā’ Allāh.
+                      No duas matched your search.
                     </p>
                   )}
                 </div>
@@ -477,8 +566,28 @@ export default function DuaQuranView() {
                   </h2>
                 </div>
                 <p className="text-slate-400 text-sm md:text-base mb-3">
-                  Browse any surah with Arabic, transliteration, translation, and audio.
+                  Search surah names first, then optionally search inside the selected surah’s ayat.
                 </p>
+                <div className="relative mb-3">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <Input
+                    value={quranQuery}
+                    onChange={(e) => setQuranQuery(e.target.value)}
+                    placeholder="Search surah by number, English name, Arabic name..."
+                    className="pl-10 bg-slate-900 border-slate-700 text-slate-100"
+                  />
+                </div>
+                {selectedSurah && showVerses && (
+                  <div className="relative mb-4">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <Input
+                      value={verseQuery}
+                      onChange={(e) => setVerseQuery(e.target.value)}
+                      placeholder={`Search inside ${selectedSurah.nameEnglish}...`}
+                      className="pl-10 bg-slate-900 border-slate-700 text-slate-100"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="flex-1 min-h-0 rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden">
@@ -487,14 +596,18 @@ export default function DuaQuranView() {
                     <p className="text-slate-400 text-sm">Loading surahs…</p>
                   )}
 
-                  {surahs.map((s) => {
+                  {!loadingSurahs && filteredSurahs.length === 0 && (
+                    <p className="text-slate-500 text-sm">No surahs matched your search.</p>
+                  )}
+
+                  {filteredSurahs.map((s) => {
                     const isActive = s.number === selectedSurahId;
                     return (
                       <div
                         key={s.number}
                         className="rounded-2xl bg-slate-900/80 border border-slate-800"
                       >
-                        <div className="flex items-center justify-between px-4 md:px-5 py-3">
+                        <div className="flex items-center justify-between px-4 md:px-5 py-3 gap-3">
                           <div
                             className="flex flex-col gap-1 cursor-pointer"
                             onClick={() => handleSelectSurah(s.number)}
@@ -512,10 +625,11 @@ export default function DuaQuranView() {
                             </div>
                             <div className="text-xs md:text-sm text-slate-400">
                               {s.ayahCount} ayat · {s.revelationType}
+                              {s.englishNameTranslation ? ` · ${s.englishNameTranslation}` : ""}
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 shrink-0">
                             {isActive && selectedSurah && (
                               <Button
                                 size="sm"
@@ -559,12 +673,18 @@ export default function DuaQuranView() {
                               </p>
                             )}
 
+                            {!loadingSurahDetail && filteredVerses.length === 0 && (
+                              <p className="text-slate-500 text-sm">
+                                No ayat matched your verse search.
+                              </p>
+                            )}
+
                             {!loadingSurahDetail &&
-                              selectedSurah.verses.map((v) => {
+                              filteredVerses.map((v) => {
+                                const activeVerse = filteredVerses[currentAyahIdx];
                                 const isCurrentAyah =
                                   playingSurahId === selectedSurah.number &&
-                                  selectedSurah.verses[currentAyahIdx]?.numberInSurah ===
-                                    v.numberInSurah;
+                                  activeVerse?.numberInSurah === v.numberInSurah;
 
                                 return (
                                   <div

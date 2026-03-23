@@ -12,12 +12,20 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
+import { Badge } from "../ui/badge";
 import {
   apiFetch,
   getStoredAmazonToken,
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
-import { MapPin, Search, CheckCircle2, Navigation2 } from "lucide-react";
+import {
+  MapPin,
+  Search,
+  CheckCircle2,
+  Navigation2,
+  Building2,
+  LocateFixed,
+} from "lucide-react";
 
 type QuietHours = {
   enabled: boolean;
@@ -208,19 +216,10 @@ function buildDirectionsUrl(mosque: Mosque, settings: UserSettings | null): stri
   params.set("api", "1");
   params.set("travelmode", "driving");
 
-  if (origin) {
-    params.set("origin", origin);
-  }
-
-  if (destinationCoords) {
-    params.set("destination", destinationCoords);
-  } else {
-    params.set("destination", destinationText);
-  }
-
-  if (mosque.placeId) {
-    params.set("destination_place_id", mosque.placeId);
-  }
+  if (origin) params.set("origin", origin);
+  if (destinationCoords) params.set("destination", destinationCoords);
+  else params.set("destination", destinationText);
+  if (mosque.placeId) params.set("destination_place_id", mosque.placeId);
 
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
@@ -411,7 +410,7 @@ export default function MosqueSelector({
       });
       setSaveMessage(
         checked
-          ? "Mosque timing preference saved."
+          ? "Mosque timing preference saved. Dashboard, Calendar, and Settings will now prefer your mosque timings when coordinates are available."
           : "Personal location timing preference saved."
       );
     } catch (err) {
@@ -498,7 +497,11 @@ export default function MosqueSelector({
         },
       });
 
-      setSaveMessage("Mosque selection saved.");
+      setSaveMessage(
+        updatedSettings.useMosqueLocation
+          ? "Mosque saved. Prayer times across Dashboard, Calendar, and Settings will now follow this mosque."
+          : "Mosque saved. Turn on mosque timing above when you want it to override personal-location timings."
+      );
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : "Could not save mosque. Please try again.");
@@ -506,6 +509,10 @@ export default function MosqueSelector({
       setSaving(false);
     }
   };
+
+  const currentTimingMode = settings?.useMosqueLocation
+    ? settings?.mosqueName || "Mosque timing enabled"
+    : "Personal location timing";
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -519,29 +526,56 @@ export default function MosqueSelector({
           <div>
             <h1 className="text-white text-xl mb-1">Choose your mosque</h1>
             <p className="text-slate-400 text-sm">
-              We use your mosque location for mosque-based flows when available,
-              while keeping your own saved city and timezone intact.
+              Your saved setup location stays as the default source of truth.
+              When mosque timing is enabled, the backend prayer API will prefer
+              the selected mosque coordinates for Dashboard, Calendar, and Alexa.
             </p>
           </div>
 
           {settings && (
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3">
-              <div>
-                <p className="text-white text-sm">Use selected mosque for prayer times</p>
-                <p className="text-slate-400 text-xs">
-                  When this is on, the dashboard and backend prayer API will prefer saved mosque coordinates.
-                </p>
+            <div className="grid md:grid-cols-3 gap-4">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
+                <div className="flex items-center gap-2 text-slate-200 mb-2">
+                  <LocateFixed className="w-4 h-4 text-cyan-400" />
+                  Personal location
+                </div>
+                <div className="text-sm text-slate-300">{onboardingCityLabel}</div>
+                <div className="text-xs text-slate-500 mt-1">{settings.timezone}</div>
               </div>
-              <Switch
-                checked={settings.useMosqueLocation}
-                disabled={saving}
-                onCheckedChange={(checked: boolean) => {
-                  setSettings((prev) =>
-                    prev ? { ...prev, useMosqueLocation: checked } : prev
-                  );
-                  void handleTimingPreferenceChange(checked);
-                }}
-              />
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
+                <div className="flex items-center gap-2 text-slate-200 mb-2">
+                  <Building2 className="w-4 h-4 text-emerald-400" />
+                  Saved mosque
+                </div>
+                <div className="text-sm text-slate-300">
+                  {settings.mosqueName || "No mosque selected yet"}
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  {settings.mosqueAddress || "Search and save a mosque below."}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-slate-200 mb-2">Use selected mosque for prayer times</div>
+                    <div className="text-xs text-slate-500">
+                      Effective source: {currentTimingMode}
+                    </div>
+                  </div>
+                  <Switch
+                    checked={settings.useMosqueLocation}
+                    disabled={saving}
+                    onCheckedChange={(checked: boolean) => {
+                      setSettings((prev) =>
+                        prev ? { ...prev, useMosqueLocation: checked } : prev
+                      );
+                      void handleTimingPreferenceChange(checked);
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -583,7 +617,7 @@ export default function MosqueSelector({
                 </div>
 
                 <p className="text-xs text-slate-500">
-                  Current city: {onboardingCityLabel}
+                  Current city bias: {onboardingCityLabel}
                 </p>
               </div>
 
@@ -621,10 +655,15 @@ export default function MosqueSelector({
                           className="flex-1 text-left"
                         >
                           <div>
-                            <div className="flex items-center gap-2 mb-1">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
                               <h3 className="text-white text-sm md:text-base">
                                 {mosque.name}
                               </h3>
+                              {isSelected && (
+                                <Badge className="bg-emerald-600/20 text-emerald-300 border border-emerald-600/30">
+                                  Selected
+                                </Badge>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-2 text-slate-400 text-xs md:text-sm">
@@ -650,7 +689,7 @@ export default function MosqueSelector({
                           {isSelected && (
                             <div className="flex items-center gap-1 text-emerald-400 text-xs md:text-sm">
                               <CheckCircle2 className="w-4 h-4" />
-                              Selected
+                              Active
                             </div>
                           )}
                         </div>
