@@ -34,11 +34,13 @@ type Reciter = {
   country?: string | null;
   style?: string | null;
   type?: string;
+  sect?: string | null;
 };
 
 type DuaOption = {
   id: string;
   title: string;
+  tags?: string[];
 };
 
 type SurahOption = {
@@ -70,6 +72,7 @@ type OnboardingData = {
   devices?: string[];
   accountEnabled?: boolean;
   prayerConfigs?: unknown;
+  prayerSettings?: { sect?: string };
   [key: string]: unknown;
 };
 
@@ -200,6 +203,7 @@ function normalizeReciters(payload: unknown): Reciter[] {
       country: asString(item.country),
       style: asString(item.style),
       type: asString(item.type) ?? undefined,
+      sect: asString(item.sect),
     }))
     .filter((item: Reciter) => item.id.length > 0 && item.name.length > 0);
 }
@@ -217,9 +221,12 @@ function normalizeDuas(payload: unknown): DuaOption[] {
 
       const id = asString(item.id) ?? "";
       const title = asString(item.title) ?? "";
+      const tags = Array.isArray(item.tags)
+        ? item.tags.filter((tag): tag is string => typeof tag === "string")
+        : undefined;
 
       if (id && title) {
-        flat.push({ id, title });
+        flat.push({ id, title, tags });
       }
     }
   }
@@ -257,6 +264,13 @@ async function saveSettings(payload: JsonRecord) {
   });
 }
 
+function isAfterAdhanDua(dua: DuaOption) {
+  if (dua.id === "after_adhan") return true;
+  const tags = Array.isArray(dua.tags) ? dua.tags.join(" ").toLowerCase() : "";
+  const title = dua.title.toLowerCase();
+  return title.includes("after adhan") || tags.includes("after adhan") || tags.includes("adhan");
+}
+
 export default function Step5DevicesAdhan({
   onboardingData,
   setOnboardingData,
@@ -282,6 +296,16 @@ export default function Step5DevicesAdhan({
   const [prayerConfigs, setPrayerConfigs] = useState<PrayerConfig[]>(
     normalizePrayerConfigs(onboardingData.prayerConfigs)
   );
+
+  const afterAdhanDuas = useMemo(() => duas.filter(isAfterAdhanDua), [duas]);
+  const recitersSorted = useMemo(
+    () => [...reciters].sort((a, b) => a.name.localeCompare(b.name)),
+    [reciters]
+  );
+  const sectLabel = useMemo(() => {
+    const sect = String(onboardingData?.prayerSettings?.sect || "SUNNI").toUpperCase();
+    return sect === "SHIA" ? "Shia" : "Sunni";
+  }, [onboardingData]);
 
   const canContinue = useMemo(() => {
     const anyReciter = prayerConfigs.some((p) => !!p.adhanReciterId);
@@ -502,7 +526,7 @@ export default function Step5DevicesAdhan({
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
           <div className="flex items-center justify-between gap-4 mb-4">
             <h1 className="text-white text-2xl font-semibold">
-              Devices & Adhan
+              Devices &amp; Adhan
             </h1>
             <Badge
               variant="outline"
@@ -516,6 +540,27 @@ export default function Step5DevicesAdhan({
             Enable your account, review linked Alexa devices, and set Adhan plus
             after-Adhan actions for each prayer.
           </p>
+
+          <div className="grid md:grid-cols-3 gap-4 mb-6">
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 px-4 py-3">
+              <div className="text-white text-sm font-medium">Current timing mode</div>
+              <div className="text-slate-400 text-xs mt-1">
+                {sectLabel} calculation mode will be used for prayer timings.
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 px-4 py-3">
+              <div className="text-white text-sm font-medium">Voice library</div>
+              <div className="text-slate-400 text-xs mt-1">
+                Sunni and Shia Adhan voices remain available to both sects.
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 px-4 py-3">
+              <div className="text-white text-sm font-medium">After Adhan audio</div>
+              <div className="text-slate-400 text-xs mt-1">
+                Only the After Adhan dua is offered here for playback.
+              </div>
+            </div>
+          </div>
 
           {error && (
             <div className="mb-6 text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-md px-3 py-2">
@@ -595,7 +640,7 @@ export default function Step5DevicesAdhan({
               )}
 
               <p className="text-xs text-slate-400 mt-4">
-                Selected devices are now saved to your backend profile so later
+                Selected devices are saved to your backend profile so later
                 playback routing can use the same stored targets consistently.
               </p>
             </TabsContent>
@@ -634,19 +679,23 @@ export default function Step5DevicesAdhan({
                             <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                               <SelectValue placeholder="Select reciter" />
                             </SelectTrigger>
-                            <SelectContent className="bg-slate-900 border-slate-700">
+                            <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
                               <SelectItem value={NONE_VALUE}>
                                 No reciter selected
                               </SelectItem>
-                              {reciters.map((reciter) => (
+                              {recitersSorted.map((reciter) => (
                                 <SelectItem key={reciter.id} value={reciter.id}>
                                   {reciter.name}
+                                  {reciter.sect ? ` · ${reciter.sect}` : ""}
                                   {reciter.country ? ` · ${reciter.country}` : ""}
                                   {reciter.style ? ` · ${reciter.style}` : ""}
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
+                          <p className="text-xs text-slate-500">
+                            Voice choice is shared across Sunni and Shia timing modes.
+                          </p>
                         </div>
 
                         <div className="space-y-2">
@@ -694,7 +743,7 @@ export default function Step5DevicesAdhan({
                                 <SelectItem value={NONE_VALUE}>
                                   No Dua selected
                                 </SelectItem>
-                                {duas.map((dua) => (
+                                {afterAdhanDuas.map((dua) => (
                                   <SelectItem key={dua.id} value={dua.id}>
                                     {dua.title}
                                   </SelectItem>

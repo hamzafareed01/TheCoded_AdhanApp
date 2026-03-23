@@ -17,6 +17,9 @@ import {
   Edit,
   Settings as SettingsIcon,
   Volume2,
+  MoonStar,
+  MapPin,
+  Clock3,
 } from "lucide-react";
 
 const PRAYER_ORDER = [
@@ -94,6 +97,9 @@ type SettingsShape = {
   mosqueName?: string | null;
   mosqueAddress?: string | null;
   mosqueCity?: string | null;
+  sect?: string;
+  madhhab?: string;
+  calculationMethod?: string;
 };
 
 type TodayShape = {
@@ -115,6 +121,11 @@ type TodayShape = {
     useMosqueLocation?: boolean;
     label?: string;
     fallbackReason?: string | null;
+  };
+  method?: {
+    sect?: string;
+    calculationMethod?: string;
+    madhhab?: string;
   };
   date?: unknown;
   meta?: unknown;
@@ -190,6 +201,9 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
     mosqueAddress:
       typeof src.mosqueAddress === "string" ? src.mosqueAddress : null,
     mosqueCity: typeof src.mosqueCity === "string" ? src.mosqueCity : null,
+    sect: asString(src.sect) ?? "SUNNI",
+    madhhab: asString(src.madhhab) ?? "hanafi",
+    calculationMethod: asString(src.calculationMethod) ?? "isna",
   };
 }
 
@@ -198,6 +212,7 @@ function normalizeToday(payload: unknown): TodayShape | null {
 
   const src = payload;
   const location = isObject(src.location) ? src.location : null;
+  const method = isObject(src.method) ? src.method : null;
 
   return {
     location: location
@@ -231,6 +246,13 @@ function normalizeToday(payload: unknown): TodayShape | null {
               : null,
         }
       : undefined,
+    method: method
+      ? {
+          sect: asString(method.sect),
+          calculationMethod: asString(method.calculationMethod),
+          madhhab: asString(method.madhhab),
+        }
+      : undefined,
     date: src.date,
     meta: src.meta,
   };
@@ -240,7 +262,7 @@ function describeTimingSource(todayData: TodayShape | null, userSettings: Settin
   const label = todayData?.sourceDetail?.label;
   if (label) return label;
   if (todayData?.source === "mosque") return "Mosque coordinates";
-  if (todayData?.source === "user") return "Personal coordinates";
+  if (todayData?.source === "personal") return "Personal coordinates";
   if (todayData?.source === "city") return "City fallback";
   if (userSettings?.useMosqueLocation) return "Mosque preferred";
   return "Personal location";
@@ -271,7 +293,6 @@ function parsePrayerTimeToSeconds(timeStr: string): number | null {
     const hours = Number(m24[1]);
     const minutes = Number(m24[2]);
     const seconds = m24[3] ? Number(m24[3]) : 0;
-
     if (
       Number.isFinite(hours) &&
       Number.isFinite(minutes) &&
@@ -294,23 +315,12 @@ function parsePrayerTimeToSeconds(timeStr: string): number | null {
     const seconds = m12[3] ? Number(m12[3]) : 0;
     const meridian = m12[4].toUpperCase();
 
-    if (
-      Number.isFinite(hours) &&
-      Number.isFinite(minutes) &&
-      Number.isFinite(seconds) &&
-      hours >= 1 &&
-      hours <= 12 &&
-      minutes >= 0 &&
-      minutes <= 59 &&
-      seconds >= 0 &&
-      seconds <= 59
-    ) {
+    if (hours >= 1 && hours <= 12) {
       if (meridian === "AM") {
         if (hours === 12) hours = 0;
       } else if (hours !== 12) {
         hours += 12;
       }
-
       return hours * 3600 + minutes * 60 + seconds;
     }
   }
@@ -318,11 +328,7 @@ function parsePrayerTimeToSeconds(timeStr: string): number | null {
   return null;
 }
 
-function getNowInTimeZone(timeZone: string): {
-  hour: number;
-  minute: number;
-  second: number;
-} | null {
+function getNowInTimeZone(timeZone: string) {
   try {
     const formatter = new Intl.DateTimeFormat("en-GB", {
       timeZone,
@@ -341,7 +347,6 @@ function getNowInTimeZone(timeZone: string): {
     const second = getPart("second");
 
     if ([hour, minute, second].some(Number.isNaN)) return null;
-
     return { hour, minute, second };
   } catch {
     return null;
@@ -353,10 +358,7 @@ function formatDiff(ms: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${seconds}s`;
-  }
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   return `${minutes}m ${seconds}s`;
 }
 
@@ -376,6 +378,12 @@ function getConnectedPlatforms(
   return Array.from(merged).filter(
     (platform) => platform !== "alexa" || hasAmazonToken
   );
+}
+
+function titleCase(value?: string | null) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase()) || "—";
 }
 
 export default function Dashboard({ onboardingData, user }: DashboardProps) {
@@ -410,10 +418,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
   const prayersForDisplay: PrayerMap | null =
     todayData?.prayers12 || todayData?.prayers24 || null;
-
   const prayersForCountdown: PrayerMap | null =
     todayData?.prayers24 || todayData?.prayers12 || null;
-
   const activeTimeZone =
     todayData?.location?.timezone || userSettings?.timezone || "Etc/UTC";
 
@@ -428,7 +434,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       try {
         setSettingsError(null);
-
         const [settingsRes, devicesRes] = await Promise.all([
           apiFetch("/api/user/settings"),
           apiFetch("/api/alexa/devices"),
@@ -521,9 +526,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         return;
       }
 
-      const nowSeconds =
-        nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
-
+      const nowSeconds = nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
       const entries = COUNTDOWN_PRAYERS.map((code) => {
         const raw = prayersForCountdown[code];
         const seconds = raw ? parsePrayerTimeToSeconds(raw) : null;
@@ -545,15 +548,11 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       let prevEntry: { code: PrayerCode; seconds: number } | null;
 
       if (nextIdx === -1) {
-        nextEntry = {
-          ...entries[0],
-          seconds: entries[0].seconds + 24 * 3600,
-        };
+        nextEntry = { ...entries[0], seconds: entries[0].seconds + 24 * 3600 };
         prevEntry = entries[entries.length - 1];
       } else {
         nextEntry = entries[nextIdx];
         prevEntry = nextIdx > 0 ? entries[nextIdx - 1] : null;
-
         if (!prevEntry) {
           prevEntry = {
             ...entries[entries.length - 1],
@@ -569,9 +568,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       setNextPrayerCode(nextEntry.code);
       setNextPrayerTimeDisplay(
-        prayersForDisplay?.[nextEntry.code] ||
-          prayersForCountdown[nextEntry.code] ||
-          null
+        prayersForDisplay?.[nextEntry.code] || prayersForCountdown[nextEntry.code] || null
       );
 
       const diffMs = Math.max(0, (nextEntry.seconds - adjustedNowSeconds) * 1000);
@@ -584,11 +581,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       const total = nextEntry.seconds - prevEntry.seconds;
       const elapsed = adjustedNowSeconds - prevEntry.seconds;
-      const pct =
-        total > 0
-          ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100)))
-          : 0;
-
+      const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100))) : 0;
       setProgress(pct);
     };
 
@@ -616,7 +609,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
   const mosque = useMemo(() => {
     if (!userSettings?.mosqueId && !userSettings?.mosqueName) return null;
-
     return {
       name: userSettings.mosqueName || "Selected mosque",
       address: userSettings.mosqueAddress || null,
@@ -624,10 +616,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     };
   }, [userSettings]);
 
-  const locationLabel = todayData?.location?.city
-    ? `${todayData.location.city}${
-        todayData.location.country ? `, ${todayData.location.country}` : ""
-      }`
+  const locationLabel = todayData?.location?.label
+    ? todayData.location.label
+    : todayData?.location?.city
+    ? `${todayData.location.city}${todayData.location.country ? `, ${todayData.location.country}` : ""}`
     : userSettings?.city
     ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
     : "";
@@ -641,6 +633,11 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
   const timingSourceLabel = describeTimingSource(todayData, userSettings);
   const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
+  const sectLabel = titleCase(todayData?.method?.sect || userSettings?.sect || "SUNNI");
+  const madhhabLabel = titleCase(todayData?.method?.madhhab || userSettings?.madhhab || "hanafi");
+  const calcLabel = titleCase(
+    todayData?.method?.calculationMethod || userSettings?.calculationMethod || "isna"
+  );
 
   if (!hasAmazonToken) {
     return (
@@ -652,9 +649,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           </div>
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8">
-            <h1 className="text-white text-2xl mb-3">
-              Connect Amazon to finish setup
-            </h1>
+            <h1 className="text-white text-2xl mb-3">Connect Amazon to finish setup</h1>
             <p className="text-slate-300 mb-6">
               Your backend is live, but the dashboard needs your Amazon access
               token before it can load prayer times, settings, and device data.
@@ -688,75 +683,58 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           <Navigation />
         </div>
 
-        <div className="mb-8">
-          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+        <div className="mb-8 space-y-4">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <h1 className="text-white mb-2">
-                Assalamu Alaikum, {user?.name || "User"}
-              </h1>
+              <h1 className="text-white mb-2">Assalamu Alaikum, {user?.name || "User"}</h1>
               <p className="text-slate-400">
-                Here are your prayer times for today
-                {locationLabel ? ` for ${locationLabel}` : ""}.
+                Here are your prayer times for today{locationLabel ? ` for ${locationLabel}` : ""}.
               </p>
-
               {timingSourceLabel && (
-                <p className="text-slate-500 text-xs mt-2">
-                  Prayer source: {timingSourceLabel}
-                </p>
+                <p className="text-slate-500 text-xs mt-2">Prayer source: {timingSourceLabel}</p>
               )}
-
               {timingFallbackReason && (
-                <p className="text-amber-400 text-xs mt-1">
-                  {timingFallbackReason}
-                </p>
+                <p className="text-amber-400 text-xs mt-1">{timingFallbackReason}</p>
               )}
-
               {activeTimeZone && (
-                <p className="text-slate-500 text-xs mt-1">
-                  Timezone: {activeTimeZone}
-                </p>
+                <p className="text-slate-500 text-xs mt-1">Timezone: {activeTimeZone}</p>
               )}
-
               {locationCoords && (
-                <p className="text-slate-500 text-xs mt-1">
-                  Coordinates: {locationCoords}
-                </p>
+                <p className="text-slate-500 text-xs mt-1">Coordinates: {locationCoords}</p>
               )}
-
               {quietHours && (
-                <p className="text-slate-500 text-xs mt-1">
-                  Quiet hours: {quietHours.from}–{quietHours.to}
-                </p>
+                <p className="text-slate-500 text-xs mt-1">Quiet hours: {quietHours.from}–{quietHours.to}</p>
               )}
-
-              {settingsError && (
-                <p className="text-amber-400 text-xs mt-1">{settingsError}</p>
-              )}
+              {settingsError && <p className="text-amber-400 text-xs mt-1">{settingsError}</p>}
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">
-              <Badge
-                className={`px-3 py-1.5 ${
-                  automationOn
-                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-                    : "bg-slate-700 text-slate-400 border-slate-600"
-                }`}
-              >
-                <div
-                  className={`w-2 h-2 rounded-full mr-2 ${
-                    automationOn ? "bg-emerald-400" : "bg-slate-400"
-                  }`}
-                />
+              <Badge className={`px-3 py-1.5 ${automationOn ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-slate-700 text-slate-400 border-slate-600"}`}>
+                <div className={`w-2 h-2 rounded-full mr-2 ${automationOn ? "bg-emerald-400" : "bg-slate-400"}`} />
                 Automation: {automationOn ? "ON" : "OFF"}
               </Badge>
-
               <TestAdhanButton />
             </div>
           </div>
 
+          <div className="flex flex-wrap gap-2">
+            <Badge className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+              {sectLabel}
+            </Badge>
+            <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
+              {madhhabLabel}
+            </Badge>
+            <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
+              {calcLabel}
+            </Badge>
+            <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
+              {deviceCount} Alexa device{deviceCount === 1 ? "" : "s"}
+            </Badge>
+          </div>
+
           <p className="text-slate-500 text-sm">
-            Play a sample Adhan on a linked Alexa device. If it&apos;s inside quiet
-            hours, it should stay muted.
+            Sect changes affect prayer-time calculation only. All Sunni and Shia
+            Adhan voices remain available for playback.
           </p>
         </div>
 
@@ -764,7 +742,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <h2 className="text-white mb-4">Next Prayer</h2>
-
               {loadingToday ? (
                 <p className="text-slate-400">Loading next prayer…</p>
               ) : todayError ? (
@@ -777,16 +754,11 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   </div>
                   <div className="text-slate-300 mb-4">
                     {nextPrayerCode
-                      ? `${PRAYER_LABELS[nextPrayerCode]} · ${
-                          nextPrayerTimeDisplay || "--:--"
-                        }`
+                      ? `${PRAYER_LABELS[nextPrayerCode]} · ${nextPrayerTimeDisplay || "--:--"}`
                       : "--"}
                   </div>
                   <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-emerald-500 transition-all"
-                      style={{ width: `${progress}%` }}
-                    />
+                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
                   </div>
                 </>
               )}
@@ -794,23 +766,16 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <h2 className="text-white mb-4">Today&apos;s Timetable</h2>
-
               {loadingToday ? (
                 <p className="text-slate-400">Loading prayer times…</p>
               ) : todayError ? (
                 <p className="text-amber-400 mb-4">{todayError}</p>
               ) : null}
-
               <div className="space-y-3">
                 {PRAYER_ORDER.map((code) => (
-                  <div
-                    key={code}
-                    className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3"
-                  >
+                  <div key={code} className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3">
                     <span className="text-white">{PRAYER_LABELS[code]}</span>
-                    <span className="text-slate-300">
-                      {prayersForDisplay?.[code] || "--:--"}
-                    </span>
+                    <span className="text-slate-300">{prayersForDisplay?.[code] || "--:--"}</span>
                   </div>
                 ))}
               </div>
@@ -818,21 +783,53 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           </div>
 
           <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div className="flex items-start gap-3">
+                <MapPin className="w-4 h-4 text-emerald-400 mt-1" />
+                <div>
+                  <div className="text-white text-sm font-medium">Location and timing rule</div>
+                  <div className="text-slate-400 text-sm">{locationLabel || "Saved location"}</div>
+                  <div className="text-slate-500 text-xs mt-1">
+                    {userSettings?.useMosqueLocation
+                      ? mosque?.name
+                        ? `Mosque override is ON · ${mosque.name}`
+                        : "Mosque override is ON, but no saved mosque is available yet."
+                      : "Personal-location timing is active."}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <MoonStar className="w-4 h-4 text-cyan-400 mt-1" />
+                <div>
+                  <div className="text-white text-sm font-medium">Prayer calculation</div>
+                  <div className="text-slate-400 text-sm">
+                    {sectLabel} · {madhhabLabel} · {calcLabel}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <Clock3 className="w-4 h-4 text-amber-400 mt-1" />
+                <div>
+                  <div className="text-white text-sm font-medium">Playback rule</div>
+                  <div className="text-slate-400 text-sm">
+                    All Sunni and Shia Adhan voices can be used regardless of sect.
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <h2 className="text-white mb-4">Connected platforms</h2>
-
               {connectedPlatforms.length === 0 ? (
                 <p className="text-slate-400 mb-4">No platform linked yet.</p>
               ) : (
                 <div className="space-y-3 mb-4">
                   {connectedPlatforms.map((platform) => (
-                    <div
-                      key={platform}
-                      className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3"
-                    >
+                    <div key={platform} className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3">
                       <span className="text-white">
-                        {PLATFORM_ICONS[platform] || "•"}{" "}
-                        {PLATFORM_NAMES[platform] || platform}
+                        {PLATFORM_ICONS[platform] || "•"} {PLATFORM_NAMES[platform] || platform}
                       </span>
                       <span className="text-emerald-400 text-sm flex items-center gap-2">
                         <CheckCircle className="w-4 h-4" /> Connected
@@ -841,11 +838,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   ))}
                 </div>
               )}
-
-              <p className="text-slate-400 text-sm mb-4">
-                {deviceCount} linked Alexa device(s) available
-              </p>
-
+              <p className="text-slate-400 text-sm mb-4">{deviceCount} linked Alexa device(s) available</p>
               <Button
                 variant="outline"
                 size="sm"
@@ -858,7 +851,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <h2 className="text-white mb-4">Mosque</h2>
-
               {mosque ? (
                 <div className="space-y-2 mb-4">
                   <div className="flex items-center gap-3">
@@ -868,23 +860,16 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                     <div className="flex-1">
                       <div className="text-white mb-1">{mosque.name}</div>
                       <div className="text-slate-400 text-sm">
-                        {mosque.address ||
-                          mosque.city ||
-                          "Using mosque location from settings"}
+                        {mosque.address || mosque.city || "Using mosque location from settings"}
                       </div>
                     </div>
                   </div>
                 </div>
               ) : (
                 <p className="text-slate-400 text-sm mb-4">
-                  No mosque selected yet. Choose one from the{" "}
-                  <Link to="/mosque" className="text-emerald-400 underline">
-                    Mosque
-                  </Link>{" "}
-                  tab.
+                  No mosque selected yet. Choose one from the <Link to="/mosque" className="text-emerald-400 underline">Mosque</Link> tab.
                 </p>
               )}
-
               <Button
                 variant="outline"
                 size="sm"
@@ -906,7 +891,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <Edit className="w-4 h-4 mr-3" />
                   Edit Prayer Settings
                 </Button>
-
                 <Button
                   variant="outline"
                   className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
@@ -915,14 +899,13 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <SettingsIcon className="w-4 h-4 mr-3" />
                   Manage Devices & Quiet Hours
                 </Button>
-
                 <Button
                   variant="outline"
                   className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
                   onClick={() => navigate("/settings")}
                 >
                   <Volume2 className="w-4 h-4 mr-3" />
-                  Pause Adhan for Today
+                  Review After-Adhan Playback
                 </Button>
               </div>
             </div>

@@ -1,23 +1,102 @@
 [
   {
-    "id": "mishary-alafasy",
+    "id": "abdul_rahman_al_sudais",
+    "name": "Abdul Rahman Al-Sudais",
+    "country": "Saudi Arabia",
+    "style": "Masjid al-Haram",
+    "type": "adhan",
+    "sect": "Sunni",
+    "aliases": ["Abdur Rahman al-Sudais", "Imam Sudais", "sudais"],
+    "audioPath": "/audio/adhan/sunni/abdul_rahman_al_sudais.mp3"
+  },
+  {
+    "id": "mishary_rashid_alafasy",
     "name": "Mishary Rashid Alafasy",
     "country": "Kuwait",
     "style": "Clear",
-    "type": "adhan"
+    "type": "adhan",
+    "sect": "Sunni",
+    "aliases": ["Mishary Rashid Al-Afasy", "Mishary Alafasy", "mishary-alafasy"],
+    "audioPath": "/audio/adhan/sunni/mishary_rashid_alafasy.mp3"
   },
   {
-    "id": "abdulbasit",
-    "name": "Abdul Basit Abdul Samad",
-    "country": "Egypt",
-    "style": "Classic",
-    "type": "adhan"
-  },
-  {
-    "id": "sudais",
-    "name": "Abdur Rahman Al-Sudais",
+    "id": "saud_al_shuraim",
+    "name": "Saud Al-Shuraim",
     "country": "Saudi Arabia",
-    "style": "Masjid al-Haram",
-    "type": "adhan"
+    "style": "Makkah",
+    "type": "adhan",
+    "sect": "Sunni",
+    "aliases": ["Saud Al Shuraim", "Saud ash-Shuraim"],
+    "audioPath": "/audio/adhan/sunni/saud_al_shuraim.mp3"
+  },
+  {
+    "id": "saad_al_ghamdi",
+    "name": "Saad Al-Ghamdi",
+    "country": "Saudi Arabia",
+    "style": "Melodic",
+    "type": "adhan",
+    "sect": "Sunni",
+    "aliases": ["Saad Al Ghamdi", "Saad al-Ghamidi"],
+    "audioPath": "/audio/adhan/sunni/saad_al_ghamdi.mp3"
+  },
+  {
+    "id": "maher_al_muaiqly",
+    "name": "Maher Al-Muaiqly",
+    "country": "Saudi Arabia",
+    "style": "Haram style",
+    "type": "adhan",
+    "sect": "Sunni",
+    "aliases": ["Maher Al Muaiqly", "Maher al-Muayqali"],
+    "audioPath": "/audio/adhan/sunni/maher_al_muaiqly.mp3"
+  },
+  {
+    "id": "nazar_al_qatari",
+    "name": "Nazar Al-Qatari",
+    "country": "Qatar",
+    "style": "Traditional",
+    "type": "adhan",
+    "sect": "Shia",
+    "aliases": ["Nazar Al Qatari"],
+    "audioPath": "/audio/adhan/shia/nazar_al_qatari.mp3"
+  },
+  {
+    "id": "rahim_moazenzadeh_ardabili",
+    "name": "Rahim Moazenzadeh Ardabili",
+    "country": "Iran",
+    "style": "Historic Iranian",
+    "type": "adhan",
+    "sect": "Shia",
+    "aliases": ["Rahim Moazzen-Zadeh", "Rahim Moazenzadeh Ardebili"],
+    "audioPath": "/audio/adhan/shia/rahim_moazenzadeh_ardabili.mp3"
+  },
+  {
+    "id": "ali_fani",
+    "name": "Ali Fani",
+    "country": "Iran",
+    "style": "Latmiyat style",
+    "type": "adhan",
+    "sect": "Shia",
+    "aliases": [],
+    "audioPath": "/audio/adhan/shia/ali_fani.mp3"
+  },
+  {
+    "id": "abather_al_halwachi",
+    "name": "Abather Al-Halwachi",
+    "country": "Iraq",
+    "style": "Iraqi",
+    "type": "adhan",
+    "sect": "Shia",
+    "aliases": ["AbaTher Al-Halwachi", "Abather Alhalwachi"],
+    "audioPath": "/audio/adhan/shia/abather_al_halwachi.mp3"
+  },
+  {
+    "id": "mohammad_hossein_saidian",
+    "name": "Mohammad Hossein Saidian",
+    "country": "Iran",
+    "style": "Traditional Persian",
+    "type": "adhan",
+    "sect": "Shia",
+    "aliases": ["Mohamadhosein Saeedian", "محمد حسین سعیدیان"],
+    "audioPath": "/audio/adhan/shia/mohammad_hossein_saidian.mp3"
   }
 ]
