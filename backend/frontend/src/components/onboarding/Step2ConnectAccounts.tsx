@@ -249,7 +249,10 @@ export default function Step2ConnectAccounts({
 
     setTokens((prev) => ({ ...prev, alexa: accessToken }));
     markConnected("alexa");
-    await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
+    setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
+
+    void refreshServerStatus();
+    void refreshAlexaLinkStatus();
   }
 
   async function finalizeAlexaSkillLink(code: string, state: string) {
@@ -526,15 +529,14 @@ export default function Step2ConnectAccounts({
             return (
               <div
                 key={platform.key}
-                className={`rounded-2xl border p-5 shadow-sm transition ${
-                  disabled
+                className={`rounded-2xl border p-5 shadow-sm transition ${disabled
                     ? "border-border/50 bg-card/60 opacity-70"
                     : linked
                       ? "border-emerald-500/40 bg-emerald-500/5"
                       : serverConnected
                         ? "border-sky-500/40 bg-sky-500/5"
                         : "border-border bg-card"
-                }`}
+                  }`}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div className="flex items-start gap-4">
