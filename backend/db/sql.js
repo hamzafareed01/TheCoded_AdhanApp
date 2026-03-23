@@ -32,19 +32,19 @@ function getConfig(overrides = {}) {
 
   const connectionTimeout = Number.isFinite(overrides.connectionTimeoutMs)
     ? overrides.connectionTimeoutMs
-    : numberFromEnv("DB_CONNECTION_TIMEOUT_MS", 15000);
+    : numberFromEnv("DB_CONNECTION_TIMEOUT_MS", 45000);
 
   const requestTimeout = Number.isFinite(overrides.requestTimeoutMs)
     ? overrides.requestTimeoutMs
-    : numberFromEnv("DB_REQUEST_TIMEOUT_MS", 15000);
+    : numberFromEnv("DB_REQUEST_TIMEOUT_MS", 45000);
 
   const poolAcquireTimeout = Number.isFinite(overrides.poolAcquireTimeoutMs)
     ? overrides.poolAcquireTimeoutMs
-    : numberFromEnv("DB_POOL_ACQUIRE_TIMEOUT_MS", 20000);
+    : numberFromEnv("DB_POOL_ACQUIRE_TIMEOUT_MS", 45000);
 
   const poolCreateTimeout = Number.isFinite(overrides.poolCreateTimeoutMs)
     ? overrides.poolCreateTimeoutMs
-    : numberFromEnv("DB_POOL_CREATE_TIMEOUT_MS", 20000);
+    : numberFromEnv("DB_POOL_CREATE_TIMEOUT_MS", 45000);
 
   return {
     user,
@@ -92,7 +92,9 @@ function isTransientSqlError(err) {
     /connection is closed/.test(msg) ||
     /socket/.test(msg) ||
     /server was not found/.test(msg) ||
-    /connection error/.test(msg)
+    /connection error/.test(msg) ||
+    /failed to connect to .*1433/.test(msg) ||
+    /could not connect/.test(msg)
   );
 }
 
@@ -107,7 +109,6 @@ function isPermanentConfigError(err) {
     /client with ip address .* is not allowed to access the server/.test(msg) ||
     /firewall/.test(msg) ||
     /cannot open server/.test(msg) ||
-    /failed to connect to .*1433/.test(msg) ||
     num === 18456
   );
 }
@@ -119,7 +120,8 @@ function sleep(ms) {
 async function connectWithRetry(options = {}) {
   const maxAttempts = Number.isFinite(options.maxAttempts)
     ? options.maxAttempts
-    : numberFromEnv("DB_CONNECT_MAX_ATTEMPTS", 3);
+    : numberFromEnv("DB_CONNECT_MAX_ATTEMPTS", 6);
+
   const purpose = options.purpose ? String(options.purpose) : "request";
   let lastErr = null;
 
@@ -131,10 +133,15 @@ async function connectWithRetry(options = {}) {
       connectionPool = new sql.ConnectionPool(config);
       const connectedPool = await connectionPool.connect();
 
-      connectedPool.on("error", (err) => {
+      connectedPool.on("error", async (err) => {
         console.error("Azure SQL pool error:", err);
         pool = null;
         poolPromise = null;
+        try {
+          await connectedPool.close();
+        } catch {
+          // ignore close failure
+        }
       });
 
       if (attempt > 1) {
@@ -154,7 +161,10 @@ async function connectWithRetry(options = {}) {
       }
 
       if (isPermanentConfigError(err)) {
-        console.error(`Azure SQL permanent configuration error during ${purpose}:`, err?.message || err);
+        console.error(
+          `Azure SQL permanent configuration error during ${purpose}:`,
+          err?.message || err
+        );
         break;
       }
 
@@ -162,13 +172,15 @@ async function connectWithRetry(options = {}) {
         break;
       }
 
-      const baseDelay = numberFromEnv("DB_CONNECT_RETRY_BASE_MS", 500);
-      const maxDelay = numberFromEnv("DB_CONNECT_RETRY_MAX_MS", 2500);
+      const baseDelay = numberFromEnv("DB_CONNECT_RETRY_BASE_MS", 1000);
+      const maxDelay = numberFromEnv("DB_CONNECT_RETRY_MAX_MS", 8000);
       const delayMs = Math.min(maxDelay, baseDelay * Math.pow(2, attempt - 1));
+
       console.warn(
         `Azure SQL connect attempt ${attempt}/${maxAttempts} failed during ${purpose}. Retrying in ${delayMs}ms...`,
         err?.message || err
       );
+
       await sleep(delayMs);
     }
   }
