@@ -21,25 +21,40 @@ END
 GO
 
 -- User schedules (tilawat plans & future routine templates)
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='schedules')
+IF NOT EXISTS (SELECT *
+FROM sys.tables
+WHERE name='schedules')
 BEGIN
-  CREATE TABLE dbo.schedules (
+  CREATE TABLE dbo.schedules
+  (
     id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID() PRIMARY KEY,
     user_id UNIQUEIDENTIFIER NOT NULL
       CONSTRAINT FK_schedules_users REFERENCES dbo.users(id) ON DELETE CASCADE,
 
-    schedule_type NVARCHAR(20) NOT NULL, -- tilawat (MVP)
+    schedule_type NVARCHAR(20) NOT NULL,
+    -- tilawat (MVP)
     time_of_day TIME(0) NOT NULL,
-    days_mask INT NOT NULL CONSTRAINT DF_schedules_days DEFAULT 127, -- bits 0..6 = Sun..Sat
+    days_mask INT NOT NULL CONSTRAINT DF_schedules_days DEFAULT 127,
+    -- bits 0..6 = Sun..Sat
     enabled BIT NOT NULL CONSTRAINT DF_schedules_enabled DEFAULT 1,
 
-    device_id NVARCHAR(255) NULL, -- alexa device id from dbo.devices
-    payload_json NVARCHAR(MAX) NOT NULL, -- JSON {surahNumber, reciterId?, title?}
+    device_id NVARCHAR(255) NULL,
+    -- alexa device id from dbo.devices
+    payload_json NVARCHAR(MAX) NOT NULL,
+    -- JSON {surahNumber, reciterId?, title?}
 
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   );
 
-  CREATE INDEX IX_schedules_user ON dbo.schedules(user_id);
+  IF NOT EXISTS (
+  SELECT 1
+  FROM sys.indexes
+  WHERE name = 'IX_schedules_user'
+    AND object_id = OBJECT_ID('dbo.schedules')
+)
+BEGIN
+    CREATE INDEX IX_schedules_user ON dbo.schedules(user_id);
+  END
 END
 GO
