@@ -1,6 +1,9 @@
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='alexa_skill_authorization_codes')
+IF NOT EXISTS (SELECT *
+FROM sys.tables
+WHERE name='alexa_skill_authorization_codes')
 BEGIN
-  CREATE TABLE dbo.alexa_skill_authorization_codes (
+  CREATE TABLE dbo.alexa_skill_authorization_codes
+  (
     id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID() PRIMARY KEY,
     auth_code_hash NVARCHAR(128) NOT NULL UNIQUE,
     auth_code_prefix NVARCHAR(24) NOT NULL,
@@ -14,14 +17,25 @@ BEGIN
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   );
 
-  CREATE INDEX IX_alexa_skill_auth_codes_user
+  IF NOT EXISTS (
+  SELECT 1
+  FROM sys.indexes
+  WHERE name = 'IX_alexa_skill_auth_codes_user'
+    AND object_id = OBJECT_ID('dbo.alexa_skill_authorization_codes')
+)
+BEGIN
+    CREATE INDEX IX_alexa_skill_auth_codes_user
     ON dbo.alexa_skill_authorization_codes(user_id, created_at DESC);
+  END
 END
 GO
 
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='alexa_skill_tokens')
+IF NOT EXISTS (SELECT *
+FROM sys.tables
+WHERE name='alexa_skill_tokens')
 BEGIN
-  CREATE TABLE dbo.alexa_skill_tokens (
+  CREATE TABLE dbo.alexa_skill_tokens
+  (
     id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID() PRIMARY KEY,
     user_id UNIQUEIDENTIFIER NOT NULL
       CONSTRAINT FK_alexa_skill_tokens_users REFERENCES dbo.users(id) ON DELETE CASCADE,
@@ -39,14 +53,25 @@ BEGIN
     updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   );
 
-  CREATE INDEX IX_alexa_skill_tokens_user
+  IF NOT EXISTS (
+  SELECT 1
+  FROM sys.indexes
+  WHERE name = 'IX_alexa_skill_tokens_user'
+    AND object_id = OBJECT_ID('dbo.alexa_skill_tokens')
+)
+BEGIN
+    CREATE INDEX IX_alexa_skill_tokens_user
     ON dbo.alexa_skill_tokens(user_id, created_at DESC);
+  END
 END
 GO
 
-IF NOT EXISTS (SELECT * FROM sys.tables WHERE name='alexa_dispatch_log')
+IF NOT EXISTS (SELECT *
+FROM sys.tables
+WHERE name='alexa_dispatch_log')
 BEGIN
-  CREATE TABLE dbo.alexa_dispatch_log (
+  CREATE TABLE dbo.alexa_dispatch_log
+  (
     id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID() PRIMARY KEY,
     user_id UNIQUEIDENTIFIER NULL
       CONSTRAINT FK_alexa_dispatch_log_users REFERENCES dbo.users(id) ON DELETE SET NULL,
@@ -60,7 +85,15 @@ BEGIN
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
   );
 
-  CREATE INDEX IX_alexa_dispatch_log_user
+  IF NOT EXISTS (
+  SELECT 1
+  FROM sys.indexes
+  WHERE name = 'IX_alexa_dispatch_log_user'
+    AND object_id = OBJECT_ID('dbo.alexa_dispatch_log')
+)
+BEGIN
+    CREATE INDEX IX_alexa_dispatch_log_user
     ON dbo.alexa_dispatch_log(user_id, created_at DESC);
+  END
 END
 GO
