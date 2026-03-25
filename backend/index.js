@@ -1,5 +1,3 @@
-//Push for GitHub
-
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -459,7 +457,7 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     );
     err.status = 500;
     throw err;
-  }
+  }}
 
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
@@ -494,21 +492,26 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     throw err;
   }
 
-  const grantedScope = String(data.scope || "").trim();
-  if (!grantedScope.split(/\s+/).includes(ALEXA_APP_LINK_SCOPE)) {
+const grantedScope = String(data.scope || "").trim();
+
+// Amazon can omit the scope field in the token response when it matches the
+// originally requested scope. In that case, do not fail the flow.
+if (grantedScope) {
+  const grantedScopes = grantedScope.split(/\s+/).filter(Boolean);
+  if (!grantedScopes.includes(ALEXA_APP_LINK_SCOPE)) {
     const err = new Error(
-      `Amazon returned scope "${grantedScope || "none"}", but Alexa linking requires ${ALEXA_APP_LINK_SCOPE}. Check your Alexa app-to-app client ID, redirect URLs, and requested scope.`
+      `Amazon returned scope "${grantedScope}", but Alexa linking requires ${ALEXA_APP_LINK_SCOPE}. Check your Alexa app-to-app client ID, redirect URLs, and requested scope.`
     );
     err.status = 502;
     throw err;
   }
+}
 
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token || null,
-    scope: data.scope || null,
-    expiresIn: Number(data.expires_in || 3600) || 3600,
-  };
+return {
+  accessToken: data.access_token,
+  refreshToken: data.refresh_token || null,
+  scope: grantedScope || ALEXA_APP_LINK_SCOPE,
+  expiresIn: Number(data.expires_in || 3600) || 3600,
 }
 
 async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
