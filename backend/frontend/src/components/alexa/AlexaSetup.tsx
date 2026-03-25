@@ -107,8 +107,8 @@ export default function AlexaSetup() {
   }
 
   const accountLinkPage = canCopyLinkingUrl
-    ? `${window.location.origin}/alexa/link`
-    : "/alexa/link";
+    ? `${window.location.origin}/onboarding/step2`
+    : "/onboarding/step2";
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -163,7 +163,7 @@ export default function AlexaSetup() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-slate-300">
               <div>
-                Authorization URL:
+                App redirect URL:
                 <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 font-mono text-xs text-slate-100 break-all">
                   {accountLinkPage}
                 </div>
