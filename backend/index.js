@@ -7,7 +7,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 dotenv.config();
-
+//testing line to trigger redeploy, delete later
 const { getPool, sql } = require("./db/sql");
 const {
   getAlexaOauthConfig,
