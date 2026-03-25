@@ -5,6 +5,7 @@ declare global {
   }
 }
 
+//testl line comment, delete this line after testing
 let sdkLoaded = false;
 let loadingPromise: Promise<void> | null = null;
 
