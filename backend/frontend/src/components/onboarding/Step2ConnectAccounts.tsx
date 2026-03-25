@@ -119,9 +119,9 @@ function cleanCurrentUrl() {
   window.history.replaceState({}, document.title, cleanUrl);
 }
 
-function currentStep2Url(): string {
+function currentAlexaLinkUrl(): string {
   if (typeof window === "undefined") return "";
-  return `${window.location.origin}${window.location.pathname}`;
+  return `${window.location.origin}/alexa/link`;
 }
 
 export default function Step2ConnectAccounts({
@@ -383,43 +383,45 @@ export default function Step2ConnectAccounts({
     }
   }
 
-  async function startAlexaSkillLinking() {
-    setError(null);
-    setInfo(null);
-    setLoadingKey("alexa");
+async function startAlexaSkillLinking() {
+  setError(null);
+  setInfo(null);
+  setLoadingKey("alexa");
 
-    if (!getStoredAmazonToken()) {
-      setLoadingKey(null);
-      setError("Connect your Amazon account first.");
-      return;
-    }
-
-    try {
-      const redirectUri = currentStep2Url();
-      const resp = await apiFetch("/api/alexa/account-linking/start", {
-        method: "POST",
-        body: JSON.stringify({ redirectUri }),
-      });
-
-      if (!resp.ok) {
-        const msg = await resp.text().catch(() => "");
-        throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
-      }
-
-      const data = (await resp.json()) as AlexaLinkStartResponse;
-      storePendingAlexaLink({
-        state: data.state,
-        codeVerifier: data.codeVerifier,
-        redirectUri: data.redirectUri,
-        startedAt: Date.now(),
-      });
-
-      window.location.assign(data.authorizationUrl);
-    } catch (e: unknown) {
-      setLoadingKey(null);
-      setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
-    }
+  if (!getStoredAmazonToken()) {
+    setLoadingKey(null);
+    setError("Connect your Amazon account first.");
+    return;
   }
+
+  try {
+    const redirectUri = currentAlexaLinkUrl();
+
+    const resp = await apiFetch("/api/alexa/account-linking/start", {
+      method: "POST",
+      body: JSON.stringify({ redirectUri }),
+    });
+
+    if (!resp.ok) {
+      const msg = await resp.text().catch(() => "");
+      throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+    }
+
+    const data = (await resp.json()) as AlexaLinkStartResponse;
+
+    storePendingAlexaLink({
+      state: data.state,
+      codeVerifier: data.codeVerifier,
+      redirectUri: data.redirectUri,
+      startedAt: Date.now(),
+    });
+
+    window.location.assign(data.authorizationUrl);
+  } catch (e: unknown) {
+    setLoadingKey(null);
+    setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
+  }
+}
 
   async function disconnectAlexa() {
     setError(null);

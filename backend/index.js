@@ -733,6 +733,99 @@ async function requireAlexaSkillAuth(req, res, next) {
   }
 }
 
+// const AMAZON_OAUTH_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
+// const DEFAULT_ALEXA_APP_LINK_PATHS = ["/alexa/link", "/onboarding/step2"];
+
+function dedupeStrings(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function normalizeComparableRedirectUri(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "";
+  }
+}
+
+function createPkceVerifier() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function createPkceChallenge(verifier) {
+  return crypto.createHash("sha256").update(String(verifier)).digest("base64url");
+}
+
+function signAppLinkState(payload) {
+  const secret = String(process.env.ALEXA_STATE_SECRET || process.env.ALEXA_OAUTH_CLIENT_SECRET || "");
+  if (!secret) {
+    throw new Error("Missing ALEXA_STATE_SECRET or ALEXA_OAUTH_CLIENT_SECRET.");
+  }
+
+  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+function buildDefaultAppLinkRedirectUris() {
+  return dedupeStrings(
+    allowedOrigins.flatMap((origin) =>
+      DEFAULT_ALEXA_APP_LINK_PATHS.map((pathname) => {
+        try {
+          return normalizeComparableRedirectUri(new URL(pathname, `${origin}/`).toString());
+        } catch {
+          return "";
+        }
+      })
+    )
+  );
+}
+
+function getAllowedAppLinkRedirectUris() {
+  const envList = String(process.env.ALEXA_APP_LINK_REDIRECT_URIS || "")
+    .split(",")
+    .map((value) => normalizeComparableRedirectUri(value))
+    .filter(Boolean);
+
+  return dedupeStrings([...envList, ...buildDefaultAppLinkRedirectUris()]);
+}
+
+function getDefaultAppLinkRedirectUri() {
+  return getAllowedAppLinkRedirectUris()[0] || "";
+}
+
+function validateAppLinkRedirectUri(value) {
+  const raw = String(value || "").trim();
+  const allowed = getAllowedAppLinkRedirectUris();
+  const normalized = raw
+    ? normalizeComparableRedirectUri(raw)
+    : getDefaultAppLinkRedirectUri();
+
+  if (!normalized) {
+    const err = new Error("Missing redirect URI for Alexa linking.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!allowed.includes(normalized)) {
+    const err = new Error(
+      `Redirect URI is not allowed for Alexa linking. Received: ${raw || normalized}`
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  return normalized;
+}
+
+
 // -----------------------------
 // DB helpers
 // -----------------------------
@@ -1533,6 +1626,59 @@ app.post(
     });
   })
 );
+
+app.post(
+  "/api/alexa/account-linking/start",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const oauth = getAlexaOauthConfig();
+    if (!oauth.configured) {
+      return res.status(500).json({ error: "Alexa account linking is not configured on the backend." });
+    }
+
+    const skillId = process.env.ALEXA_SKILL_ID || "";
+    if (!skillId) {
+      return res.status(500).json({ error: "ALEXA_SKILL_ID is missing on the backend." });
+    }
+
+    const pool = await getPool();
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
+
+    const requestedRedirectUri = req.body?.redirectUri || req.query?.redirectUri || "";
+    const redirectUri = validateAppLinkRedirectUri(requestedRedirectUri);
+
+    const codeVerifier = createPkceVerifier();
+    const codeChallenge = createPkceChallenge(codeVerifier);
+
+    const state = signAppLinkState({
+      userId,
+      redirectUri,
+      ts: Date.now(),
+      nonce: crypto.randomBytes(12).toString("hex"),
+    });
+
+    const query = new URLSearchParams({
+      client_id: oauth.clientId,
+      scope: "profile",
+      response_type: "code",
+      redirect_uri: redirectUri,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+    });
+
+    res.json({
+      ok: true,
+      state,
+      codeVerifier,
+      authorizationUrl: `${AMAZON_OAUTH_AUTHORIZE_URL}?${query.toString()}`,
+      redirectUri,
+      allowedRedirectUris: getAllowedAppLinkRedirectUris(),
+      skillId,
+    });
+  })
+);
+
 
 app.post(
   "/api/integrations/alexa/disconnect",
