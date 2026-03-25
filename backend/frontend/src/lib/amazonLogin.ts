@@ -21,6 +21,29 @@ function normalizeEnvString(value: unknown): string {
   return v;
 }
 
+function normalizeAbsoluteUrl(value: unknown): string {
+  const raw = normalizeEnvString(value);
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeRedirectUrl(value: unknown): string {
+  const absolute = normalizeAbsoluteUrl(value);
+  if (!absolute) return "";
+
+  const url = new URL(absolute);
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+  return `${url.origin}${url.pathname}${url.search}`;
+}
+
 export function getAmazonClientId(): string {
   const envClientId = normalizeEnvString(
     (import.meta as any).env?.VITE_AMAZON_CLIENT_ID ||
@@ -31,7 +54,7 @@ export function getAmazonClientId(): string {
 }
 
 export function getAmazonReturnUrl(): string {
-  const envReturnUrl = normalizeEnvString(
+  const envReturnUrl = normalizeRedirectUrl(
     (import.meta as any).env?.VITE_AMAZON_RETURN_URL ||
       (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI
   );

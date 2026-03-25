@@ -13,6 +13,18 @@ function normalizeCurrentUrlWithoutHash() {
   return current.toString();
 }
 
+async function readErrorMessage(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  if (!text) return `Authorization failed (${res.status}).`;
+
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    return parsed?.error || text;
+  } catch {
+    return text;
+  }
+}
+
 export default function AlexaLinkAuthorize() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [state, setState] = useState<AuthorizeState>("booting");
@@ -59,8 +71,7 @@ export default function AlexaLinkAuthorize() {
         });
 
         if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(text || `Authorization failed (${res.status}).`);
+          throw new Error(await readErrorMessage(res));
         }
 
         const payload = (await res.json()) as { redirectUrl?: string };
