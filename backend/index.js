@@ -274,6 +274,7 @@ const DEFAULT_ALEXA_API_ENDPOINTS = [
   "api.fe.amazonalexa.com",
 ];
 const APP_LINK_STATE_TTL_MS = 10 * 60 * 1000;
+const ALEXA_APP_LINK_SCOPE = "alexa::skills:account_linking";
 
 function getAlexaSkillId() {
   return String(
@@ -299,6 +300,33 @@ function getAppLinkStateSecret() {
       "adhancast-app-link-state"
   );
 }
+
+function getAlexaAppLinkConfig() {
+  const oauth = getAlexaOauthConfig();
+
+  const clientId = String(
+    process.env.ALEXA_APP_LINK_CLIENT_ID ||
+      process.env.ALEXA_APP_TO_APP_CLIENT_ID ||
+      process.env.ALEXA_OAUTH_APP_CLIENT_ID ||
+      oauth.clientId ||
+      ""
+  ).trim();
+
+  const clientSecret = String(
+    process.env.ALEXA_APP_LINK_CLIENT_SECRET ||
+      process.env.ALEXA_APP_TO_APP_CLIENT_SECRET ||
+      process.env.ALEXA_OAUTH_APP_CLIENT_SECRET ||
+      oauth.clientSecret ||
+      ""
+  ).trim();
+
+  return {
+    configured: !!clientId && !!clientSecret,
+    clientId,
+    clientSecret,
+  };
+}
+
 
 function base64UrlEncode(value) {
   return Buffer.from(value)
@@ -422,9 +450,11 @@ function validateAppLinkRedirectUri(value) {
 
 async function exchangeAmazonAuthorizationCodeForTokens(params) {
   const { code, redirectUri, codeVerifier } = params;
-  const oauth = getAlexaOauthConfig();
-  if (!oauth.configured) {
-    const err = new Error("Alexa account linking is not configured on the backend.");
+  const appLink = getAlexaAppLinkConfig();
+  if (!appLink.configured) {
+    const err = new Error(
+      "Alexa app-to-app linking credentials are not configured on the backend."
+    );
     err.status = 500;
     throw err;
   }
@@ -435,7 +465,7 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
   body.set("redirect_uri", String(redirectUri || ""));
   if (codeVerifier) body.set("code_verifier", String(codeVerifier));
 
-  const basic = Buffer.from(`${oauth.clientId}:${oauth.clientSecret}`).toString("base64");
+  const basic = Buffer.from(`${appLink.clientId}:${appLink.clientSecret}`).toString("base64");
   const resp = await fetchWithTimeout(
     AMAZON_OAUTH_TOKEN_URL,
     {
@@ -457,6 +487,15 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
   if (!resp.ok || !data?.access_token) {
     const err = new Error(
       `Amazon token exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"}`
+    );
+    err.status = 502;
+    throw err;
+  }
+
+  const grantedScope = String(data.scope || "").trim();
+  if (!grantedScope.split(/\s+/).includes(ALEXA_APP_LINK_SCOPE)) {
+    const err = new Error(
+      `Amazon returned scope "${grantedScope || "none"}", but Alexa linking requires ${ALEXA_APP_LINK_SCOPE}. Check your Alexa app-to-app client ID, redirect URLs, and requested scope.`
     );
     err.status = 502;
     throw err;
@@ -1612,8 +1651,16 @@ app.post(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const oauth = getAlexaOauthConfig();
+    const appLink = getAlexaAppLinkConfig();
     if (!oauth.configured) {
-      return res.status(500).json({ error: "Alexa account linking is not configured on the backend." });
+      return res.status(500).json({ error: "Alexa skill OAuth is not configured on the backend." });
+    }
+
+    if (!appLink.configured) {
+      return res.status(500).json({
+        error:
+          "Alexa app-to-app client credentials are missing on the backend. Set ALEXA_APP_LINK_CLIENT_ID and ALEXA_APP_LINK_CLIENT_SECRET.",
+      });
     }
 
     const skillId = process.env.ALEXA_SKILL_ID || "";
@@ -1638,8 +1685,8 @@ app.post(
     });
 
     const query = new URLSearchParams({
-      client_id: oauth.clientId,
-      scope: "profile",
+      client_id: appLink.clientId,
+      scope: ALEXA_APP_LINK_SCOPE,
       response_type: "code",
       redirect_uri: redirectUri,
       state,
@@ -1654,6 +1701,7 @@ app.post(
       authorizationUrl: `${AMAZON_OAUTH_AUTHORIZE_URL}?${query.toString()}`,
       redirectUri,
       allowedRedirectUris: getAllowedAppLinkRedirectUris(),
+      scope: ALEXA_APP_LINK_SCOPE,
       skillId,
     });
   })
@@ -1732,6 +1780,7 @@ app.get(
     res.json({
       configured: oauth.configured,
       clientId: oauth.clientId || null,
+      appLinkClientConfigured: getAlexaAppLinkConfig().configured,
       redirectUris: oauth.redirectUris,
       appRedirectUris: getAllowedAppLinkRedirectUris(),
       invocationName: getSkillInvocationName(),

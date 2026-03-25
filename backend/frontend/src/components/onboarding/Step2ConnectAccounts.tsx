@@ -121,7 +121,7 @@ function cleanCurrentUrl() {
 
 function currentAlexaLinkUrl(): string {
   if (typeof window === "undefined") return "";
-  return `${window.location.origin}/alexa/link`;
+  return `${window.location.origin}/onboarding/step2`;
 }
 
 export default function Step2ConnectAccounts({
@@ -288,6 +288,7 @@ export default function Step2ConnectAccounts({
       const params = new URLSearchParams(window.location.search || "");
       const returnedCode = params.get("code");
       const returnedState = params.get("state");
+      const returnedScope = params.get("scope");
       const returnedError = params.get("error");
       const returnedErrorDescription = params.get("error_description");
 
@@ -305,6 +306,15 @@ export default function Step2ConnectAccounts({
           cleanCurrentUrl();
           setError(returnedErrorDescription || returnedError);
         } else if (returnedCode && returnedState && getStoredAmazonToken()) {
+          if (
+            returnedScope &&
+            !returnedScope.split(/\s+/).includes("alexa::skills:account_linking")
+          ) {
+            throw new Error(
+              `Alexa returned the wrong scope (${returnedScope}). The linking request must use alexa::skills:account_linking.`
+            );
+          }
+
           setLoadingKey("alexa");
           setError(null);
           await finalizeAlexaSkillLink(returnedCode, returnedState);
