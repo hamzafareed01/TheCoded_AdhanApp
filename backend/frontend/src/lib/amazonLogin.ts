@@ -4,8 +4,6 @@ declare global {
     onAmazonLoginReady?: () => void;
   }
 }
-
-//testl line comment, delete this line after testing
 let sdkLoaded = false;
 let loadingPromise: Promise<void> | null = null;
 
@@ -68,9 +66,25 @@ export function ensureAmazonSdk(): Promise<void> {
     return Promise.resolve();
   }
 
+  if (window.amazon?.Login) {
+    const clientId = getAmazonClientId();
+    if (!clientId) {
+      return Promise.reject(new Error("Amazon Client ID is missing"));
+    }
+
+    window.amazon.Login.setClientId(clientId);
+    sdkLoaded = true;
+    return Promise.resolve();
+  }
+
   if (loadingPromise) return loadingPromise;
 
   loadingPromise = new Promise<void>((resolve, reject) => {
+    let timeoutId: number | null = window.setTimeout(() => {
+      loadingPromise = null;
+      reject(new Error("Amazon SDK did not finish loading in time"));
+    }, 15000);
+
     window.onAmazonLoginReady = function () {
       try {
         if (!window.amazon?.Login) {
@@ -86,15 +100,28 @@ export function ensureAmazonSdk(): Promise<void> {
 
         sdkLoaded = true;
         loadingPromise = null;
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
         resolve();
       } catch (err) {
         loadingPromise = null;
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+          timeoutId = null;
+        }
         reject(err);
       }
     };
 
-    const existing = document.getElementById("amazon-login-sdk");
-    if (existing) return;
+    const existing = document.getElementById("amazon-login-sdk") as HTMLScriptElement | null;
+    if (existing) {
+      if (window.amazon?.Login) {
+        window.onAmazonLoginReady?.();
+      }
+      return;
+    }
 
     const root = document.getElementById("amazon-root") || document.body;
     const script = document.createElement("script");
@@ -104,6 +131,10 @@ export function ensureAmazonSdk(): Promise<void> {
     script.src = "https://assets.loginwithamazon.com/sdk/na/login1.js";
     script.onerror = (err) => {
       loadingPromise = null;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       reject(err as any);
     };
 

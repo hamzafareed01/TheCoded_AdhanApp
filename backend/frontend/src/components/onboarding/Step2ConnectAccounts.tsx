@@ -236,7 +236,6 @@ export default function Step2ConnectAccounts({
 
   async function completeAlexaLogin(accessToken: string) {
     setStoredAmazonToken(accessToken);
-//testing line to trigger redeploy, delete later
     const linkRes = await apiFetch("/api/integrations/alexa/login", {
       method: "POST",
       body: JSON.stringify({ accessToken }),
@@ -393,7 +392,7 @@ export default function Step2ConnectAccounts({
     }
   }
 
-async function startAlexaSkillLinking() {
+  async function startAlexaSkillLinking() {
   setError(null);
   setInfo(null);
   setLoadingKey("alexa");
@@ -431,7 +430,7 @@ async function startAlexaSkillLinking() {
     setLoadingKey(null);
     setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
   }
-}
+  }
 
   async function disconnectAlexa() {
     setError(null);

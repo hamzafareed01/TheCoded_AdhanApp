@@ -7,7 +7,6 @@ const path = require("path");
 const crypto = require("crypto");
 
 dotenv.config();
-//testing line to trigger redeploy, delete later
 const { getPool, sql } = require("./db/sql");
 const {
   getAlexaOauthConfig,
@@ -408,56 +407,17 @@ function verifyAppLinkState(token) {
   return payload;
 }
 
-function getAllowedAppLinkRedirectUris() {
-  const envList = String(process.env.ALEXA_APP_LINK_REDIRECT_URIS || "")
-    .split(",")
-    .map((value) => normalizeOrigin(value) ? new URL(normalizeOrigin(value)).toString().replace(/\/$/, "") : "")
-    .filter(Boolean);
-
-  if (envList.length > 0) return envList;
-
-  return allowedOrigins
-    .map((origin) => `${origin}/onboarding/step2`)
-    .filter(Boolean);
-}
-
-function validateAppLinkRedirectUri(value) {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    const err = new Error("Missing redirect URI for Alexa linking.");
-    err.status = 400;
-    throw err;
-  }
-
-  let normalized;
-  try {
-    normalized = new URL(raw).toString().replace(/\/$/, "");
-  } catch {
-    const err = new Error("Invalid redirect URI for Alexa linking.");
-    err.status = 400;
-    throw err;
-  }
-
-  const allowed = getAllowedAppLinkRedirectUris();
-  if (!allowed.includes(normalized)) {
-    const err = new Error("Redirect URI is not allowed for Alexa linking.");
-    err.status = 400;
-    throw err;
-  }
-
-  return normalized;
-}
-
 async function exchangeAmazonAuthorizationCodeForTokens(params) {
   const { code, redirectUri, codeVerifier } = params;
   const appLink = getAlexaAppLinkConfig();
+
   if (!appLink.configured) {
     const err = new Error(
       "Alexa app-to-app linking credentials are not configured on the backend."
     );
     err.status = 500;
     throw err;
-  }}
+  }
 
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
@@ -492,26 +452,27 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     throw err;
   }
 
-const grantedScope = String(data.scope || "").trim();
+  const grantedScope = String(data.scope || "").trim();
 
-// Amazon can omit the scope field in the token response when it matches the
-// originally requested scope. In that case, do not fail the flow.
-if (grantedScope) {
-  const grantedScopes = grantedScope.split(/\s+/).filter(Boolean);
-  if (!grantedScopes.includes(ALEXA_APP_LINK_SCOPE)) {
-    const err = new Error(
-      `Amazon returned scope "${grantedScope}", but Alexa linking requires ${ALEXA_APP_LINK_SCOPE}. Check your Alexa app-to-app client ID, redirect URLs, and requested scope.`
-    );
-    err.status = 502;
-    throw err;
+  // Amazon can omit the scope field in the token response when it matches the
+  // originally requested scope. In that case, do not fail the flow.
+  if (grantedScope) {
+    const grantedScopes = grantedScope.split(/\s+/).filter(Boolean);
+    if (!grantedScopes.includes(ALEXA_APP_LINK_SCOPE)) {
+      const err = new Error(
+        `Amazon returned scope "${grantedScope}", but Alexa linking requires ${ALEXA_APP_LINK_SCOPE}. Check your Alexa app-to-app client ID, redirect URLs, and requested scope.`
+      );
+      err.status = 502;
+      throw err;
+    }
   }
-}
 
-return {
-  accessToken: data.access_token,
-  refreshToken: data.refresh_token || null,
-  scope: grantedScope || ALEXA_APP_LINK_SCOPE,
-  expiresIn: Number(data.expires_in || 3600) || 3600,
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || null,
+    scope: grantedScope || ALEXA_APP_LINK_SCOPE,
+    expiresIn: Number(data.expires_in || 3600) || 3600,
+  };
 }
 
 async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
