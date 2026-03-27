@@ -291,6 +291,10 @@ function getAlexaSkillStage() {
   return raw === "live" ? "live" : "development";
 }
 
+function getSkillOauthScope() {
+  return String(process.env.ALEXA_OAUTH_SCOPE || "alexa").trim() || "alexa";
+}
+
 function getAppLinkStateSecret() {
   return String(
     process.env.ALEXA_APP_LINK_STATE_SECRET ||
@@ -820,82 +824,78 @@ function isDuplicateSqlError(err) {
 }
 
 async function ensureUser(pool, amazonUserId) {
-  const tx = new sql.Transaction(pool);
-  await tx.begin();
+  let userId = null;
 
-  try {
-    let userId = null;
+  const existing = await pool
+    .request()
+    .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
+    .query(`
+      SELECT TOP 1 id
+      FROM dbo.users
+      WHERE amazon_user_id = @amazon_user_id
+    `);
 
-    const existing = await new sql.Request(tx)
-      .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
-      .query(`
-        SELECT TOP 1 id
-        FROM dbo.users
-        WHERE amazon_user_id = @amazon_user_id
-      `);
+  userId = existing.recordset[0]?.id || null;
 
-    userId = existing.recordset[0]?.id || null;
-
-    if (!userId) {
-      try {
-        const inserted = await new sql.Request(tx)
-          .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
-          .query(`
-            INSERT INTO dbo.users (amazon_user_id)
-            OUTPUT inserted.id AS id
-            VALUES (@amazon_user_id)
-          `);
-
-        userId = inserted.recordset[0]?.id || null;
-      } catch (err) {
-        if (!isDuplicateSqlError(err)) {
-          throw err;
-        }
-
-        const reread = await new sql.Request(tx)
-          .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
-          .query(`
-            SELECT TOP 1 id
-            FROM dbo.users
-            WHERE amazon_user_id = @amazon_user_id
-          `);
-
-        userId = reread.recordset[0]?.id || null;
-      }
-    }
-
-    if (!userId) {
-      throw new Error("Could not resolve or create user id.");
-    }
-
-    await new sql.Request(tx)
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`
-        IF NOT EXISTS (SELECT 1 FROM dbo.user_profiles WHERE user_id = @user_id)
-          INSERT INTO dbo.user_profiles (user_id) VALUES (@user_id);
-      `);
-
-    for (const prayerName of PRAYERS) {
-      await new sql.Request(tx)
-        .input("user_id", sql.UniqueIdentifier, userId)
-        .input("prayer_name", sql.NVarChar(10), prayerName)
+  if (!userId) {
+    try {
+      const inserted = await pool
+        .request()
+        .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
         .query(`
-          IF NOT EXISTS (
-            SELECT 1
-            FROM dbo.prayer_configs
-            WHERE user_id = @user_id AND prayer_name = @prayer_name
-          )
-            INSERT INTO dbo.prayer_configs (user_id, prayer_name)
-            VALUES (@user_id, @prayer_name);
+          INSERT INTO dbo.users (amazon_user_id)
+          OUTPUT inserted.id AS id
+          VALUES (@amazon_user_id)
         `);
-    }
 
-    await tx.commit();
-    return userId;
-  } catch (err) {
-    await tx.rollback();
-    throw err;
+      userId = inserted.recordset[0]?.id || null;
+    } catch (err) {
+      if (!isDuplicateSqlError(err)) {
+        throw err;
+      }
+
+      const reread = await pool
+        .request()
+        .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
+        .query(`
+          SELECT TOP 1 id
+          FROM dbo.users
+          WHERE amazon_user_id = @amazon_user_id
+        `);
+
+      userId = reread.recordset[0]?.id || null;
+    }
   }
+
+  if (!userId) {
+    throw new Error("Could not resolve or create user id.");
+  }
+
+  await pool
+    .request()
+    .input("user_id", sql.UniqueIdentifier, userId)
+    .query(`
+      IF NOT EXISTS (SELECT 1 FROM dbo.user_profiles WHERE user_id = @user_id)
+        INSERT INTO dbo.user_profiles (user_id) VALUES (@user_id);
+    `);
+
+  for (const prayerName of PRAYERS) {
+    await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("prayer_name", sql.NVarChar(10), prayerName)
+      .query(`
+        IF NOT EXISTS (
+          SELECT 1
+          FROM dbo.prayer_configs
+          WHERE user_id = @user_id AND prayer_name = @prayer_name
+        )
+          INSERT INTO dbo.prayer_configs (user_id, prayer_name)
+          VALUES (@user_id, @prayer_name);
+      `);
+  }
+
+  return userId;
 }
 
 async function getUserProfileAndPrayers(pool, amazonUserId) {
