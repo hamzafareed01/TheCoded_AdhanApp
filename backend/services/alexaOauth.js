@@ -22,6 +22,10 @@ function normalizeRedirectUri(value) {
   }
 }
 
+function getDefaultAlexaOauthScope() {
+  return normalizeText(process.env.ALEXA_OAUTH_SCOPE) || 'alexa';
+}
+
 function getAlexaOauthConfig() {
   const clientId =
     normalizeText(process.env.ALEXA_OAUTH_CLIENT_ID) ||
@@ -127,7 +131,7 @@ async function createAlexaAuthorizationCode(pool, params) {
     .input('user_id', sql.UniqueIdentifier, userId)
     .input('client_id', sql.NVarChar(255), config.clientId)
     .input('redirect_uri', sql.NVarChar(1000), config.redirectUri)
-    .input('scope', sql.NVarChar(255), normalizeText(scope) || 'alexa')
+    .input('scope', sql.NVarChar(255), normalizeText(scope) || getDefaultAlexaOauthScope())
     .input('expires_at', sql.DateTime2, expiresAt)
     .query(`
       INSERT INTO dbo.alexa_skill_authorization_codes (
@@ -153,7 +157,7 @@ async function createAlexaAuthorizationCode(pool, params) {
   return {
     code,
     expiresAt,
-    scope: normalizeText(scope) || 'alexa',
+    scope: normalizeText(scope) || getDefaultAlexaOauthScope(),
   };
 }
 
@@ -167,7 +171,7 @@ async function insertAlexaTokens(tx, params) {
   const insert = await new sql.Request(tx)
     .input('user_id', sql.UniqueIdentifier, userId)
     .input('client_id', sql.NVarChar(255), clientId)
-    .input('scope', sql.NVarChar(255), normalizeText(scope) || 'alexa')
+    .input('scope', sql.NVarChar(255), normalizeText(scope) || getDefaultAlexaOauthScope())
     .input('access_token_hash', sql.NVarChar(128), hashToken(accessToken))
     .input('access_token_prefix', sql.NVarChar(24), tokenPrefix(accessToken))
     .input('refresh_token_hash', sql.NVarChar(128), hashToken(refreshToken))
@@ -206,7 +210,7 @@ async function insertAlexaTokens(tx, params) {
     refreshToken,
     expiresAt,
     expiresIn: config.accessTokenTtlSec,
-    scope: normalizeText(scope) || 'alexa',
+    scope: normalizeText(scope) || getDefaultAlexaOauthScope(),
     tokenType: 'Bearer',
   };
 }
@@ -559,6 +563,7 @@ async function rememberAlexaSkillUser(pool, tokenId, alexaUserId) {
 
 module.exports = {
   getAlexaOauthConfig,
+  getDefaultAlexaOauthScope,
   createAlexaAuthorizationCode,
   exchangeAlexaAuthorizationCode,
   refreshAlexaAccessToken,
