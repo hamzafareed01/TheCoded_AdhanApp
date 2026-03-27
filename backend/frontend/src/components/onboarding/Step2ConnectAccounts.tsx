@@ -257,8 +257,12 @@ export default function Step2ConnectAccounts({
   async function finalizeAlexaSkillLink(code: string, state: string) {
     const pending = readPendingAlexaLink();
     if (!pending || pending.state !== state) {
+      clearPendingAlexaLink();
+      cleanCurrentUrl();
       throw new Error("Alexa returned to the app, but the linking session could not be verified.");
     }
+
+    cleanCurrentUrl();
 
     const resp = await apiFetch("/api/alexa/account-linking/complete", {
       method: "POST",
@@ -271,14 +275,18 @@ export default function Step2ConnectAccounts({
     });
 
     if (!resp.ok) {
-      const msg = await resp.text().catch(() => "");
+      let msg = "";
+      try {
+        const data = await resp.json();
+        msg = typeof data?.error === "string" ? data.error : JSON.stringify(data);
+      } catch {
+        msg = await resp.text().catch(() => "");
+      }
       clearPendingAlexaLink();
-      cleanCurrentUrl();
       throw new Error(`Alexa linking failed (${resp.status}). ${msg}`.trim());
     }
 
     clearPendingAlexaLink();
-    cleanCurrentUrl();
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
     setInfo("Alexa skill enabled and account linking completed.");
   }

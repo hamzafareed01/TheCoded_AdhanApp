@@ -1928,18 +1928,29 @@ app.post(
       codeVerifier,
     });
 
+    const skillAccountLinkRedirectUri = redirectUri;
+
     const created = await createAlexaAuthorizationCode(pool, {
       userId,
       clientId: oauth.clientId,
-      redirectUri: oauth.redirectUris[0],
+      redirectUri: skillAccountLinkRedirectUri,
       scope: getSkillOauthScope(),
+    });
+
+    console.info("Alexa account-linking complete: issuing skill auth code", {
+      userId,
+      appRedirectUri: redirectUri,
+      skillRedirectUri: skillAccountLinkRedirectUri,
+      oauthClientIdPrefix: String(oauth.clientId || "").slice(0, 24),
+      appLinkScope: amazonTokens.scope,
+      skillScope: getSkillOauthScope(),
     });
 
     const enablement = await callAlexaSkillEnablement({
       accessToken: amazonTokens.accessToken,
       skillId,
       stage: getAlexaSkillStage(),
-      accountLinkRedirectUri: oauth.redirectUris[0],
+      accountLinkRedirectUri: skillAccountLinkRedirectUri,
       authCode: created.code,
       authCodeVerifier: null,
     });
@@ -2112,6 +2123,7 @@ app.post(
         grantType,
         clientIdPrefix: String(clientId || "").slice(0, 24),
         redirectUri: String(req.body?.redirect_uri || ""),
+        codePrefix: String(req.body?.code || "").slice(0, 8),
       });
       tokenSet = await exchangeAlexaAuthorizationCode(pool, {
         clientId,
