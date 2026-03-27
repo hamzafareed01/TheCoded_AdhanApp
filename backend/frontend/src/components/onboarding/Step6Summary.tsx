@@ -69,6 +69,7 @@ type OnboardingData = {
   devices?: string[] | OnboardingDevices;
   accountEnabled?: boolean;
   prayerConfigs?: PrayerConfig[];
+  mosque?: JsonRecord | null;
 };
 
 type Props = {
@@ -85,8 +86,11 @@ type SummaryData = {
     latitude: number | null;
     longitude: number | null;
     useMosqueLocation: boolean;
+    mosqueName?: string | null;
+    mosqueAddress?: string | null;
   };
   prayer: {
+    sect: string;
     calculationMethod: string;
     madhhab: string;
     madhab: string;
@@ -106,7 +110,7 @@ const METHOD_LABEL: Record<string, string> = {
   egypt: "Egyptian",
   tehran: "Tehran",
   jafari: "Jafari (Shia)",
-  ummalqura: "Umm Al-Qura",
+  ummAlQura: "Umm Al-Qura",
 };
 
 const HIGHLAT_LABEL: Record<string, string> = {
@@ -526,6 +530,11 @@ export default function Step6Summary({
             </div>
 
             <div>
+              <div className="text-muted-foreground">Sect</div>
+              <div className="font-medium">{summary.prayer.sect}</div>
+            </div>
+
+            <div>
               <div className="text-muted-foreground">Calculation Method</div>
               <div className="font-medium">
                 {METHOD_LABEL[summary.prayer.calculationMethod.toLowerCase()] ||
@@ -564,6 +573,13 @@ export default function Step6Summary({
               <div className="text-muted-foreground">Use Mosque Location</div>
               <div className="font-medium">
                 {summary.location.useMosqueLocation ? "Yes" : "No"}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-muted-foreground">Saved Mosque</div>
+              <div className="font-medium">
+                {summary.location.mosqueName || "Not selected"}
               </div>
             </div>
 

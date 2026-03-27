@@ -38,6 +38,7 @@ type UserSettings = {
   userId?: string;
   language: string;
   madhhab: string;
+  sect?: "SUNNI" | "SHIA";
   shia: boolean;
   calculationMethod: string;
   highLatitudeMethod: string;
@@ -59,6 +60,7 @@ type Mosque = {
   placeId: string;
   name: string;
   address?: string;
+  sect?: "SUNNI" | "SHIA" | "UNKNOWN";
   location?: {
     lat?: number;
     lng?: number;
@@ -129,6 +131,7 @@ function normalizeSettings(payload: unknown): UserSettings {
       undefined,
     language: asString(src.language) ?? "en",
     madhhab: asString(src.madhhab) ?? "hanafi",
+    sect: (src.sect === "SHIA" ? "SHIA" : "SUNNI"),
     shia: asBoolean(src.shia) ?? src.sect === "SHIA",
     calculationMethod:
       asString(src.calculationMethod) ??
@@ -163,17 +166,25 @@ function normalizeMosques(payload: unknown): Mosque[] {
 
   return payload.mosques
     .filter((item): item is Record<string, unknown> => isRecord(item))
-    .map((item) => ({
-      placeId: asString(item.placeId) ?? "",
-      name: asString(item.name) ?? "",
-      address: asString(item.address) ?? undefined,
-      location: isRecord(item.location)
-        ? {
-            lat: asNumber(item.location.lat) ?? undefined,
-            lng: asNumber(item.location.lng) ?? undefined,
-          }
-        : undefined,
-    }))
+    .map((item) => {
+      const sect: "SUNNI" | "SHIA" | "UNKNOWN" =
+        item.sect === "SHIA" || item.sect === "SUNNI"
+          ? (item.sect as "SHIA" | "SUNNI")
+          : "UNKNOWN";
+
+      return {
+        placeId: asString(item.placeId) ?? "",
+        name: asString(item.name) ?? "",
+        address: asString(item.address) ?? undefined,
+        sect,
+        location: isRecord(item.location)
+          ? {
+              lat: asNumber(item.location.lat) ?? undefined,
+              lng: asNumber(item.location.lng) ?? undefined,
+            }
+          : undefined,
+      };
+    })
     .filter((m) => m.placeId && m.name);
 }
 
@@ -238,6 +249,7 @@ export default function MosqueSelector({
   const [mosquesError, setMosquesError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [sectFilter, setSectFilter] = useState<"AUTO" | "ALL" | "SUNNI" | "SHIA">("AUTO");
   const [selectedMosqueId, setSelectedMosqueId] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
@@ -314,6 +326,14 @@ export default function MosqueSelector({
       params.set("country", settings.country || "US");
       params.set("radiusKm", "25");
       params.set("bias", sameAsOnboarding ? "user" : "none");
+      const effectiveSect = sectFilter === "AUTO"
+        ? settings.shia
+          ? "SHIA"
+          : "SUNNI"
+        : sectFilter;
+      if (effectiveSect !== "ALL") {
+        params.set("sect", effectiveSect);
+      }
 
       const res = await apiFetch(`/api/mosques?${params.toString()}`);
       if (!res.ok) {
@@ -514,6 +534,12 @@ export default function MosqueSelector({
     ? settings?.mosqueName || "Mosque timing enabled"
     : "Personal location timing";
 
+  const effectiveSectFilter = sectFilter === "AUTO"
+    ? settings?.shia
+      ? "SHIA"
+      : "SUNNI"
+    : sectFilter;
+
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
       <div className="max-w-7xl mx-auto">
@@ -619,9 +645,22 @@ export default function MosqueSelector({
                 <p className="text-xs text-slate-500">
                   Current city bias: {onboardingCityLabel}
                 </p>
+
+                <div className="flex flex-wrap items-center gap-2 pt-2">
+                  {(["AUTO", "ALL", "SUNNI", "SHIA"] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setSectFilter(value)}
+                      className={`rounded-full border px-3 py-1 text-xs transition-colors ${sectFilter === value ? "border-emerald-500 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"}`}
+                    >
+                      {value === "AUTO" ? `Auto (${effectiveSectFilter})` : value}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <ScrollArea className="h-[480px] mt-4">
+              <ScrollArea className="h-[480px] mt-4 pr-2">
                 {mosquesLoading && (
                   <p className="text-slate-400 text-sm px-1">Loading mosques…</p>
                 )}
@@ -659,6 +698,9 @@ export default function MosqueSelector({
                               <h3 className="text-white text-sm md:text-base">
                                 {mosque.name}
                               </h3>
+                              <Badge className={mosque.sect === "SHIA" ? "bg-violet-600/20 text-violet-300 border border-violet-600/30" : mosque.sect === "SUNNI" ? "bg-cyan-600/20 text-cyan-300 border border-cyan-600/30" : "bg-slate-800 text-slate-300 border border-slate-700"}>
+                                {mosque.sect === "UNKNOWN" ? "General" : mosque.sect}
+                              </Badge>
                               {isSelected && (
                                 <Badge className="bg-emerald-600/20 text-emerald-300 border border-emerald-600/30">
                                   Selected

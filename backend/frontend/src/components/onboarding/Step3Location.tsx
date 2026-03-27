@@ -83,7 +83,7 @@ export default function Step3Location({
     country: initialCountry,
     city: initialCity,
     timezone: initialTimezone,
-    useMosqueLocation: onboardingData?.location?.useMosqueLocation ?? true,
+    useMosqueLocation: onboardingData?.location?.useMosqueLocation ?? false,
     latitude: initialLatitude,
     longitude: initialLongitude,
   });
@@ -371,7 +371,7 @@ export default function Step3Location({
 
             <div className="flex items-center justify-between gap-4 p-4 bg-slate-800/40 rounded-xl border border-slate-700">
               <div>
-                <p className="text-white mb-1">Use mosque location later</p>
+                <p className="text-white mb-1">Use selected mosque later later</p>
                 <p className="text-slate-400 text-sm">
                   If you choose a mosque later, its real coordinates can be used
                   to fine-tune prayer times.

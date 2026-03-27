@@ -74,19 +74,20 @@ function normalizeCountry(value: unknown): string {
   return raw || "US";
 }
 
+
 function getDefaultMethodForCountry(country: string, sect: Sect): PrayerMethod {
   if (sect === "SHIA") {
-    if (country === "IR") return "tehran";
-    return "jafari";
+    return country === "IR" ? "tehran" : "jafari";
   }
 
   if (country === "PK") return "karachi";
   if (country === "SA") return "ummAlQura";
   if (country === "EG") return "egypt";
   if (country === "US" || country === "CA") return "isna";
-
   return "mwl";
 }
+
+
 
 function normalizeMethod(
   value: unknown,
@@ -94,17 +95,10 @@ function normalizeMethod(
   sect: Sect
 ): PrayerMethod {
   const raw = String(value ?? "").trim();
-
-  const allowed: PrayerMethod[] = [
-    "isna",
-    "karachi",
-    "mwl",
-    "makkah",
-    "egypt",
-    "ummAlQura",
-    "tehran",
-    "jafari",
-  ];
+  const allowed: PrayerMethod[] =
+    sect === "SHIA"
+      ? ["jafari", "tehran"]
+      : ["isna", "karachi", "mwl", "makkah", "egypt", "ummAlQura"];
 
   if (allowed.includes(raw as PrayerMethod)) {
     return raw as PrayerMethod;
@@ -112,6 +106,7 @@ function normalizeMethod(
 
   return getDefaultMethodForCountry(country, sect);
 }
+
 
 function normalizeHighLatitudeMode(value: unknown): HighLatitudeMode {
   const raw = String(value ?? "").trim();
@@ -240,44 +235,31 @@ export default function Step4PrayerSettings({
     void hydrate();
   }, [country]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    setCalculationMethod((prev) => {
-      const allowedForSect =
-        sect === "SHIA"
-          ? ["jafari", "tehran", "karachi", "mwl", "egypt", "ummAlQura", "makkah", "isna"]
-          : ["isna", "mwl", "karachi", "makkah", "egypt", "ummAlQura", "tehran", "jafari"];
+  
+useEffect(() => {
+  setCalculationMethod((prev) => normalizeMethod(prev, country, sect));
+}, [sect, country]);
 
-      return allowedForSect.includes(prev)
-        ? prev
-        : getDefaultMethodForCountry(country, sect);
-    });
-  }, [sect, country]);
 
-  const calcMethodChoices = useMemo(() => {
-    if (sect === "SHIA") {
-      return [
-        { value: "jafari", label: "Jafari" },
-        { value: "tehran", label: "Tehran" },
-        { value: "karachi", label: "Karachi" },
-        { value: "mwl", label: "Muslim World League" },
-        { value: "egypt", label: "Egyptian Survey" },
-        { value: "ummAlQura", label: "Umm Al-Qura" },
-        { value: "makkah", label: "Makkah" },
-        { value: "isna", label: "ISNA (North America)" },
-      ] as const;
-    }
-
+  
+const calcMethodChoices = useMemo(() => {
+  if (sect === "SHIA") {
     return [
-      { value: "mwl", label: "Muslim World League" },
-      { value: "isna", label: "ISNA (North America)" },
-      { value: "karachi", label: "Karachi" },
-      { value: "ummAlQura", label: "Umm Al-Qura" },
-      { value: "makkah", label: "Makkah" },
-      { value: "egypt", label: "Egyptian Survey" },
-      { value: "tehran", label: "Tehran" },
       { value: "jafari", label: "Jafari" },
+      { value: "tehran", label: "Tehran" },
     ] as const;
-  }, [sect]);
+  }
+
+  return [
+    { value: "isna", label: "ISNA (North America)" },
+    { value: "mwl", label: "Muslim World League" },
+    { value: "karachi", label: "Karachi" },
+    { value: "ummAlQura", label: "Umm Al-Qura" },
+    { value: "makkah", label: "Makkah" },
+    { value: "egypt", label: "Egyptian Survey" },
+  ] as const;
+}, [sect]);
+
 
   const handleContinue = async () => {
     setError(null);
@@ -406,20 +388,26 @@ export default function Step4PrayerSettings({
 
             <div className="space-y-3">
               <Label className="text-white">Madhhab (Asr method)</Label>
-              <Select
-                value={madhhab}
-                onValueChange={(value: string) =>
-                  setMadhhab(value as "hanafi" | "shafi")
-                }
-              >
-                <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
-                  <SelectValue placeholder="Select madhhab" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="hanafi">Hanafi (later Asr)</SelectItem>
-                  <SelectItem value="shafi">Shafi / Standard</SelectItem>
-                </SelectContent>
-              </Select>
+              {sect === "SHIA" ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">
+                  Shia mode uses Shia timing rules. The Sunni Asr madhhab selector is hidden here so the sect options stay clean.
+                </div>
+              ) : (
+                <Select
+                  value={madhhab}
+                  onValueChange={(value: string) =>
+                    setMadhhab(value as "hanafi" | "shafi")
+                  }
+                >
+                  <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
+                    <SelectValue placeholder="Select madhhab" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hanafi">Hanafi (later Asr)</SelectItem>
+                    <SelectItem value="shafi">Shafi / Standard</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             <div className="space-y-3">
@@ -447,7 +435,7 @@ export default function Step4PrayerSettings({
             <div className="border-t border-slate-800 pt-6">
               <h2 className="text-white text-lg mb-2">Timing offsets (minutes)</h2>
               <p className="text-slate-400 text-sm mb-4">
-                Adjust each prayer time slightly.
+                These offsets stay attached to your saved sect and calculation setup.
               </p>
 
               <div className="grid md:grid-cols-2 gap-4">

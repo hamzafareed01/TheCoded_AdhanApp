@@ -116,6 +116,51 @@ const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const NONE_VALUE = "__none__";
 
+const METHOD_LABELS: Record<string, string> = {
+  isna: "ISNA (North America)",
+  mwl: "Muslim World League",
+  egypt: "Egyptian Survey",
+  karachi: "Karachi",
+  makkah: "Makkah",
+  ummAlQura: "Umm Al-Qura",
+  tehran: "Tehran",
+  jafari: "Jafari",
+};
+
+const METHOD_CHOICES = {
+  SUNNI: [
+    { value: "isna", label: "ISNA (North America)" },
+    { value: "mwl", label: "Muslim World League" },
+    { value: "egypt", label: "Egyptian Survey" },
+    { value: "karachi", label: "Karachi" },
+    { value: "makkah", label: "Makkah" },
+    { value: "ummAlQura", label: "Umm Al-Qura" },
+  ],
+  SHIA: [
+    { value: "jafari", label: "Jafari" },
+    { value: "tehran", label: "Tehran" },
+  ],
+} as const;
+
+function getDefaultMethodForSect(sect: Sect, country: string): string {
+  const normalizedCountry = normalizeCountry(country);
+  if (sect === "SHIA") {
+    return normalizedCountry === "IR" ? "tehran" : "jafari";
+  }
+  if (normalizedCountry === "PK") return "karachi";
+  if (normalizedCountry === "SA") return "ummAlQura";
+  if (normalizedCountry === "EG") return "egypt";
+  if (normalizedCountry === "US" || normalizedCountry === "CA") return "isna";
+  return "mwl";
+}
+
+function sanitizeMethodForSect(method: unknown, sect: Sect, country: string): string {
+  const raw = String(method ?? "").trim();
+  const allowed = METHOD_CHOICES[sect].map((item) => item.value);
+  return allowed.includes(raw) ? raw : getDefaultMethodForSect(sect, country);
+}
+
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -270,10 +315,11 @@ function normalizeSettings(payload: unknown): UserSettings {
       (asString(src.madhhab) ?? "hanafi").toLowerCase() === "shafi"
         ? "shafi"
         : "hanafi",
-    calculationMethod:
-      asString(src.calculationMethod) ??
-      asString(src.calculation_method) ??
-      "isna",
+    calculationMethod: sanitizeMethodForSect(
+      asString(src.calculationMethod) ?? asString(src.calculation_method) ?? "isna",
+      src.sect === "SHIA" || src.shia === true ? "SHIA" : "SUNNI",
+      normalizeCountry(src.country)
+    ),
     highLatitudeMethod:
       asString(src.highLatitudeMethod) ??
       asString(src.high_latitude_method) ??
@@ -506,6 +552,11 @@ export default function Settings({
     () => [...reciters].sort((a, b) => a.name.localeCompare(b.name)),
     [reciters]
   );
+  const isShia = settings?.sect === "SHIA";
+  const methodChoices = useMemo(
+    () => METHOD_CHOICES[settings?.sect === "SHIA" ? "SHIA" : "SUNNI"],
+    [settings?.sect]
+  );
 
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
@@ -590,6 +641,31 @@ export default function Settings({
   ) => {
     setSettings((prev) => {
       if (!prev) return prev;
+
+      if (key === "sect") {
+        const nextSect = value as Sect;
+        return {
+          ...prev,
+          sect: nextSect,
+          calculationMethod: sanitizeMethodForSect(
+            prev.calculationMethod,
+            nextSect,
+            prev.country
+          ),
+        };
+      }
+
+      if (key === "calculationMethod") {
+        return {
+          ...prev,
+          calculationMethod: sanitizeMethodForSect(
+            value as string,
+            prev.sect,
+            prev.country
+          ),
+        };
+      }
+
       return { ...prev, [key]: value };
     });
   };
@@ -668,6 +744,11 @@ export default function Settings({
         timezone: typedTimezone || geo.timezone || getBrowserTimezone(),
         latitude: geo.lat,
         longitude: geo.lng,
+        calculationMethod: sanitizeMethodForSect(
+          settings.calculationMethod,
+          settings.sect,
+          normalizedCountry
+        ),
       };
 
       const payload: JsonRecord = {
@@ -717,6 +798,8 @@ export default function Settings({
           madhhab: syncedSettings.madhhab,
           calculationMethod: syncedSettings.calculationMethod,
           highLatitudeMode: syncedSettings.highLatitudeMethod,
+          highLatitudeMethod: syncedSettings.highLatitudeMethod,
+          method: syncedSettings.calculationMethod,
           offsets: syncedSettings.globalOffsets,
         },
         location: {
@@ -814,7 +897,7 @@ export default function Settings({
           <div>
             <h1 className="text-white text-xl mb-1">Settings</h1>
             <p className="text-slate-400 text-sm">
-              Prayer timing source, Sunni or Shia calculation mode, worldwide location sync, per-prayer Adhan, and schedules.
+              Prayer timing source, sect-specific calculation mode, mosque override sync, worldwide location sync, per-prayer Adhan, and schedules.
             </p>
           </div>
 
@@ -902,20 +985,26 @@ export default function Settings({
 
                   <div className="space-y-2">
                     <Label className="text-slate-200">Madhhab</Label>
-                    <Select
-                      value={settings.madhhab}
-                      onValueChange={(v: string) =>
-                        updateField("madhhab", v === "shafi" ? "shafi" : "hanafi")
-                      }
-                    >
-                      <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-slate-900 border-slate-700">
-                        <SelectItem value="hanafi">Hanafi</SelectItem>
-                        <SelectItem value="shafi">Shafi</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    {isShia ? (
+                      <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">
+                        Shia mode is active, so only Shia-relevant timing options are shown here. Sunni Asr madhhab options stay preserved for later if you switch back.
+                      </div>
+                    ) : (
+                      <Select
+                        value={settings.madhhab}
+                        onValueChange={(v: string) =>
+                          updateField("madhhab", v === "shafi" ? "shafi" : "hanafi")
+                        }
+                      >
+                        <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-700">
+                          <SelectItem value="hanafi">Hanafi</SelectItem>
+                          <SelectItem value="shafi">Shafi</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
 
                   <div className="space-y-2">
@@ -930,17 +1019,15 @@ export default function Settings({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-slate-900 border-slate-700">
-                        <SelectItem value="isna">ISNA (North America)</SelectItem>
-                        <SelectItem value="mwl">Muslim World League</SelectItem>
-                        <SelectItem value="egypt">Egyptian Survey</SelectItem>
-                        <SelectItem value="karachi">Karachi</SelectItem>
-                        <SelectItem value="makkah">Makkah</SelectItem>
-                        <SelectItem value="ummAlQura">Umm Al-Qura</SelectItem>
-                        <SelectItem value="tehran">Tehran</SelectItem>
+                        {methodChoices.map((choice) => (
+                          <SelectItem key={choice.value} value={choice.value}>{choice.label}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-slate-500">
-                      When Shia mode is enabled, the backend timing calculation switches to the Shia/Jafari prayer method.
+                      {isShia
+                        ? "Only Shia-related calculation methods are shown while Shia mode is active."
+                        : "Sunni mode shows Sunni calculation methods. Selecting a mosque changes the location source, not the calculation method."}
                     </p>
                   </div>
 
@@ -1106,7 +1193,7 @@ export default function Settings({
                     <div>
                       <Label className="text-slate-200">Use selected mosque for prayer times</Label>
                       <p className="text-xs text-slate-400">
-                        When enabled, the dashboard, calendar, and prayer API use saved mosque coordinates whenever they exist.
+                        When enabled, the dashboard, calendar, settings summary, and Alexa timing flows use the saved mosque coordinates whenever they exist. Your sect and calculation method still remain the values selected above.
                       </p>
                       {settings.mosqueName ? (
                         <p className="text-xs text-emerald-400 mt-2">
