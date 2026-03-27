@@ -10,6 +10,7 @@ dotenv.config();
 const { getPool, sql } = require("./db/sql");
 const {
   getAlexaOauthConfig,
+  getDefaultAlexaOauthScope,
   createAlexaAuthorizationCode,
   exchangeAlexaAuthorizationCode,
   refreshAlexaAccessToken,
@@ -39,7 +40,7 @@ app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }
 // -----------------------------
 // Constants
 // -----------------------------
-// re-trigger deploy for update....delete later
+
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
@@ -327,6 +328,75 @@ function getAlexaAppLinkConfig() {
 }
 
 
+
+function getRequestOrigin(req) {
+  const protoHeader = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const hostHeader = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  const proto = protoHeader || req.protocol || "https";
+  if (!hostHeader) return `${proto}://localhost`;
+  return `${proto}://${hostHeader}`;
+}
+
+function buildAlexaOauthCallbackUrl(req) {
+  return `${getRequestOrigin(req)}/oauth/authorize/callback`;
+}
+
+function getSkillOauthScope() {
+  return getDefaultAlexaOauthScope();
+}
+
+function createOauthRelayState(payload) {
+  const json = JSON.stringify(payload || {});
+  const encoded = base64UrlEncode(json);
+  const signature = crypto
+    .createHmac("sha256", getAppLinkStateSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+  return `${encoded}.${signature}`;
+}
+
+function verifyOauthRelayState(value) {
+  const raw = String(value || "").trim();
+  const dot = raw.lastIndexOf(".");
+  if (dot <= 0) {
+    const err = new Error("Invalid OAuth relay state.");
+    err.status = 400;
+    throw err;
+  }
+
+  const encoded = raw.slice(0, dot);
+  const provided = raw.slice(dot + 1);
+  const expected = crypto
+    .createHmac("sha256", getAppLinkStateSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  const providedBuf = Buffer.from(provided);
+  const expectedBuf = Buffer.from(expected);
+  if (
+    providedBuf.length !== expectedBuf.length ||
+    !crypto.timingSafeEqual(providedBuf, expectedBuf)
+  ) {
+    const err = new Error("OAuth relay state signature mismatch.");
+    err.status = 400;
+    throw err;
+  }
+
+  try {
+    return JSON.parse(base64UrlDecode(encoded));
+  } catch {
+    const err = new Error("OAuth relay state is malformed.");
+    err.status = 400;
+    throw err;
+  }
+}
+
 function base64UrlEncode(value) {
   return Buffer.from(value)
     .toString("base64")
@@ -530,6 +600,59 @@ async function getAlexaCustomerTokenRecord(pool, userId) {
   }
 
   return await refreshStoredAlexaCustomerToken(pool, userId, record);
+}
+
+
+async function exchangeAmazonSecurityProfileCodeForProfile(params) {
+  const { code, redirectUri } = params;
+  const oauth = getAlexaOauthConfig();
+
+  if (!oauth.clientId || !oauth.clientSecret) {
+    const err = new Error("Alexa OAuth client is not configured.");
+    err.status = 500;
+    throw err;
+  }
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("code", String(code || ""));
+  body.set("redirect_uri", String(redirectUri || ""));
+
+  const basic = Buffer.from(`${oauth.clientId}:${oauth.clientSecret}`).toString("base64");
+  const resp = await fetchWithTimeout(
+    AMAZON_OAUTH_TOKEN_URL,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    },
+    20000
+  );
+
+  const data = await resp.json().catch(async () => ({
+    error: await resp.text().catch(() => "Amazon OAuth exchange failed."),
+  }));
+
+  if (!resp.ok || !data?.access_token) {
+    const err = new Error(
+      `Amazon OAuth exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"}`
+    );
+    err.status = 502;
+    throw err;
+  }
+
+  const profile = await fetchAmazonProfile(data.access_token);
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || null,
+    expiresIn: Number(data.expires_in || 3600) || 3600,
+    scope: data.scope || "profile",
+    profile,
+  };
 }
 
 async function fetchAlexaApiEndpoints(accessToken) {
@@ -1809,7 +1932,7 @@ app.post(
       userId,
       clientId: oauth.clientId,
       redirectUri: oauth.redirectUris[0],
-      scope: "alexa",
+      scope: getSkillOauthScope(),
     });
 
     const enablement = await callAlexaSkillEnablement({
@@ -1862,7 +1985,7 @@ app.post(
       userId,
       clientId: body.clientId || body.client_id,
       redirectUri: body.redirectUri || body.redirect_uri,
-      scope: body.scope || "alexa",
+      scope: body.scope || getSkillOauthScope(),
     });
 
     const redirectUrl = new URL(String(body.redirectUri || body.redirect_uri));
@@ -1877,6 +2000,85 @@ app.post(
       expiresAt: created.expiresAt,
       scope: created.scope,
     });
+  })
+);
+
+
+app.get(
+  "/oauth/authorize",
+  asyncHandler(async (req, res) => {
+    const responseType = String(req.query?.response_type || "code").trim().toLowerCase();
+    const clientId = String(req.query?.client_id || "").trim();
+    const redirectUri = String(req.query?.redirect_uri || "").trim();
+    const state = String(req.query?.state || "").trim();
+    const scope = String(req.query?.scope || getSkillOauthScope()).trim() || getSkillOauthScope();
+
+    if (responseType !== "code") {
+      return res.status(400).send("Only authorization-code OAuth is supported.");
+    }
+
+    const oauth = getAlexaOauthConfig();
+    if (!oauth.configured) {
+      return res.status(500).send("Alexa OAuth is not configured.");
+    }
+
+    const createdState = createOauthRelayState({
+      clientId,
+      redirectUri,
+      state,
+      scope,
+      callbackUrl: buildAlexaOauthCallbackUrl(req),
+      ts: Date.now(),
+      nonce: crypto.randomBytes(12).toString("hex"),
+    });
+
+    const url = new URL(AMAZON_OAUTH_AUTHORIZE_URL);
+    url.searchParams.set("client_id", oauth.clientId);
+    url.searchParams.set("scope", "profile");
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("redirect_uri", buildAlexaOauthCallbackUrl(req));
+    url.searchParams.set("state", createdState);
+
+    res.redirect(url.toString());
+  })
+);
+
+app.get(
+  "/oauth/authorize/callback",
+  asyncHandler(async (req, res) => {
+    const returnedError = String(req.query?.error || "").trim();
+    const returnedDescription = String(req.query?.error_description || "").trim();
+    if (returnedError) {
+      return res.status(400).send(returnedDescription || returnedError);
+    }
+
+    const returnedCode = String(req.query?.code || "").trim();
+    if (!returnedCode) {
+      return res.status(400).send("Amazon did not return an authorization code.");
+    }
+
+    const relayState = verifyOauthRelayState(req.query?.state);
+    const amazon = await exchangeAmazonSecurityProfileCodeForProfile({
+      code: returnedCode,
+      redirectUri: relayState.callbackUrl || buildAlexaOauthCallbackUrl(req),
+    });
+
+    const pool = await getPool();
+    const userId = await ensureUser(pool, amazon.profile.user_id);
+    const created = await createAlexaAuthorizationCode(pool, {
+      userId,
+      clientId: relayState.clientId,
+      redirectUri: relayState.redirectUri,
+      scope: relayState.scope || getSkillOauthScope(),
+    });
+
+    const redirectUrl = new URL(String(relayState.redirectUri));
+    redirectUrl.searchParams.set("code", created.code);
+    if (relayState.state) {
+      redirectUrl.searchParams.set("state", String(relayState.state));
+    }
+
+    res.redirect(redirectUrl.toString());
   })
 );
 
@@ -1906,11 +2108,17 @@ app.post(
 
     let tokenSet;
     if (grantType === "authorization_code") {
+      console.info("Alexa OAuth token exchange attempt", {
+        grantType,
+        clientIdPrefix: String(clientId || "").slice(0, 24),
+        redirectUri: String(req.body?.redirect_uri || ""),
+      });
       tokenSet = await exchangeAlexaAuthorizationCode(pool, {
         clientId,
         clientSecret,
         code: req.body?.code,
         redirectUri: req.body?.redirect_uri,
+        codeVerifier: req.body?.code_verifier,
       });
     } else if (grantType === "refresh_token") {
       tokenSet = await refreshAlexaAccessToken(pool, {

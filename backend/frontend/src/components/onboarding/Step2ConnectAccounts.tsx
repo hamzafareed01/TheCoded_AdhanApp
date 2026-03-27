@@ -272,6 +272,8 @@ export default function Step2ConnectAccounts({
 
     if (!resp.ok) {
       const msg = await resp.text().catch(() => "");
+      clearPendingAlexaLink();
+      cleanCurrentUrl();
       throw new Error(`Alexa linking failed (${resp.status}). ${msg}`.trim());
     }
 
@@ -348,7 +350,7 @@ export default function Step2ConnectAccounts({
       setError("Amazon Return URL is missing in the frontend build.");
       return;
     }
-//Re-trigger comment...delete later
+
     try {
       await ensureAmazonSdk();
 
