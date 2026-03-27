@@ -12,6 +12,10 @@ function splitCsv(value) {
     .filter(Boolean);
 }
 
+function unique(values) {
+  return [...new Set((values || []).filter(Boolean))];
+}
+
 function normalizeRedirectUri(value) {
   const raw = normalizeText(value);
   if (!raw) return '';
@@ -33,9 +37,10 @@ function getAlexaOauthConfig() {
   const clientSecret =
     normalizeText(process.env.ALEXA_OAUTH_CLIENT_SECRET) ||
     normalizeText(process.env.ALEXA_SKILL_CLIENT_SECRET);
-  const redirectUris = splitCsv(
-    process.env.ALEXA_OAUTH_REDIRECT_URIS || process.env.ALEXA_SKILL_REDIRECT_URI
-  )
+  const redirectUris = unique([
+    ...splitCsv(process.env.ALEXA_OAUTH_REDIRECT_URIS || process.env.ALEXA_SKILL_REDIRECT_URI),
+    ...splitCsv(process.env.ALEXA_APP_LINK_REDIRECT_URIS),
+  ])
     .map(normalizeRedirectUri)
     .filter(Boolean);
 
@@ -220,9 +225,9 @@ async function exchangeAlexaAuthorizationCode(pool, params) {
   const clientSecret = normalizeText(params.clientSecret);
   const code = normalizeText(params.code);
   const redirectUri = normalizeText(params.redirectUri);
+  const normalizedIncomingRedirect = normalizeRedirectUri(redirectUri);
 
   validateClientSecret(clientId, clientSecret);
-  validateClient(clientId, redirectUri);
 
   if (!code) {
     const err = new Error('Missing authorization code.');
@@ -267,7 +272,8 @@ async function exchangeAlexaAuthorizationCode(pool, params) {
       throw err;
     }
 
-    if (normalizeRedirectUri(row.redirect_uri) !== normalizeRedirectUri(redirectUri)) {
+    const storedRedirect = normalizeRedirectUri(row.redirect_uri);
+    if (normalizedIncomingRedirect && storedRedirect !== normalizedIncomingRedirect) {
       const err = new Error('Authorization code redirect URI mismatch.');
       err.status = 400;
       throw err;
