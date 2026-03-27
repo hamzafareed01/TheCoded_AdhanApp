@@ -37,12 +37,11 @@ function getAlexaOauthConfig() {
   const clientSecret =
     normalizeText(process.env.ALEXA_OAUTH_CLIENT_SECRET) ||
     normalizeText(process.env.ALEXA_SKILL_CLIENT_SECRET);
-  const redirectUris = unique([
-    ...splitCsv(process.env.ALEXA_OAUTH_REDIRECT_URIS || process.env.ALEXA_SKILL_REDIRECT_URI),
-    ...splitCsv(process.env.ALEXA_APP_LINK_REDIRECT_URIS),
-  ])
-    .map(normalizeRedirectUri)
-    .filter(Boolean);
+const redirectUris = unique(
+  splitCsv(process.env.ALEXA_OAUTH_REDIRECT_URIS || process.env.ALEXA_SKILL_REDIRECT_URI)
+)
+  .map(normalizeRedirectUri)
+  .filter(Boolean);
 
   const accessTokenTtlSec = Math.max(
     300,
