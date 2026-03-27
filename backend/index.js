@@ -2355,6 +2355,57 @@ app.post(
   })
 );
 
+app.get(
+  "/api/alexa/skill/prayer-times",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+
+    const profileResult = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, req.skillAuth.userId)
+      .query(`
+        SELECT *
+        FROM dbo.user_profiles
+        WHERE user_id = @user_id
+      `);
+
+    const prayerResult = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, req.skillAuth.userId)
+      .query(`
+        SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to,
+               adhan_reciter_id, after_type, after_payload_json
+        FROM dbo.prayer_configs
+        WHERE user_id = @user_id
+        ORDER BY prayer_name
+      `);
+
+    const profile = profileResult.recordset[0] || null;
+    const prayers = prayerResult.recordset || [];
+
+    if (!profile) {
+      return res.status(404).json({
+        error: "No AdhanCast profile was found for this linked Alexa account.",
+      });
+    }
+
+    const result = await computePrayerTimesForProfile(profile, prayers, new Date());
+
+    res.json({
+      ...result,
+      userContext: {
+        userId: req.skillAuth.userId,
+        timezone: result?.location?.timezone || profile.timezone || "Etc/UTC",
+        city: result?.location?.city || profile.city || null,
+        country: result?.location?.country || profile.country || null,
+      },
+    });
+  })
+);
+
+
+
 // Library
 app.get(
   "/api/library/reciters",
