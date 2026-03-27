@@ -19,6 +19,8 @@ import {
   getAmazonReturnUrl,
 } from "../../lib/amazonLogin";
 
+// Retrigger deploy..delete later if not needed
+
 type AmazonAuthorizeResponse = {
   access_token?: string;
   error?: string;
