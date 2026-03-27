@@ -1,3 +1,6 @@
+//ignore this comment line
+// src/lib/api.ts
+
 function normalizeBase(base: string): string {
   const b = (base || "").trim();
   if (!b) return "";

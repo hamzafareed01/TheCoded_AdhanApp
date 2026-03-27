@@ -27,6 +27,9 @@ import {
   LocateFixed,
 } from "lucide-react";
 
+type Sect = "SUNNI" | "SHIA";
+type SectFilter = "AUTO" | "ALL" | Sect;
+
 type QuietHours = {
   enabled: boolean;
   from: string;
@@ -36,10 +39,9 @@ type QuietHours = {
 
 type UserSettings = {
   userId?: string;
+  sect: Sect;
   language: string;
   madhhab: string;
-  sect?: "SUNNI" | "SHIA";
-  shia: boolean;
   calculationMethod: string;
   highLatitudeMethod: string;
   country: string;
@@ -60,11 +62,12 @@ type Mosque = {
   placeId: string;
   name: string;
   address?: string;
-  sect?: "SUNNI" | "SHIA" | "UNKNOWN";
   location?: {
     lat?: number;
     lng?: number;
   };
+  sect?: "SUNNI" | "SHIA" | "UNKNOWN";
+  sectConfidence?: string;
 };
 
 type MosqueSelectorProps = {
@@ -79,7 +82,9 @@ type SettingsResponse =
       userKey?: string;
     };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -116,27 +121,24 @@ function normalizeSettings(payload: unknown): UserSettings {
   const root = isRecord(payload) ? (payload as SettingsResponse) : {};
   const src =
     isRecord((root as { settings?: unknown }).settings)
-      ? ((root as { settings?: Record<string, unknown> }).settings as Record<
-          string,
-          unknown
-        >)
+      ? ((root as { settings?: Record<string, unknown> }).settings as Record<string, unknown>)
       : (root as Record<string, unknown>);
 
   const quietSource = isRecord(src.quietHours) ? src.quietHours : {};
+  const sect: Sect = src.sect === "SHIA" || src.shia === true ? "SHIA" : "SUNNI";
 
   return {
     userId:
       asString((root as Record<string, unknown>).userKey) ??
       asString(src.userId) ??
       undefined,
+    sect,
     language: asString(src.language) ?? "en",
     madhhab: asString(src.madhhab) ?? "hanafi",
-    sect: (src.sect === "SHIA" ? "SHIA" : "SUNNI"),
-    shia: asBoolean(src.shia) ?? src.sect === "SHIA",
     calculationMethod:
       asString(src.calculationMethod) ??
       asString(src.calculation_method) ??
-      "isna",
+      (sect === "SHIA" ? "jafari" : "isna"),
     highLatitudeMethod:
       asString(src.highLatitudeMethod) ??
       asString(src.high_latitude_method) ??
@@ -165,24 +167,24 @@ function normalizeMosques(payload: unknown): Mosque[] {
   if (!isRecord(payload) || !Array.isArray(payload.mosques)) return [];
 
   return payload.mosques
-    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .filter((item): item is JsonRecord => isRecord(item))
     .map((item) => {
-      const sect: "SUNNI" | "SHIA" | "UNKNOWN" =
-        item.sect === "SHIA" || item.sect === "SUNNI"
-          ? (item.sect as "SHIA" | "SUNNI")
+      const sect: Mosque["sect"] =
+        item.sect === "SUNNI" || item.sect === "SHIA" || item.sect === "UNKNOWN"
+          ? item.sect
           : "UNKNOWN";
-
       return {
         placeId: asString(item.placeId) ?? "",
         name: asString(item.name) ?? "",
         address: asString(item.address) ?? undefined,
         sect,
+        sectConfidence: asString(item.sectConfidence) ?? undefined,
         location: isRecord(item.location)
-          ? {
-              lat: asNumber(item.location.lat) ?? undefined,
-              lng: asNumber(item.location.lng) ?? undefined,
-            }
-          : undefined,
+        ? {
+            lat: asNumber(item.location.lat) ?? undefined,
+            lng: asNumber(item.location.lng) ?? undefined,
+          }
+        : undefined,
       };
     })
     .filter((m) => m.placeId && m.name);
@@ -200,29 +202,24 @@ function norm(s?: string) {
 function isSameLocationQuery(query: string, settings: UserSettings) {
   const q = norm(query);
   const city = norm(settings.city);
-
   if (!q) return true;
   if (q === city) return true;
   if (q.startsWith(`${city},`)) return true;
-
   return false;
 }
 
 function buildDirectionsUrl(mosque: Mosque, settings: UserSettings | null): string {
   const origin =
-    typeof settings?.latitude === "number" &&
-    typeof settings?.longitude === "number"
+    typeof settings?.latitude === "number" && typeof settings?.longitude === "number"
       ? `${settings.latitude},${settings.longitude}`
       : "";
 
   const destinationCoords =
-    typeof mosque.location?.lat === "number" &&
-    typeof mosque.location?.lng === "number"
+    typeof mosque.location?.lat === "number" && typeof mosque.location?.lng === "number"
       ? `${mosque.location.lat},${mosque.location.lng}`
       : "";
 
   const destinationText = mosque.address || mosque.name;
-
   const params = new URLSearchParams();
   params.set("api", "1");
   params.set("travelmode", "driving");
@@ -235,23 +232,26 @@ function buildDirectionsUrl(mosque: Mosque, settings: UserSettings | null): stri
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
-export default function MosqueSelector({
-  onboardingData,
-  setOnboardingData,
-}: MosqueSelectorProps) {
-  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
-    !!getStoredAmazonToken()
-  );
-  const [settings, setSettings] = useState<UserSettings | null>(null);
+function getSectBadgeClass(sect?: string) {
+  if (sect === "SHIA") return "bg-violet-500/15 text-violet-200 border-violet-500/30";
+  if (sect === "SUNNI") return "bg-cyan-500/15 text-cyan-200 border-cyan-500/30";
+  return "bg-slate-800 text-slate-300 border-slate-700";
+}
 
+function getEffectiveSectFilter(filter: SectFilter, settings: UserSettings | null): SectFilter {
+  if (filter !== "AUTO") return filter;
+  return settings?.sect || "SUNNI";
+}
+
+export default function MosqueSelector({ onboardingData, setOnboardingData }: MosqueSelectorProps) {
+  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(!!getStoredAmazonToken());
+  const [settings, setSettings] = useState<UserSettings | null>(null);
   const [mosques, setMosques] = useState<Mosque[]>([]);
   const [mosquesLoading, setMosquesLoading] = useState(false);
   const [mosquesError, setMosquesError] = useState<string | null>(null);
-
   const [searchQuery, setSearchQuery] = useState("");
-  const [sectFilter, setSectFilter] = useState<"AUTO" | "ALL" | "SUNNI" | "SHIA">("AUTO");
   const [selectedMosqueId, setSelectedMosqueId] = useState<string | null>(null);
-
+  const [sectFilter, setSectFilter] = useState<SectFilter>("AUTO");
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -260,6 +260,11 @@ export default function MosqueSelector({
     if (!settings) return "";
     return `${settings.city}, ${settings.country}`;
   }, [settings]);
+
+  const effectiveSect = useMemo(
+    () => getEffectiveSectFilter(sectFilter, settings),
+    [sectFilter, settings]
+  );
 
   const selectedMosque = useMemo(
     () => mosques.find((m) => m.placeId === selectedMosqueId) ?? null,
@@ -283,16 +288,32 @@ export default function MosqueSelector({
 
     const json = await res.json();
     const normalized = normalizeSettings(json);
-
     setSettings(normalized);
     setSelectedMosqueId(normalized.mosqueId ?? null);
-
-    if (!searchQuery.trim()) {
-      setSearchQuery(normalized.city);
-    }
-
+    if (!searchQuery.trim()) setSearchQuery(normalized.city);
     return normalized;
   }
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        if (!hasAmazonToken) {
+          setSettings(null);
+          setError("Please connect Amazon in onboarding step 2 before choosing a mosque.");
+          return;
+        }
+
+        setError(null);
+        const loadedSettings = await refreshSettings();
+        if (loadedSettings.city) setSearchQuery(loadedSettings.city);
+      } catch (err) {
+        console.error(err);
+        setError(err instanceof Error ? err.message : "Unable to load settings from server.");
+      }
+    };
+
+    void load();
+  }, [hasAmazonToken]);
 
   const handleSearchInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -306,9 +327,7 @@ export default function MosqueSelector({
   const fetchMosques = async (queryOverride?: string) => {
     if (!settings) return;
 
-    const rawQuery =
-      queryOverride?.trim() || searchQuery.trim() || settings.city.trim() || "";
-
+    const rawQuery = queryOverride?.trim() || searchQuery.trim() || settings.city.trim() || "";
     if (!rawQuery) {
       setMosquesError("Please enter a city or mosque name.");
       setMosques([]);
@@ -320,20 +339,12 @@ export default function MosqueSelector({
     try {
       setMosquesLoading(true);
       setMosquesError(null);
-
       const params = new URLSearchParams();
       params.set("query", rawQuery);
       params.set("country", settings.country || "US");
       params.set("radiusKm", "25");
       params.set("bias", sameAsOnboarding ? "user" : "none");
-      const effectiveSect = sectFilter === "AUTO"
-        ? settings.shia
-          ? "SHIA"
-          : "SUNNI"
-        : sectFilter;
-      if (effectiveSect !== "ALL") {
-        params.set("sect", effectiveSect);
-      }
+      params.set("sect", effectiveSect);
 
       const res = await apiFetch(`/api/mosques?${params.toString()}`);
       if (!res.ok) {
@@ -343,50 +354,22 @@ export default function MosqueSelector({
 
       const json = await res.json();
       const normalized = normalizeMosques(json);
-
       setMosques(normalized);
-
       if (normalized.length === 0) {
-        setMosquesError("No mosques found for this search.");
+        setMosquesError(
+          effectiveSect === "SHIA"
+            ? "No Shia-focused mosque results matched this search yet. Try a nearby area or a mosque name."
+            : "No mosques found for this search."
+        );
       }
     } catch (err) {
       console.error(err);
-      setMosquesError(
-        err instanceof Error ? err.message : "Unable to load mosques from server."
-      );
+      setMosquesError(err instanceof Error ? err.message : "Unable to load mosques from server.");
       setMosques([]);
     } finally {
       setMosquesLoading(false);
     }
   };
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        if (!hasAmazonToken) {
-          setSettings(null);
-          setError(
-            "Please connect Amazon in onboarding step 2 before choosing a mosque."
-          );
-          return;
-        }
-
-        setError(null);
-        const loadedSettings = await refreshSettings();
-
-        if (loadedSettings.city) {
-          setSearchQuery(loadedSettings.city);
-        }
-      } catch (err) {
-        console.error(err);
-        setError(
-          err instanceof Error ? err.message : "Unable to load settings from server."
-        );
-      }
-    };
-
-    void load();
-  }, [hasAmazonToken]);
 
   const handleSearchClick = async () => {
     await fetchMosques(searchQuery);
@@ -401,17 +384,14 @@ export default function MosqueSelector({
 
   const handleTimingPreferenceChange = async (checked: boolean) => {
     if (!settings) return;
-
     try {
       setSaving(true);
       setError(null);
       setSaveMessage(null);
-
       const res = await apiFetch("/api/user/settings", {
         method: "POST",
         body: JSON.stringify({ useMosqueLocation: checked }),
       });
-
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         throw new Error(text || "Failed to save timing preference");
@@ -430,16 +410,12 @@ export default function MosqueSelector({
       });
       setSaveMessage(
         checked
-          ? "Mosque timing preference saved. Dashboard, Calendar, and Settings will now prefer your mosque timings when coordinates are available."
+          ? "Mosque timing preference saved. Dashboard, Calendar, and Settings now prefer your selected mosque when coordinates exist."
           : "Personal location timing preference saved."
       );
     } catch (err) {
       console.error(err);
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not save timing preference. Please try again."
-      );
+      setError(err instanceof Error ? err.message : "Could not save timing preference.");
     } finally {
       setSaving(false);
     }
@@ -451,7 +427,6 @@ export default function MosqueSelector({
       setSaveMessage(null);
       return;
     }
-
     if (!settings) return;
 
     try {
@@ -466,13 +441,10 @@ export default function MosqueSelector({
               placeId: settings.mosqueId,
               name: settings.mosqueName || "Selected mosque",
               address: settings.mosqueAddress || undefined,
+              sect: "UNKNOWN" as const,
               location:
-                typeof settings.mosqueLat === "number" &&
-                typeof settings.mosqueLng === "number"
-                  ? {
-                      lat: settings.mosqueLat,
-                      lng: settings.mosqueLng,
-                    }
+                typeof settings.mosqueLat === "number" && typeof settings.mosqueLng === "number"
+                  ? { lat: settings.mosqueLat, lng: settings.mosqueLng }
                   : undefined,
             }
           : null);
@@ -490,14 +462,12 @@ export default function MosqueSelector({
         method: "POST",
         body: JSON.stringify(payload),
       });
-
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         throw new Error(text || "Failed to save mosque selection");
       }
 
       const updatedSettings = await refreshSettings();
-
       setOnboardingData({
         ...onboardingData,
         mosque: mosqueToSave
@@ -519,12 +489,12 @@ export default function MosqueSelector({
 
       setSaveMessage(
         updatedSettings.useMosqueLocation
-          ? "Mosque saved. Prayer times across Dashboard, Calendar, and Settings will now follow this mosque."
-          : "Mosque saved. Turn on mosque timing above when you want it to override personal-location timings."
+          ? "Mosque saved. Prayer times across Dashboard, Calendar, and Settings now follow this mosque as the primary source."
+          : "Mosque saved. Turn on mosque timing above whenever you want it to override personal-location timings."
       );
     } catch (err) {
       console.error(err);
-      setError(err instanceof Error ? err.message : "Could not save mosque. Please try again.");
+      setError(err instanceof Error ? err.message : "Could not save mosque.");
     } finally {
       setSaving(false);
     }
@@ -533,12 +503,6 @@ export default function MosqueSelector({
   const currentTimingMode = settings?.useMosqueLocation
     ? settings?.mosqueName || "Mosque timing enabled"
     : "Personal location timing";
-
-  const effectiveSectFilter = sectFilter === "AUTO"
-    ? settings?.shia
-      ? "SHIA"
-      : "SUNNI"
-    : sectFilter;
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -552,9 +516,7 @@ export default function MosqueSelector({
           <div>
             <h1 className="text-white text-xl mb-1">Choose your mosque</h1>
             <p className="text-slate-400 text-sm">
-              Your saved setup location stays as the default source of truth.
-              When mosque timing is enabled, the backend prayer API will prefer
-              the selected mosque coordinates for Dashboard, Calendar, and Alexa.
+              Your saved setup location stays as the fallback source of truth. When mosque timing is enabled, the backend prayer API prefers the selected mosque coordinates for Dashboard, Calendar, Settings, and Alexa.
             </p>
           </div>
 
@@ -574,29 +536,21 @@ export default function MosqueSelector({
                   <Building2 className="w-4 h-4 text-emerald-400" />
                   Saved mosque
                 </div>
-                <div className="text-sm text-slate-300">
-                  {settings.mosqueName || "No mosque selected yet"}
-                </div>
-                <div className="text-xs text-slate-500 mt-1">
-                  {settings.mosqueAddress || "Search and save a mosque below."}
-                </div>
+                <div className="text-sm text-slate-300">{settings.mosqueName || "No mosque selected yet"}</div>
+                <div className="text-xs text-slate-500 mt-1">{settings.mosqueAddress || "Search and save a mosque below."}</div>
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <div className="text-slate-200 mb-2">Use selected mosque for prayer times</div>
-                    <div className="text-xs text-slate-500">
-                      Effective source: {currentTimingMode}
-                    </div>
+                    <div className="text-xs text-slate-500">Effective source: {currentTimingMode}</div>
                   </div>
                   <Switch
                     checked={settings.useMosqueLocation}
                     disabled={saving}
                     onCheckedChange={(checked: boolean) => {
-                      setSettings((prev) =>
-                        prev ? { ...prev, useMosqueLocation: checked } : prev
-                      );
+                      setSettings((prev) => (prev ? { ...prev, useMosqueLocation: checked } : prev));
                       void handleTimingPreferenceChange(checked);
                     }}
                   />
@@ -605,80 +559,66 @@ export default function MosqueSelector({
             </div>
           )}
 
-          {error && (
-            <div className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-md px-3 py-2">
-              {error}
-            </div>
-          )}
-
-          {saveMessage && (
-            <div className="text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-900 rounded-md px-3 py-2">
-              {saveMessage}
-            </div>
-          )}
+          {error && <div className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-md px-3 py-2">{error}</div>}
+          {saveMessage && <div className="text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-900 rounded-md px-3 py-2">{saveMessage}</div>}
 
           {!settings ? (
             <p className="text-slate-400 text-sm">Loading settings…</p>
           ) : (
             <>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <Label className="text-slate-200">Search</Label>
-
-                <div className="flex flex-col md:flex-row gap-3">
+                <div className="flex flex-col gap-3">
                   <Input
                     placeholder="Search by city or mosque name…"
                     value={searchQuery}
                     onChange={handleSearchInputChange}
                     onKeyDown={handleSearchKeyDown}
-                    className="bg-slate-900 border-slate-700 text-slate-100 md:max-w-md"
+                    className="bg-slate-900 border-slate-700 text-slate-100"
                   />
-
-                  <Button
-                    onClick={handleSearchClick}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white md:w-auto"
-                  >
+                  <Button onClick={handleSearchClick} className="bg-emerald-600 hover:bg-emerald-700 text-white">
                     <Search className="w-4 h-4 mr-2" />
                     Search
                   </Button>
                 </div>
+                <p className="text-xs text-slate-500">Current city bias: {onboardingCityLabel}</p>
 
-                <p className="text-xs text-slate-500">
-                  Current city bias: {onboardingCityLabel}
-                </p>
-
-                <div className="flex flex-wrap items-center gap-2 pt-2">
-                  {(["AUTO", "ALL", "SUNNI", "SHIA"] as const).map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setSectFilter(value)}
-                      className={`rounded-full border px-3 py-1 text-xs transition-colors ${sectFilter === value ? "border-emerald-500 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"}`}
-                    >
-                      {value === "AUTO" ? `Auto (${effectiveSectFilter})` : value}
-                    </button>
-                  ))}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {([
+                    { value: "AUTO", label: `Auto (${settings.sect})` },
+                    { value: "ALL", label: "All" },
+                    { value: "SUNNI", label: "Sunni" },
+                    { value: "SHIA", label: "Shia" },
+                  ] as Array<{ value: SectFilter; label: string }>).map((item) => {
+                    const active = sectFilter === item.value;
+                    return (
+                      <button
+                        key={item.value}
+                        type="button"
+                        onClick={() => setSectFilter(item.value)}
+                        className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                          active
+                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
+                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <ScrollArea className="h-[480px] mt-4 pr-2">
-                {mosquesLoading && (
-                  <p className="text-slate-400 text-sm px-1">Loading mosques…</p>
-                )}
-
-                {!mosquesLoading && mosquesError && (
-                  <p className="text-red-400 text-sm px-1">{mosquesError}</p>
-                )}
-
+              <ScrollArea className="h-[500px] mt-2 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3">
+                {mosquesLoading && <p className="text-slate-400 text-sm px-1">Loading mosques…</p>}
+                {!mosquesLoading && mosquesError && <p className="text-red-400 text-sm px-1">{mosquesError}</p>}
                 {!mosquesLoading && !mosquesError && mosques.length === 0 && (
-                  <p className="text-slate-400 text-sm px-1">
-                    Search for a city or mosque name to load results.
-                  </p>
+                  <p className="text-slate-400 text-sm px-1">Search for a city or mosque name to load results.</p>
                 )}
 
                 <div className="space-y-3 mt-2">
                   {mosques.map((mosque) => {
                     const isSelected = mosque.placeId === selectedMosqueId;
-
                     return (
                       <div
                         key={mosque.placeId}
@@ -688,30 +628,24 @@ export default function MosqueSelector({
                             : "border-slate-700 bg-slate-800/60 hover:border-slate-500"
                         }`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMosqueId(mosque.placeId)}
-                          className="flex-1 text-left"
-                        >
+                        <button type="button" onClick={() => setSelectedMosqueId(mosque.placeId)} className="flex-1 text-left">
                           <div>
                             <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              <h3 className="text-white text-sm md:text-base">
-                                {mosque.name}
-                              </h3>
-                              <Badge className={mosque.sect === "SHIA" ? "bg-violet-600/20 text-violet-300 border border-violet-600/30" : mosque.sect === "SUNNI" ? "bg-cyan-600/20 text-cyan-300 border border-cyan-600/30" : "bg-slate-800 text-slate-300 border border-slate-700"}>
-                                {mosque.sect === "UNKNOWN" ? "General" : mosque.sect}
-                              </Badge>
+                              <h3 className="text-white text-sm md:text-base">{mosque.name}</h3>
                               {isSelected && (
-                                <Badge className="bg-emerald-600/20 text-emerald-300 border border-emerald-600/30">
-                                  Selected
-                                </Badge>
+                                <Badge className="bg-emerald-600/20 text-emerald-300 border border-emerald-600/30">Selected</Badge>
                               )}
+                              <Badge className={getSectBadgeClass(mosque.sect)}>
+                                {mosque.sect || "UNKNOWN"}
+                              </Badge>
                             </div>
-
                             <div className="flex items-center gap-2 text-slate-400 text-xs md:text-sm">
                               <MapPin className="w-3 h-3" />
                               <span>{mosque.address || "Address unavailable"}</span>
                             </div>
+                            {mosque.sectConfidence && (
+                              <div className="text-[11px] text-slate-500 mt-2">Sect match: {mosque.sectConfidence}</div>
+                            )}
                           </div>
                         </button>
 
@@ -727,7 +661,6 @@ export default function MosqueSelector({
                           >
                             <Navigation2 className="w-4 h-4" />
                           </button>
-
                           {isSelected && (
                             <div className="flex items-center gap-1 text-emerald-400 text-xs md:text-sm">
                               <CheckCircle2 className="w-4 h-4" />
@@ -741,12 +674,8 @@ export default function MosqueSelector({
                 </div>
               </ScrollArea>
 
-              <div className="flex justify-end pt-4">
-                <Button
-                  onClick={handleSave}
-                  disabled={saving || !selectedMosqueId}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
-                >
+              <div className="flex justify-end pt-2">
+                <Button onClick={handleSave} disabled={saving || !selectedMosqueId} className="bg-emerald-600 hover:bg-emerald-700 text-white">
                   {saving ? "Saving…" : "Save mosque"}
                 </Button>
               </div>
