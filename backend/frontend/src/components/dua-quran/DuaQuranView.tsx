@@ -205,19 +205,7 @@ export default function DuaQuranView() {
   const singleAyahAudioRef = useRef<HTMLAudioElement | null>(null);
   const playbackSessionRef = useRef(0);
 
-  useEffect(() => {
-    const prevHtmlOverflow = document.documentElement.style.overflow;
-    const prevBodyOverflow = document.body.style.overflow;
-
-    document.documentElement.style.overflow = "hidden";
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.documentElement.style.overflow = prevHtmlOverflow;
-      document.body.style.overflow = prevBodyOverflow;
-    };
-  }, []);
-
+  
   useEffect(() => {
     return () => {
       stopSurahPlayback();
@@ -441,9 +429,9 @@ export default function DuaQuranView() {
   );
 
   return (
-    <div className="fixed inset-0 bg-slate-950 overflow-hidden">
-      <div className="h-full w-full py-6 px-4 md:px-8">
-        <div className="max-w-7xl mx-auto h-full flex flex-col min-h-0">
+    <div className="min-h-screen bg-slate-950">
+      <div className="w-full py-6 px-4 md:px-8">
+        <div className="max-w-7xl mx-auto flex flex-col">
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4 shrink-0">
             <Logo />
             <Navigation />
@@ -464,7 +452,7 @@ export default function DuaQuranView() {
             </div>
           )}
 
-          <div className="grid lg:grid-cols-2 gap-6 flex-1 min-h-0">
+          <div className="grid lg:grid-cols-2 gap-6 min-h-0">
             <section className="flex flex-col min-h-0">
               <div className="shrink-0">
                 <div className="flex items-center gap-2 mb-2">
@@ -492,7 +480,7 @@ export default function DuaQuranView() {
                 )}
               </div>
 
-              <div className="flex-1 min-h-0 rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden">
+              <div className="rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden lg:h-[72vh]">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
                   {filteredDuas.map((dua) => (
                     <div
@@ -590,7 +578,7 @@ export default function DuaQuranView() {
                 )}
               </div>
 
-              <div className="flex-1 min-h-0 rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden">
+              <div className="rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden lg:h-[72vh]">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
                   {loadingSurahs && (
                     <p className="text-slate-400 text-sm">Loading surahs…</p>

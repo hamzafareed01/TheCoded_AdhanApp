@@ -73,7 +73,7 @@ function getDefaultOnboardingState(): OnboardingState {
       country: "US",
       city: "",
       timezone: "",
-      useMosqueLocation: true,
+      useMosqueLocation: false,
     },
     prayerSettings: {},
     devices: [],
@@ -103,9 +103,9 @@ function readStoredOnboardingState(): OnboardingState {
         ? parsed.connectedPlatforms.filter((x): x is string => typeof x === "string")
         : base.connectedPlatforms,
       tokens: isRecord(parsed.tokens)
-        ? Object.fromEntries(
+        ? (Object.fromEntries(
             Object.entries(parsed.tokens).filter(([, v]) => typeof v === "string")
-          )
+          ) as Record<string, string>)
         : base.tokens,
       location: {
         country: asString(location.country) ?? base.location.country,
@@ -199,6 +199,8 @@ export default function RootShell({ user }: RootShellProps) {
               settings.highLatitudeMethod ?? prev.prayerSettings.highLatitudeMode,
             highLatitudeMethod:
               settings.highLatitudeMethod ?? prev.prayerSettings.highLatitudeMethod,
+            method:
+              settings.calculationMethod ?? prev.prayerSettings.method,
             offsets: settings.globalOffsets ?? prev.prayerSettings.offsets,
           },
           prayerConfigs: Array.isArray(settings.prayerConfigs)

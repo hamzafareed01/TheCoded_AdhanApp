@@ -1572,6 +1572,30 @@ async function googlePlacesPost(endpoint, body, fieldMask) {
   return resp.json();
 }
 
+
+function inferMosqueSect(placeLike) {
+  const haystack = `${String(placeLike?.displayName?.text || placeLike?.displayName || placeLike?.name || "")} ${String(placeLike?.formattedAddress || "")}`.toLowerCase();
+  const shiaTerms = [
+    "shia",
+    "shi'a",
+    "jaffari",
+    "jafari",
+    "imam ali",
+    "imam hussein",
+    "imam hussain",
+    "ahlulbayt",
+    "ahl ul bayt",
+    "imambargah",
+    "imambara",
+    "hussainia",
+    "husayniya",
+  ];
+  const sunniTerms = ["sunni", "hanafi", "shafi", "deobandi", "barelvi", "salafi"];
+  if (shiaTerms.some((term) => haystack.includes(term))) return "SHIA";
+  if (sunniTerms.some((term) => haystack.includes(term))) return "SUNNI";
+  return "UNKNOWN";
+}
+
 function normalizePlace(place) {
   const displayName =
     place?.displayName?.text ||
@@ -1589,6 +1613,7 @@ function normalizePlace(place) {
     placeId: placeId || null,
     name: displayName,
     address: place?.formattedAddress || null,
+    sect: inferMosqueSect(place),
     location:
       typeof place?.location?.latitude === "number" &&
         typeof place?.location?.longitude === "number"
@@ -2299,6 +2324,46 @@ app.get(
   })
 );
 
+app.get(
+  "/api/alexa/skill/prayer-times",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const userId = req.skillAuth.userId;
+
+    const profileResult = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        SELECT *
+        FROM dbo.user_profiles
+        WHERE user_id = @user_id
+      `);
+
+    const prayerResult = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to, adhan_reciter_id, after_type, after_payload_json
+        FROM dbo.prayer_configs
+        WHERE user_id = @user_id
+        ORDER BY prayer_name
+      `);
+
+    const profile = profileResult.recordset[0] || null;
+    const prayers = prayerResult.recordset || [];
+
+    if (!profile) {
+      return res.status(404).json({
+        error: "No user profile found for linked Alexa account.",
+      });
+    }
+
+    const result = await computePrayerTimesForProfile(profile, prayers, new Date());
+    res.json(result);
+  })
+);
+
 app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
@@ -2355,54 +2420,6 @@ app.post(
   })
 );
 
-app.get(
-  "/api/alexa/skill/prayer-times",
-  requireAlexaSkillAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-
-    const profileResult = await pool
-      .request()
-      .input("user_id", sql.UniqueIdentifier, req.skillAuth.userId)
-      .query(`
-        SELECT *
-        FROM dbo.user_profiles
-        WHERE user_id = @user_id
-      `);
-
-    const prayerResult = await pool
-      .request()
-      .input("user_id", sql.UniqueIdentifier, req.skillAuth.userId)
-      .query(`
-        SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to,
-               adhan_reciter_id, after_type, after_payload_json
-        FROM dbo.prayer_configs
-        WHERE user_id = @user_id
-        ORDER BY prayer_name
-      `);
-
-    const profile = profileResult.recordset[0] || null;
-    const prayers = prayerResult.recordset || [];
-
-    if (!profile) {
-      return res.status(404).json({
-        error: "No AdhanCast profile was found for this linked Alexa account.",
-      });
-    }
-
-    const result = await computePrayerTimesForProfile(profile, prayers, new Date());
-
-    res.json({
-      ...result,
-      userContext: {
-        userId: req.skillAuth.userId,
-        timezone: result?.location?.timezone || profile.timezone || "Etc/UTC",
-        city: result?.location?.city || profile.city || null,
-        country: result?.location?.country || profile.country || null,
-      },
-    });
-  })
-);
 
 
 
@@ -2442,6 +2459,7 @@ app.get(
     );
     const regionCode = getRegionCode(country);
     const rawQuery = normalizeQueryText(req.query.query || profile.city || "");
+    const requestedSect = String(req.query.sect || "").trim().toUpperCase();
     const bias = String(req.query.bias || "user").trim().toLowerCase();
     const radiusKm = clampNumber(req.query.radiusKm, 1, 50, 25);
     const radiusMeters = radiusKm * 1000;
@@ -2502,18 +2520,25 @@ app.get(
       );
     }
 
-    const mosques = dedupeMosques(
+    const normalizedMosques = dedupeMosques(
       Array.isArray(placesJson?.places)
         ? placesJson.places
-          .map(normalizePlace)
-          .filter((m) => m.placeId && m.name)
+            .map(normalizePlace)
+            .filter((m) => m.placeId && m.name)
         : []
     );
+
+    const mosques = normalizedMosques.filter((m) => {
+      if (requestedSect === "SHIA") return m.sect === "SHIA";
+      if (requestedSect === "SUNNI") return m.sect !== "SHIA";
+      return true;
+    });
 
     res.json({
       query: rawQuery,
       country,
       source,
+      sect: requestedSect || null,
       mosques,
     });
   })
