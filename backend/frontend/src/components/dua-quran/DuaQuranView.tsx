@@ -429,9 +429,9 @@ export default function DuaQuranView() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-950">
-      <div className="w-full py-6 px-4 md:px-8">
-        <div className="max-w-7xl mx-auto flex flex-col">
+    <div className="h-screen overflow-hidden bg-slate-950">
+      <div className="w-full h-full py-4 px-4 md:px-8">
+        <div className="max-w-7xl mx-auto h-full flex flex-col">
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4 shrink-0">
             <Logo />
             <Navigation />
@@ -452,7 +452,7 @@ export default function DuaQuranView() {
             </div>
           )}
 
-          <div className="grid lg:grid-cols-2 gap-6 min-h-0">
+          <div className="grid lg:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
             <section className="flex flex-col min-h-0">
               <div className="shrink-0">
                 <div className="flex items-center gap-2 mb-2">
@@ -480,7 +480,7 @@ export default function DuaQuranView() {
                 )}
               </div>
 
-              <div className="rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden lg:h-[72vh]">
+              <div className="rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden h-[calc(100vh-270px)] lg:h-full">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
                   {filteredDuas.map((dua) => (
                     <div
@@ -578,7 +578,7 @@ export default function DuaQuranView() {
                 )}
               </div>
 
-              <div className="rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden lg:h-[72vh]">
+              <div className="rounded-2xl bg-slate-900/40 border border-slate-800 overflow-hidden h-[calc(100vh-270px)] lg:h-full">
                 <div className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-4 space-y-4">
                   {loadingSurahs && (
                     <p className="text-slate-400 text-sm">Loading surahs…</p>

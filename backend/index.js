@@ -265,6 +265,67 @@ function normalizeMosqueSearchText(query, countryValue) {
   return `mosques in ${q}, ${countryText}`;
 }
 
+function normalizeSectFilter(value, fallback = "ALL") {
+  const raw = String(value || "").trim().toUpperCase();
+  if (raw === "SHIA" || raw === "SUNNI" || raw === "ALL") return raw;
+  if (raw === "AUTO") return fallback;
+  return fallback;
+}
+
+function buildMosqueSearchQueries(query, countryValue, requestedSect) {
+  const base = normalizeMosqueSearchText(query, countryValue);
+  if (requestedSect === "SHIA") {
+    return dedupeStrings([
+      `shia mosque in ${query}, ${countryLabel(countryValue, "")}`,
+      `jafari mosque in ${query}, ${countryLabel(countryValue, "")}`,
+      `imambargah in ${query}, ${countryLabel(countryValue, "")}`,
+      `ahlulbayt mosque in ${query}, ${countryLabel(countryValue, "")}`,
+      base,
+    ]);
+  }
+
+  if (requestedSect === "SUNNI") {
+    return dedupeStrings([
+      `sunni mosque in ${query}, ${countryLabel(countryValue, "")}`,
+      base,
+    ]);
+  }
+
+  return [base];
+}
+
+function inferMosqueSectFromText(parts) {
+  const haystack = parts.map((part) => String(part || "").toLowerCase()).join(" ");
+  if (!haystack) return "UNKNOWN";
+
+  const shiaSignals = [
+    /shia/,
+    /jafari/,
+    /imambargah/,
+    /imam bargah/,
+    /ahlulbayt/,
+    /ahl ul bayt/,
+    /imam ali/,
+    /karbala/,
+    /hussain/,
+    /husain/,
+  ];
+  const sunniSignals = [/sunni/, /ahlus sunnah/, /ahl al sunnah/];
+
+  if (shiaSignals.some((pattern) => pattern.test(haystack))) return "SHIA";
+  if (sunniSignals.some((pattern) => pattern.test(haystack))) return "SUNNI";
+  return "UNKNOWN";
+}
+
+function getSectConfidence(requestedSect, inferredSect) {
+  if (!requestedSect || requestedSect === "ALL") {
+    return inferredSect === "UNKNOWN" ? "generic" : "inferred";
+  }
+  if (inferredSect === requestedSect) return "match";
+  if (inferredSect === "UNKNOWN") return "generic";
+  return "mismatch";
+}
+
 
 const AMAZON_OAUTH_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
 const AMAZON_OAUTH_TOKEN_URL = "https://api.amazon.com/auth/o2/token";
@@ -1153,14 +1214,14 @@ function parseOffsetsFromBody(body, fallback) {
 function mapCalcMethodToAlAdhan(method, sect) {
   const m = String(method || "").toLowerCase();
 
-  if (String(sect || "").toUpperCase() === "SHIA") return 0; // Jafari
+  if (m.includes("jafari")) return 0;
   if (m.includes("karachi")) return 1;
   if (m.includes("isna")) return 2;
   if (m.includes("mwl")) return 3;
-  if (m.includes("umm")) return 4;
-  if (m.includes("makkah")) return 4;
+  if (m.includes("umm al qura") || m.includes("ummalqura") || m.includes("umm") || m.includes("makkah")) return 4;
   if (m.includes("egypt")) return 5;
   if (m.includes("tehran")) return 7;
+  if (String(sect || "").toUpperCase() === "SHIA") return 0;
 
   return 2; // ISNA
 }
@@ -1572,31 +1633,7 @@ async function googlePlacesPost(endpoint, body, fieldMask) {
   return resp.json();
 }
 
-
-function inferMosqueSect(placeLike) {
-  const haystack = `${String(placeLike?.displayName?.text || placeLike?.displayName || placeLike?.name || "")} ${String(placeLike?.formattedAddress || "")}`.toLowerCase();
-  const shiaTerms = [
-    "shia",
-    "shi'a",
-    "jaffari",
-    "jafari",
-    "imam ali",
-    "imam hussein",
-    "imam hussain",
-    "ahlulbayt",
-    "ahl ul bayt",
-    "imambargah",
-    "imambara",
-    "hussainia",
-    "husayniya",
-  ];
-  const sunniTerms = ["sunni", "hanafi", "shafi", "deobandi", "barelvi", "salafi"];
-  if (shiaTerms.some((term) => haystack.includes(term))) return "SHIA";
-  if (sunniTerms.some((term) => haystack.includes(term))) return "SUNNI";
-  return "UNKNOWN";
-}
-
-function normalizePlace(place) {
+function normalizePlace(place, requestedSect = "ALL") {
   const displayName =
     place?.displayName?.text ||
     place?.displayName ||
@@ -1609,18 +1646,22 @@ function normalizePlace(place) {
       ? place.name.replace(/^places\//, "")
       : null);
 
+  const address = place?.formattedAddress || null;
+  const inferredSect = inferMosqueSectFromText([displayName, address]);
+
   return {
     placeId: placeId || null,
     name: displayName,
-    address: place?.formattedAddress || null,
-    sect: inferMosqueSect(place),
+    address,
+    sect: inferredSect,
+    sectConfidence: getSectConfidence(requestedSect, inferredSect),
     location:
       typeof place?.location?.latitude === "number" &&
-        typeof place?.location?.longitude === "number"
+      typeof place?.location?.longitude === "number"
         ? {
-          lat: place.location.latitude,
-          lng: place.location.longitude,
-        }
+            lat: place.location.latitude,
+            lng: place.location.longitude,
+          }
         : null,
   };
 }
@@ -1664,6 +1705,48 @@ app.get(
 app.get(
   "/api/geocode",
   asyncHandler(async (req, res) => {
+    const apiKey = process.env.OPENCAGE_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "OPENCAGE_API_KEY is not configured" });
+    }
+
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      const url =
+        `https://api.opencagedata.com/geocode/v1/json` +
+        `?q=${encodeURIComponent(`${lat},${lng}`)}` +
+        `&key=${encodeURIComponent(apiKey)}` +
+        `&limit=1&no_annotations=0`;
+
+      const upstream = await fetchWithTimeout(url);
+      if (!upstream.ok) {
+        const text = await upstream.text().catch(() => "");
+        return res.status(502).json({
+          error: `Reverse geocoding upstream failed (${upstream.status}) ${text}`.trim(),
+        });
+      }
+
+      const data = await upstream.json();
+      const first = data?.results?.[0];
+      const components = first?.components || {};
+      const city = components.city || components.town || components.village || components.county || null;
+      const countryCode = String(components.country_code || "").toUpperCase() || null;
+      const country = components.country || countryCode || null;
+      const timezone = first?.annotations?.timezone?.name || "Etc/UTC";
+
+      return res.json({
+        lat,
+        lng,
+        city,
+        country,
+        countryCode,
+        timezone,
+        formatted: first?.formatted || null,
+      });
+    }
+
     const query = normalizeQueryText(req.query.query || req.query.city || "");
     const country = normalizeStoredCountry(
       req.query.country || req.query.countryCode || "US",
@@ -1672,11 +1755,6 @@ app.get(
 
     if (!query) {
       return res.status(400).json({ error: "city or query is required" });
-    }
-
-    const apiKey = process.env.OPENCAGE_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: "OPENCAGE_API_KEY is not configured" });
     }
 
     const geocodeText = buildGeocodeQuery(query, country);
@@ -1703,16 +1781,18 @@ app.get(
       });
     }
 
-    const lat = first.geometry.lat;
-    const lng = first.geometry.lng;
+    const outLat = first.geometry.lat;
+    const outLng = first.geometry.lng;
     const timezone = first?.annotations?.timezone?.name || "Etc/UTC";
 
     res.json({
-      lat,
-      lng,
+      lat: outLat,
+      lng: outLng,
       timezone,
       formatted: first.formatted || null,
       country,
+      countryCode: getRegionCode(country) || null,
+      city: query,
       query,
     });
   })
@@ -2324,46 +2404,6 @@ app.get(
   })
 );
 
-app.get(
-  "/api/alexa/skill/prayer-times",
-  requireAlexaSkillAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const userId = req.skillAuth.userId;
-
-    const profileResult = await pool
-      .request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`
-        SELECT *
-        FROM dbo.user_profiles
-        WHERE user_id = @user_id
-      `);
-
-    const prayerResult = await pool
-      .request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`
-        SELECT prayer_name, enabled, offset_min, quiet_enabled, quiet_from, quiet_to, adhan_reciter_id, after_type, after_payload_json
-        FROM dbo.prayer_configs
-        WHERE user_id = @user_id
-        ORDER BY prayer_name
-      `);
-
-    const profile = profileResult.recordset[0] || null;
-    const prayers = prayerResult.recordset || [];
-
-    if (!profile) {
-      return res.status(404).json({
-        error: "No user profile found for linked Alexa account.",
-      });
-    }
-
-    const result = await computePrayerTimesForProfile(profile, prayers, new Date());
-    res.json(result);
-  })
-);
-
 app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
@@ -2420,9 +2460,6 @@ app.post(
   })
 );
 
-
-
-
 // Library
 app.get(
   "/api/library/reciters",
@@ -2459,10 +2496,13 @@ app.get(
     );
     const regionCode = getRegionCode(country);
     const rawQuery = normalizeQueryText(req.query.query || profile.city || "");
-    const requestedSect = String(req.query.sect || "").trim().toUpperCase();
     const bias = String(req.query.bias || "user").trim().toLowerCase();
     const radiusKm = clampNumber(req.query.radiusKm, 1, 50, 25);
     const radiusMeters = radiusKm * 1000;
+    const requestedSect = normalizeSectFilter(
+      req.query.sect,
+      String(profile.sect || "SUNNI").toUpperCase() === "SHIA" ? "SHIA" : "SUNNI"
+    );
 
     const hasUserCoords =
       typeof profile.latitude === "number" &&
@@ -2470,12 +2510,12 @@ app.get(
       typeof profile.longitude === "number" &&
       Number.isFinite(profile.longitude);
 
+    const collectedPlaces = [];
     let source = "text";
-    let placesJson = null;
 
     if (bias === "user" && hasUserCoords) {
       source = "nearby";
-      placesJson = await googlePlacesPost(
+      const nearby = await googlePlacesPost(
         "/places:searchNearby",
         {
           includedTypes: ["mosque"],
@@ -2492,53 +2532,54 @@ app.get(
           },
         },
         "places.id,places.name,places.displayName,places.formattedAddress,places.location"
-      );
+      ).catch(() => null);
+
+      if (Array.isArray(nearby?.places)) {
+        collectedPlaces.push(...nearby.places);
+      }
     }
 
-    if (
-      !placesJson ||
-      !Array.isArray(placesJson.places) ||
-      placesJson.places.length === 0
-    ) {
-      source = source === "nearby" ? "text-fallback" : "text";
-
+    const searchQueries = buildMosqueSearchQueries(rawQuery, country, requestedSect);
+    for (const searchText of searchQueries) {
       const textBody = {
-        textQuery: normalizeMosqueSearchText(rawQuery, country),
+        textQuery: searchText,
         includedType: "mosque",
         strictTypeFiltering: true,
-        maxResultCount: 20,
+        maxResultCount: requestedSect === "SHIA" ? 20 : 15,
       };
 
       if (regionCode) {
         textBody.regionCode = regionCode;
       }
 
-      placesJson = await googlePlacesPost(
+      const placesJson = await googlePlacesPost(
         "/places:searchText",
         textBody,
         "places.id,places.name,places.displayName,places.formattedAddress,places.location"
-      );
+      ).catch(() => null);
+
+      if (Array.isArray(placesJson?.places)) {
+        collectedPlaces.push(...placesJson.places);
+      }
     }
 
-    const normalizedMosques = dedupeMosques(
-      Array.isArray(placesJson?.places)
-        ? placesJson.places
-            .map(normalizePlace)
-            .filter((m) => m.placeId && m.name)
-        : []
-    );
-
-    const mosques = normalizedMosques.filter((m) => {
-      if (requestedSect === "SHIA") return m.sect === "SHIA";
-      if (requestedSect === "SUNNI") return m.sect !== "SHIA";
-      return true;
+    const mosques = dedupeMosques(
+      collectedPlaces
+        .map((place) => normalizePlace(place, requestedSect))
+        .filter((m) => m.placeId && m.name)
+    ).sort((a, b) => {
+      const rank = { match: 0, inferred: 1, generic: 2, mismatch: 3 };
+      const aRank = rank[a.sectConfidence || "generic"] ?? 2;
+      const bRank = rank[b.sectConfidence || "generic"] ?? 2;
+      if (aRank !== bRank) return aRank - bRank;
+      return String(a.name || "").localeCompare(String(b.name || ""));
     });
 
     res.json({
       query: rawQuery,
       country,
       source,
-      sect: requestedSect || null,
+      requestedSect,
       mosques,
     });
   })

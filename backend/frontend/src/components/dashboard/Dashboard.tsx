@@ -633,10 +633,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
   const timingSourceLabel = describeTimingSource(todayData, userSettings);
   const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
-  const sectLabel = titleCase(todayData?.method?.sect || userSettings?.sect || "SUNNI");
-  const madhhabLabel = titleCase(todayData?.method?.madhhab || userSettings?.madhhab || "hanafi");
+  const effectiveSect = String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase();
+  const sectLabel = titleCase(effectiveSect);
+  const madhhabLabel =
+    effectiveSect === "SHIA"
+      ? "Shia timing mode"
+      : titleCase(todayData?.method?.madhhab || userSettings?.madhhab || "hanafi");
   const calcLabel = titleCase(
-    todayData?.method?.calculationMethod || userSettings?.calculationMethod || "isna"
+    todayData?.method?.calculationMethod || userSettings?.calculationMethod || (effectiveSect === "SHIA" ? "jafari" : "isna")
   );
 
   if (!hasAmazonToken) {
