@@ -20,6 +20,7 @@ import {
   MoonStar,
   MapPin,
   Clock3,
+  BookOpen,
 } from "lucide-react";
 
 const PRAYER_ORDER = [
@@ -137,6 +138,18 @@ type Device = {
   platform?: string;
 };
 
+type HadithShape = {
+  id: string;
+  sect: "SUNNI" | "SHIA";
+  title: string;
+  reference: string;
+  narrator?: string | null;
+  textEnglish: string;
+  textArabic?: string | null;
+  source?: string | null;
+  dateKey?: string;
+};
+
 type DashboardProps = {
   onboardingData: Record<string, unknown>;
   user?: AppUser | null;
@@ -217,13 +230,13 @@ function normalizeToday(payload: unknown): TodayShape | null {
   return {
     location: location
       ? {
-          city: asString(location.city),
-          country: asString(location.country),
-          timezone: asString(location.timezone),
-          latitude: asNumber(location.latitude),
-          longitude: asNumber(location.longitude),
-          label: asString(location.label),
-        }
+        city: asString(location.city),
+        country: asString(location.country),
+        timezone: asString(location.timezone),
+        latitude: asNumber(location.latitude),
+        longitude: asNumber(location.longitude),
+        label: asString(location.label),
+      }
       : undefined,
     prayers12: isObject(src.prayers12) ? (src.prayers12 as PrayerMap) : undefined,
     prayers24: isObject(src.prayers24) ? (src.prayers24 as PrayerMap) : undefined,
@@ -233,25 +246,25 @@ function normalizeToday(payload: unknown): TodayShape | null {
     source: asString(src.source),
     sourceDetail: isObject(src.sourceDetail)
       ? {
-          preferred: asString(src.sourceDetail.preferred),
-          actual: asString(src.sourceDetail.actual),
-          useMosqueLocation:
-            typeof src.sourceDetail.useMosqueLocation === "boolean"
-              ? src.sourceDetail.useMosqueLocation
-              : undefined,
-          label: asString(src.sourceDetail.label),
-          fallbackReason:
-            typeof src.sourceDetail.fallbackReason === "string"
-              ? src.sourceDetail.fallbackReason
-              : null,
-        }
+        preferred: asString(src.sourceDetail.preferred),
+        actual: asString(src.sourceDetail.actual),
+        useMosqueLocation:
+          typeof src.sourceDetail.useMosqueLocation === "boolean"
+            ? src.sourceDetail.useMosqueLocation
+            : undefined,
+        label: asString(src.sourceDetail.label),
+        fallbackReason:
+          typeof src.sourceDetail.fallbackReason === "string"
+            ? src.sourceDetail.fallbackReason
+            : null,
+      }
       : undefined,
     method: method
       ? {
-          sect: asString(method.sect),
-          calculationMethod: asString(method.calculationMethod),
-          madhhab: asString(method.madhhab),
-        }
+        sect: asString(method.sect),
+        calculationMethod: asString(method.calculationMethod),
+        madhhab: asString(method.madhhab),
+      }
       : undefined,
     date: src.date,
     meta: src.meta,
@@ -272,8 +285,8 @@ function normalizeDevices(payload: unknown): Device[] {
   const list = Array.isArray(payload)
     ? payload
     : isObject(payload) && Array.isArray(payload.devices)
-    ? payload.devices
-    : [];
+      ? payload.devices
+      : [];
 
   return list
     .filter((item): item is JsonObject => isObject(item))
@@ -283,6 +296,31 @@ function normalizeDevices(payload: unknown): Device[] {
       platform: typeof item.platform === "string" ? item.platform : undefined,
     }))
     .filter((item) => item.id && item.name);
+}
+function normalizeHadith(payload: unknown): HadithShape | null {
+  if (!isObject(payload)) return null;
+
+  const sect =
+    String(payload.sect || "").trim().toUpperCase() === "SHIA"
+      ? "SHIA"
+      : "SUNNI";
+
+  const textEnglish =
+    asString(payload.textEnglish) || asString(payload.text) || undefined;
+
+  if (!textEnglish) return null;
+
+  return {
+    id: asString(payload.id) || `${sect.toLowerCase()}-hadith`,
+    sect,
+    title: asString(payload.title) || "Hadith of the Day",
+    reference: asString(payload.reference) || "Reference unavailable",
+    narrator: asString(payload.narrator) || null,
+    textEnglish,
+    textArabic: asString(payload.textArabic) || null,
+    source: asString(payload.source) || null,
+    dateKey: asString(payload.dateKey),
+  };
 }
 
 function parsePrayerTimeToSeconds(timeStr: string): number | null {
@@ -368,8 +406,8 @@ function getConnectedPlatforms(
 ): string[] {
   const fromOnboarding = Array.isArray(onboardingData.connectedPlatforms)
     ? onboardingData.connectedPlatforms.filter(
-        (x): x is string => typeof x === "string"
-      )
+      (x): x is string => typeof x === "string"
+    )
     : [];
 
   const fromLocal = safeReadJson<string[]>("adhan_connected_platforms", []);
@@ -391,7 +429,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
     !!getStoredAmazonToken()
   );
-
+  const [hadithOfDay, setHadithOfDay] = useState<HadithShape | null>(null);
+  const [loadingHadith, setLoadingHadith] = useState(true);
+  const [hadithError, setHadithError] = useState<string | null>(null);
   const [todayData, setTodayData] = useState<TodayShape | null>(null);
   const [loadingToday, setLoadingToday] = useState(true);
   const [todayError, setTodayError] = useState<string | null>(null);
@@ -619,17 +659,17 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const locationLabel = todayData?.location?.label
     ? todayData.location.label
     : todayData?.location?.city
-    ? `${todayData.location.city}${todayData.location.country ? `, ${todayData.location.country}` : ""}`
-    : userSettings?.city
-    ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
-    : "";
+      ? `${todayData.location.city}${todayData.location.country ? `, ${todayData.location.country}` : ""}`
+      : userSettings?.city
+        ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
+        : "";
 
   const locationCoords =
     todayData?.location?.latitude != null && todayData?.location?.longitude != null
       ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
       : userSettings?.latitude != null && userSettings?.longitude != null
-      ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
-      : null;
+        ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
+        : null;
 
   const timingSourceLabel = describeTimingSource(todayData, userSettings);
   const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
@@ -642,6 +682,67 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const calcLabel = titleCase(
     todayData?.method?.calculationMethod || userSettings?.calculationMethod || (effectiveSect === "SHIA" ? "jafari" : "isna")
   );
+  const hadithSect: "SUNNI" | "SHIA" =
+    String(todayData?.method?.sect || userSettings?.sect || "SUNNI")
+      .toUpperCase() === "SHIA"
+      ? "SHIA"
+      : "SUNNI";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadHadith() {
+      if (!hasAmazonToken) {
+        setHadithOfDay(null);
+        setHadithError("Please connect Amazon to load the daily hadith.");
+        setLoadingHadith(false);
+        return;
+      }
+
+      try {
+        setLoadingHadith(true);
+        setHadithError(null);
+
+        const res = await apiFetch(
+          `/api/hadith-of-day?sect=${encodeURIComponent(hadithSect)}`
+        );
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
+          }
+          throw new Error(`Hadith request failed (${res.status})`);
+        }
+
+        const payload = normalizeHadith(await res.json());
+        if (!payload) {
+          throw new Error("Invalid hadith payload.");
+        }
+
+        if (!cancelled) {
+          setHadithOfDay(payload);
+        }
+      } catch (err) {
+        console.error("Failed to load hadith of the day:", err);
+        if (!cancelled) {
+          setHadithOfDay(null);
+          setHadithError(
+            err instanceof Error ? err.message : "Could not load hadith of the day."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingHadith(false);
+        }
+      }
+    }
+
+    void loadHadith();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasAmazonToken, hadithSect]);
 
   if (!hasAmazonToken) {
     return (
@@ -744,6 +845,54 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
         <div className="grid lg:grid-cols-2 gap-6">
           <div className="space-y-6">
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-5 h-5 text-emerald-400" />
+                  <h2 className="text-white">Hadith of the Day</h2>
+                </div>
+
+                <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
+                  {hadithSect === "SHIA" ? "Shia" : "Sunni"}
+                </Badge>
+              </div>
+
+              {loadingHadith ? (
+                <p className="text-slate-400">Loading hadith…</p>
+              ) : hadithError ? (
+                <p className="text-amber-400">{hadithError}</p>
+              ) : hadithOfDay ? (
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-emerald-300 text-sm font-medium mb-1">
+                      {hadithOfDay.title}
+                    </div>
+                    <div className="text-slate-500 text-xs">
+                      {hadithOfDay.reference}
+                      {hadithOfDay.narrator ? ` · ${hadithOfDay.narrator}` : ""}
+                    </div>
+                  </div>
+
+                  {hadithOfDay.textArabic ? (
+                    <p className="text-right text-slate-100 text-xl leading-9">
+                      {hadithOfDay.textArabic}
+                    </p>
+                  ) : null}
+
+                  <p className="text-slate-300 leading-7">{hadithOfDay.textEnglish}</p>
+
+                  {hadithOfDay.source ? (
+                    <p className="text-slate-500 text-xs">
+                      Source: {hadithOfDay.source}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-slate-400">No hadith available right now.</p>
+              )}
+            </div>
+
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <h2 className="text-white mb-4">Next Prayer</h2>
               {loadingToday ? (

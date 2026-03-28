@@ -46,6 +46,171 @@ const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
 const UPSTREAM_TIMEOUT_MS = 15000;
 
+const HADITH_OF_DAY_CACHE = new Map();
+
+const SUNNI_HADITH_POOL = [
+  {
+    id: "sunni-1",
+    title: "Mercy to Others",
+    reference: "Jami' al-Tirmidhi 1924",
+    narrator: "Abdullah ibn Amr (RA)",
+    textEnglish:
+      "The merciful are shown mercy by the Most Merciful. Be merciful to those on earth and the One above the heavens will be merciful to you.",
+    textArabic: null,
+  },
+  {
+    id: "sunni-2",
+    title: "Purity of the Heart",
+    reference: "Sahih Muslim 2564",
+    narrator: "Abu Hurairah (RA)",
+    textEnglish:
+      "Allah does not look at your bodies or your appearance. He looks at your hearts and your deeds.",
+    textArabic: null,
+  },
+  {
+    id: "sunni-3",
+    title: "Love for Others",
+    reference: "Sahih al-Bukhari 13 / Sahih Muslim 45",
+    narrator: "Anas ibn Malik (RA)",
+    textEnglish:
+      "None of you truly believes until he loves for his brother what he loves for himself.",
+    textArabic: null,
+  },
+  {
+    id: "sunni-4",
+    title: "Speak Good or Stay Silent",
+    reference: "Sahih al-Bukhari 6018 / Sahih Muslim 47",
+    narrator: "Abu Hurairah (RA)",
+    textEnglish:
+      "Whoever believes in Allah and the Last Day should speak good or remain silent.",
+    textArabic: null,
+  },
+  {
+    id: "sunni-5",
+    title: "Controlling Anger",
+    reference: "Sahih al-Bukhari 6114 / Sahih Muslim 2609",
+    narrator: "Abu Hurairah (RA)",
+    textEnglish:
+      "The strong person is not the one who overpowers others. The strong person is the one who controls himself when angry.",
+    textArabic: null,
+  },
+  {
+    id: "sunni-6",
+    title: "Ease for Others",
+    reference: "Sahih Muslim 2699",
+    narrator: "Abu Hurairah (RA)",
+    textEnglish:
+      "Whoever relieves a believer of hardship from the hardships of this world, Allah will relieve him of hardship on the Day of Resurrection.",
+    textArabic: null,
+  },
+];
+
+function normalizeHadithSect(value) {
+  return String(value || "").trim().toUpperCase() === "SHIA" ? "SHIA" : "SUNNI";
+}
+
+function getUtcDateKey(date = new Date()) {
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+  )
+    .toISOString()
+    .slice(0, 10);
+}
+
+function getUtcDayNumber(date = new Date()) {
+  return Math.floor(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) /
+      86400000
+  );
+}
+
+function buildSunniHadithOfDay(date = new Date()) {
+  const dateKey = getUtcDateKey(date);
+  const index = getUtcDayNumber(date) % SUNNI_HADITH_POOL.length;
+  const item = SUNNI_HADITH_POOL[index];
+
+  return {
+    ...item,
+    sect: "SUNNI",
+    source: "local-curated-sunni",
+    dateKey,
+  };
+}
+
+async function fetchShiaHadithOfDay(date = new Date()) {
+  const dateKey = getUtcDateKey(date);
+  const cacheKey = `SHIA:${dateKey}`;
+
+  if (HADITH_OF_DAY_CACHE.has(cacheKey)) {
+    return HADITH_OF_DAY_CACHE.get(cacheKey);
+  }
+
+  const resp = await fetchWithTimeout(
+    "https://www.thaqalayn-api.net/api/v2/random",
+    {
+      headers: {
+        Accept: "application/json",
+      },
+    },
+    15000
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Shia hadith upstream failed (${resp.status}): ${text}`);
+  }
+
+  const data = await resp.json();
+  const payload = {
+    id: data?._id || `shia-${dateKey}`,
+    sect: "SHIA",
+    title: data?.book || "Shia Hadith of the Day",
+    reference: data?.book
+      ? `${data.book}${data?.id ? ` #${data.id}` : ""}`
+      : "Thaqalayn API",
+    narrator: data?.author || null,
+    textEnglish:
+      String(data?.englishText || "").trim() ||
+      "No English text was returned for today's Shia hadith.",
+    textArabic: String(data?.arabicText || "").trim() || null,
+    source: data?.URL || "https://www.thaqalayn-api.net/api/v2/random",
+    dateKey,
+  };
+
+  HADITH_OF_DAY_CACHE.set(cacheKey, payload);
+  return payload;
+}
+
+function buildShiaFallbackHadith(date = new Date()) {
+  return {
+    id: `shia-fallback-${getUtcDateKey(date)}`,
+    sect: "SHIA",
+    title: "Shia Hadith of the Day",
+    reference: "Thaqalayn API temporarily unavailable",
+    narrator: null,
+    textEnglish:
+      "The Shia hadith source is temporarily unavailable right now. Please refresh again shortly.",
+    textArabic: null,
+    source: "fallback-shia",
+    dateKey: getUtcDateKey(date),
+  };
+}
+
+async function getHadithOfDay(sectValue, date = new Date()) {
+  const sect = normalizeHadithSect(sectValue);
+
+  if (sect === "SHIA") {
+    try {
+      return await fetchShiaHadithOfDay(date);
+    } catch (err) {
+      console.warn("Shia hadith-of-day fallback used:", err?.message || err);
+      return buildShiaFallbackHadith(date);
+    }
+  }
+
+  return buildSunniHadithOfDay(date);
+}
+
 const tokenCache = new Map(); // token -> { profile, exp }
 
 const regionDisplay =
@@ -2812,6 +2977,16 @@ app.get(
   asyncHandler(async (req, res) => {
     const data = readJsonFile(path.join("data", "duas.json"));
     res.json(data);
+  })
+);
+
+app.get(
+  "/api/hadith-of-day",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const sect = normalizeHadithSect(req.query.sect || "SUNNI");
+    const hadith = await getHadithOfDay(sect, new Date());
+    res.json(hadith);
   })
 );
 

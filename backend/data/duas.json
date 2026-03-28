@@ -231,6 +231,120 @@
           ]
         }
       ]
+    },
+    {
+      "id": "approved-general",
+      "name": "Approved General Duas",
+      "title": "Approved General Duas",
+      "items": [
+        {
+          "id": "dua-istikhara",
+          "title": "Du'a al-Istikhara",
+          "arabic": "",
+          "transliteration": "",
+          "translation": "",
+          "sect": "both",
+          "section": "general",
+          "classification": "prophetic_sunnah_dua",
+          "tags": [
+            "guidance",
+            "istikhara",
+            "decision",
+            "general"
+          ],
+          "sourceRef": "Sahih al-Bukhari 6382"
+        },
+        {
+          "id": "dua-relief-from-worry-and-debt",
+          "title": "Du'a for Relief from Worry and Debt",
+          "arabic": "",
+          "transliteration": "",
+          "translation": "",
+          "sect": "both",
+          "section": "general",
+          "classification": "prophetic_sunnah_dua",
+          "tags": [
+            "worry",
+            "debt",
+            "hardship",
+            "general"
+          ],
+          "sourceRef": "Hisn al-Muslim 137"
+        },
+        {
+          "id": "dua-beneficial-knowledge-good-provision-accepted-deeds",
+          "title": "Du'a for Beneficial Knowledge, Good Provision, and Accepted Deeds",
+          "arabic": "",
+          "transliteration": "",
+          "translation": "",
+          "sect": "both",
+          "section": "general",
+          "classification": "prophetic_sunnah_dua",
+          "tags": [
+            "rizq",
+            "knowledge",
+            "provision",
+            "general"
+          ],
+          "sourceRef": "Hisn al-Muslim 95"
+        },
+        {
+          "id": "janazah-dua-for-the-deceased",
+          "title": "Janazah Du'a for the Deceased",
+          "arabic": "",
+          "transliteration": "",
+          "translation": "",
+          "sect": "both",
+          "section": "general",
+          "classification": "janazah_sunnah_dua",
+          "tags": [
+            "janazah",
+            "deceased",
+            "funeral",
+            "general"
+          ],
+          "sourceRef": "Hisn al-Muslim 156"
+        }
+      ]
+    },
+    {
+      "id": "shia-devotional",
+      "name": "Shia Devotional Supplications",
+      "title": "Shia Devotional Supplications",
+      "items": [
+        {
+          "id": "dua-al-mujeer",
+          "title": "Du'a al-Mujeer",
+          "arabic": "",
+          "transliteration": "",
+          "translation": "",
+          "sect": "shia",
+          "section": "shia",
+          "classification": "shia_devotional_supplication",
+          "tags": [
+            "shia",
+            "devotional",
+            "mujeer"
+          ],
+          "sourceRef": "Duas.org / Al-Islam"
+        },
+        {
+          "id": "dua-al-ahd",
+          "title": "Du'a al-'Ahd",
+          "arabic": "",
+          "transliteration": "",
+          "translation": "",
+          "sect": "shia",
+          "section": "shia",
+          "classification": "shia_devotional_supplication",
+          "tags": [
+            "shia",
+            "devotional",
+            "ahd"
+          ],
+          "sourceRef": "Duas.org / Al-Islam"
+        }
+      ]
     }
   ]
 }
