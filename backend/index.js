@@ -246,31 +246,203 @@ function buildGeocodeQuery(cityOrQuery, countryValue) {
   return `${q}, ${countryText}`;
 }
 
-function normalizeMosqueSearchText(query, countryValue) {
+function normalizeMosqueSearchText(query, countryValue, sectHint = "") {
   const q = normalizeQueryText(query);
   const countryText = countryLabel(countryValue, "");
+  const sect = String(sectHint || "").trim().toUpperCase();
+
+  const scopePrefix =
+    sect === "SHIA"
+      ? "shia mosque"
+      : sect === "SUNNI"
+      ? "sunni mosque"
+      : "mosque";
 
   if (!q) {
-    return countryText ? `mosques in ${countryText}` : "mosques";
+    return countryText ? `${scopePrefix} in ${countryText}` : scopePrefix;
   }
 
-  if (/mosque|masjid/i.test(q)) {
+  if (/mosque|masjid|imambargah|hussainia|husayniyah/i.test(q)) {
     if (!countryText) return q;
     return q.toLowerCase().includes(countryText.toLowerCase())
       ? q
       : `${q}, ${countryText}`;
   }
 
-  if (!countryText) return `mosques in ${q}`;
-  return `mosques in ${q}, ${countryText}`;
+  if (!countryText) return `${scopePrefix} in ${q}`;
+  return `${scopePrefix} in ${q}, ${countryText}`;
 }
 
-function normalizeSectFilter(value, fallback = "ALL") {
-  const raw = String(value || "").trim().toUpperCase();
-  if (raw === "SHIA" || raw === "SUNNI" || raw === "ALL") return raw;
-  if (raw === "AUTO") return fallback;
-  return fallback;
+function extractCountryCodeFromComponents(components, fallback = "US") {
+  const raw = String(
+    components?.["ISO_3166-1_alpha-2"] ||
+      components?.country_code ||
+      fallback ||
+      "US"
+  ).trim();
+
+  return /^[A-Za-z]{2}$/.test(raw) ? raw.toUpperCase() : fallback;
 }
+
+function extractCityFromComponents(components, fallback = "") {
+  return (
+    String(
+      components?.city ||
+        components?.town ||
+        components?.village ||
+        components?.hamlet ||
+        components?.municipality ||
+        components?.suburb ||
+        components?.county ||
+        fallback ||
+        ""
+    ).trim() || fallback
+  );
+}
+
+const SHIA_MOSQUE_KEYWORDS = [
+  "shia",
+  "shi'a",
+  "jafari",
+  "jaffari",
+  "ithna ashari",
+  "twelver",
+  "ahlulbayt",
+  "ahl al bayt",
+  "ahl-e-bait",
+  "imambargah",
+  "hussainia",
+  "husayniyah",
+  "imam ali",
+  "imam hussain",
+  "imam husain",
+  "bibi zainab",
+];
+
+const SUNNI_MOSQUE_KEYWORDS = [
+  "sunni",
+  "hanafi",
+  "shafi",
+  "maliki",
+  "hanbali",
+  "deobandi",
+  "barelvi",
+  "salafi",
+  "ahlus sunnah",
+  "ahl al sunnah",
+];
+
+function inferMosqueSect(place) {
+  const displayName =
+    place?.displayName?.text || place?.displayName || place?.name || "";
+  const address = place?.formattedAddress || "";
+  const haystack = `${displayName} ${address}`.toLowerCase();
+
+  const matchedShia = SHIA_MOSQUE_KEYWORDS.find((keyword) =>
+    haystack.includes(keyword)
+  );
+  if (matchedShia) {
+    return {
+      sect: "SHIA",
+      sectConfidence: matchedShia === "shia" || matchedShia === "jafari" ? "high" : "medium",
+    };
+  }
+
+  const matchedSunni = SUNNI_MOSQUE_KEYWORDS.find((keyword) =>
+    haystack.includes(keyword)
+  );
+  if (matchedSunni) {
+    return {
+      sect: "SUNNI",
+      sectConfidence: matchedSunni === "sunni" ? "high" : "medium",
+    };
+  }
+
+  return {
+    sect: "UNKNOWN",
+    sectConfidence: "low",
+  };
+}
+
+function scoreMosqueForSect(mosque, requestedSect) {
+  const sect = String(requestedSect || "").trim().toUpperCase();
+  const inferred = String(mosque?.sect || "UNKNOWN").toUpperCase();
+  const confidence = String(mosque?.sectConfidence || "low").toLowerCase();
+
+  if (sect === "SHIA") {
+    if (inferred === "SHIA") return confidence === "high" ? 300 : 240;
+    if (inferred === "UNKNOWN") return 140;
+    return 20;
+  }
+
+  if (sect === "SUNNI") {
+    if (inferred === "SUNNI") return confidence === "high" ? 300 : 240;
+    if (inferred === "UNKNOWN") return 140;
+    return 20;
+  }
+
+  if (inferred === "SHIA") return 220;
+  if (inferred === "SUNNI") return 210;
+  return 120;
+}
+
+function buildMosqueTextQueries(query, countryValue, requestedSect) {
+  const q = normalizeQueryText(query);
+  const countryText = countryLabel(countryValue, "");
+  const out = [];
+
+  if (requestedSect === "SHIA") {
+    out.push(normalizeMosqueSearchText(q, countryValue, "SHIA"));
+    if (q) {
+      out.push(countryText ? `jafari mosque in ${q}, ${countryText}` : `jafari mosque in ${q}`);
+      out.push(countryText ? `ahlulbayt mosque in ${q}, ${countryText}` : `ahlulbayt mosque in ${q}`);
+      out.push(countryText ? `imambargah in ${q}, ${countryText}` : `imambargah in ${q}`);
+    }
+  } else if (requestedSect === "SUNNI") {
+    out.push(normalizeMosqueSearchText(q, countryValue, "SUNNI"));
+    if (q) {
+      out.push(countryText ? `sunni masjid in ${q}, ${countryText}` : `sunni masjid in ${q}`);
+    }
+  }
+
+  out.push(normalizeMosqueSearchText(q, countryValue));
+
+  return dedupeStrings(out.filter(Boolean));
+}
+
+
+function normalizePlace(place) {
+  const displayName =
+    place?.displayName?.text ||
+    place?.displayName ||
+    place?.name ||
+    "Unknown mosque";
+
+  const placeId =
+    place?.id ||
+    (typeof place?.name === "string" && place.name.startsWith("places/")
+      ? place.name.replace(/^places\//, "")
+      : null);
+
+  const inferred = inferMosqueSect(place);
+
+  return {
+    placeId: placeId || null,
+    name: displayName,
+    address: place?.formattedAddress || null,
+    sect: inferred.sect,
+    sectConfidence: inferred.sectConfidence,
+    location:
+      typeof place?.location?.latitude === "number" &&
+      typeof place?.location?.longitude === "number"
+        ? {
+            lat: place.location.latitude,
+            lng: place.location.longitude,
+          }
+        : null,
+  };
+}
+
 
 function buildMosqueSearchQueries(query, countryValue, requestedSect) {
   const base = normalizeMosqueSearchText(query, countryValue);
@@ -1713,14 +1885,19 @@ app.get(
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
 
+    // Reverse geocoding for onboarding "Use device location"
     if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      const url =
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return res.status(400).json({ error: "lat/lng out of valid range" });
+      }
+
+      const reverseUrl =
         `https://api.opencagedata.com/geocode/v1/json` +
         `?q=${encodeURIComponent(`${lat},${lng}`)}` +
         `&key=${encodeURIComponent(apiKey)}` +
         `&limit=1&no_annotations=0`;
 
-      const upstream = await fetchWithTimeout(url);
+      const upstream = await fetchWithTimeout(reverseUrl);
       if (!upstream.ok) {
         const text = await upstream.text().catch(() => "");
         return res.status(502).json({
@@ -1730,23 +1907,31 @@ app.get(
 
       const data = await upstream.json();
       const first = data?.results?.[0];
+
+      if (!first?.geometry) {
+        return res.status(404).json({
+          error: "Could not resolve your device location. Please try again.",
+        });
+      }
+
       const components = first?.components || {};
-      const city = components.city || components.town || components.village || components.county || null;
-      const countryCode = String(components.country_code || "").toUpperCase() || null;
-      const country = components.country || countryCode || null;
+      const countryCode = extractCountryCodeFromComponents(components, "US");
+      const city = extractCityFromComponents(components, "");
       const timezone = first?.annotations?.timezone?.name || "Etc/UTC";
 
       return res.json({
-        lat,
-        lng,
+        lat: first.geometry.lat,
+        lng: first.geometry.lng,
         city,
-        country,
+        query: city,
+        country: components?.country || countryCode,
         countryCode,
         timezone,
-        formatted: first?.formatted || null,
+        formatted: first.formatted || null,
       });
     }
 
+    // Forward geocoding for manual city + country lookup
     const query = normalizeQueryText(req.query.query || req.query.city || "");
     const country = normalizeStoredCountry(
       req.query.country || req.query.countryCode || "US",
@@ -1781,22 +1966,24 @@ app.get(
       });
     }
 
-    const outLat = first.geometry.lat;
-    const outLng = first.geometry.lng;
+    const components = first?.components || {};
+    const countryCode = extractCountryCodeFromComponents(components, country);
+    const city = extractCityFromComponents(components, query);
     const timezone = first?.annotations?.timezone?.name || "Etc/UTC";
 
     res.json({
-      lat: outLat,
-      lng: outLng,
+      lat: first.geometry.lat,
+      lng: first.geometry.lng,
       timezone,
       formatted: first.formatted || null,
-      country,
-      countryCode: getRegionCode(country) || null,
-      city: query,
-      query,
+      country: components?.country || countryLabel(countryCode, countryCode),
+      countryCode,
+      city,
+      query: city,
     });
   })
 );
+
 
 app.get(
   "/api/integrations",
@@ -2496,13 +2683,14 @@ app.get(
     );
     const regionCode = getRegionCode(country);
     const rawQuery = normalizeQueryText(req.query.query || profile.city || "");
+    const requestedSectRaw = String(req.query.sect || "").trim().toUpperCase();
+    const requestedSect =
+      requestedSectRaw === "SHIA" || requestedSectRaw === "SUNNI"
+        ? requestedSectRaw
+        : "";
     const bias = String(req.query.bias || "user").trim().toLowerCase();
     const radiusKm = clampNumber(req.query.radiusKm, 1, 50, 25);
     const radiusMeters = radiusKm * 1000;
-    const requestedSect = normalizeSectFilter(
-      req.query.sect,
-      String(profile.sect || "SUNNI").toUpperCase() === "SHIA" ? "SHIA" : "SUNNI"
-    );
 
     const hasUserCoords =
       typeof profile.latitude === "number" &&
@@ -2510,12 +2698,12 @@ app.get(
       typeof profile.longitude === "number" &&
       Number.isFinite(profile.longitude);
 
-    const collectedPlaces = [];
     let source = "text";
+    const collectedPlaces = [];
 
     if (bias === "user" && hasUserCoords) {
       source = "nearby";
-      const nearby = await googlePlacesPost(
+      const nearbyJson = await googlePlacesPost(
         "/places:searchNearby",
         {
           includedTypes: ["mosque"],
@@ -2532,20 +2720,23 @@ app.get(
           },
         },
         "places.id,places.name,places.displayName,places.formattedAddress,places.location"
-      ).catch(() => null);
+      );
 
-      if (Array.isArray(nearby?.places)) {
-        collectedPlaces.push(...nearby.places);
+      if (Array.isArray(nearbyJson?.places)) {
+        collectedPlaces.push(...nearbyJson.places);
       }
     }
 
-    const searchQueries = buildMosqueSearchQueries(rawQuery, country, requestedSect);
-    for (const searchText of searchQueries) {
+    const textQueries = buildMosqueTextQueries(rawQuery, country, requestedSect);
+
+    for (const textQuery of textQueries) {
+      if (collectedPlaces.length >= 40) break;
+
       const textBody = {
-        textQuery: searchText,
+        textQuery,
         includedType: "mosque",
         strictTypeFiltering: true,
-        maxResultCount: requestedSect === "SHIA" ? 20 : 15,
+        maxResultCount: 20,
       };
 
       if (regionCode) {
@@ -2556,34 +2747,46 @@ app.get(
         "/places:searchText",
         textBody,
         "places.id,places.name,places.displayName,places.formattedAddress,places.location"
-      ).catch(() => null);
+      );
 
-      if (Array.isArray(placesJson?.places)) {
+      if (Array.isArray(placesJson?.places) && placesJson.places.length > 0) {
+        if (source === "nearby") source = "nearby+text";
+        else if (source === "text") source = "text";
+        else source = "text-fallback";
+
         collectedPlaces.push(...placesJson.places);
       }
     }
 
-    const mosques = dedupeMosques(
+    const normalizedMosques = dedupeMosques(
       collectedPlaces
-        .map((place) => normalizePlace(place, requestedSect))
+        .map(normalizePlace)
         .filter((m) => m.placeId && m.name)
-    ).sort((a, b) => {
-      const rank = { match: 0, inferred: 1, generic: 2, mismatch: 3 };
-      const aRank = rank[a.sectConfidence || "generic"] ?? 2;
-      const bRank = rank[b.sectConfidence || "generic"] ?? 2;
-      if (aRank !== bRank) return aRank - bRank;
-      return String(a.name || "").localeCompare(String(b.name || ""));
-    });
+    );
+
+    const mosques = normalizedMosques
+      .map((m, index) => ({
+        ...m,
+        _score: scoreMosqueForSect(m, requestedSect),
+        _index: index,
+      }))
+      .sort((a, b) => {
+        if (b._score !== a._score) return b._score - a._score;
+        return a._index - b._index;
+      })
+      .slice(0, 20)
+      .map(({ _score, _index, ...mosque }) => mosque);
 
     res.json({
       query: rawQuery,
       country,
       source,
-      requestedSect,
+      sect: requestedSect || null,
       mosques,
     });
   })
 );
+
 
 // Qiblah
 app.get(
