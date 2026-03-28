@@ -847,6 +847,47 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           <div className="space-y-6">
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <h2 className="text-white mb-4">Next Prayer</h2>
+              {loadingToday ? (
+                <p className="text-slate-400">Loading next prayer…</p>
+              ) : todayError ? (
+                <p className="text-amber-400">{todayError}</p>
+              ) : (
+                <>
+                  <p className="text-slate-400 mb-3">Next prayer in</p>
+                  <div className="text-3xl text-emerald-400 font-semibold mb-2">
+                    {timeToNextPrayer || "--:--"}
+                  </div>
+                  <div className="text-slate-300 mb-4">
+                    {nextPrayerCode
+                      ? `${PRAYER_LABELS[nextPrayerCode]} · ${nextPrayerTimeDisplay || "--:--"}`
+                      : "--"}
+                  </div>
+                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <h2 className="text-white mb-4">Today&apos;s Timetable</h2>
+              {loadingToday ? (
+                <p className="text-slate-400">Loading prayer times…</p>
+              ) : todayError ? (
+                <p className="text-amber-400 mb-4">{todayError}</p>
+              ) : null}
+              <div className="space-y-3">
+                {PRAYER_ORDER.map((code) => (
+                  <div key={code} className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3">
+                    <span className="text-white">{PRAYER_LABELS[code]}</span>
+                    <span className="text-slate-300">{prayersForDisplay?.[code] || "--:--"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
               <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
                 <div className="flex items-center gap-2">
                   <BookOpen className="w-5 h-5 text-emerald-400" />
@@ -891,47 +932,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               ) : (
                 <p className="text-slate-400">No hadith available right now.</p>
               )}
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Next Prayer</h2>
-              {loadingToday ? (
-                <p className="text-slate-400">Loading next prayer…</p>
-              ) : todayError ? (
-                <p className="text-amber-400">{todayError}</p>
-              ) : (
-                <>
-                  <p className="text-slate-400 mb-3">Next prayer in</p>
-                  <div className="text-3xl text-emerald-400 font-semibold mb-2">
-                    {timeToNextPrayer || "--:--"}
-                  </div>
-                  <div className="text-slate-300 mb-4">
-                    {nextPrayerCode
-                      ? `${PRAYER_LABELS[nextPrayerCode]} · ${nextPrayerTimeDisplay || "--:--"}`
-                      : "--"}
-                  </div>
-                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Today&apos;s Timetable</h2>
-              {loadingToday ? (
-                <p className="text-slate-400">Loading prayer times…</p>
-              ) : todayError ? (
-                <p className="text-amber-400 mb-4">{todayError}</p>
-              ) : null}
-              <div className="space-y-3">
-                {PRAYER_ORDER.map((code) => (
-                  <div key={code} className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3">
-                    <span className="text-white">{PRAYER_LABELS[code]}</span>
-                    <span className="text-slate-300">{prayersForDisplay?.[code] || "--:--"}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
 
