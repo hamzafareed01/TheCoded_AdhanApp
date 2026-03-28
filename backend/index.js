@@ -120,7 +120,7 @@ function getUtcDateKey(date = new Date()) {
 function getUtcDayNumber(date = new Date()) {
   return Math.floor(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) /
-      86400000
+    86400000
   );
 }
 
@@ -427,8 +427,8 @@ function normalizeMosqueSearchText(query, countryValue, sectHint = "") {
     sect === "SHIA"
       ? "shia mosque"
       : sect === "SUNNI"
-      ? "sunni mosque"
-      : "mosque";
+        ? "sunni mosque"
+        : "mosque";
 
   if (!q) {
     return countryText ? `${scopePrefix} in ${countryText}` : scopePrefix;
@@ -548,9 +548,9 @@ function buildMosqueTextQueries(query, countryValue, requestedSect) {
 function extractCountryCodeFromComponents(components, fallback = "US") {
   const raw = String(
     components?.["ISO_3166-1_alpha-2"] ||
-      components?.country_code ||
-      fallback ||
-      "US"
+    components?.country_code ||
+    fallback ||
+    "US"
   ).trim();
 
   return /^[A-Za-z]{2}$/.test(raw) ? raw.toUpperCase() : fallback;
@@ -560,222 +560,18 @@ function extractCityFromComponents(components, fallback = "") {
   return (
     String(
       components?.city ||
-        components?.town ||
-        components?.village ||
-        components?.hamlet ||
-        components?.municipality ||
-        components?.suburb ||
-        components?.county ||
-        fallback ||
-        ""
+      components?.town ||
+      components?.village ||
+      components?.hamlet ||
+      components?.municipality ||
+      components?.suburb ||
+      components?.county ||
+      fallback ||
+      ""
     ).trim() || fallback
   );
 }
 
-const SHIA_MOSQUE_KEYWORDS = [
-  "shia",
-  "shi'a",
-  "jafari",
-  "jaffari",
-  "ithna ashari",
-  "twelver",
-  "ahlulbayt",
-  "ahl al bayt",
-  "ahl-e-bait",
-  "imambargah",
-  "hussainia",
-  "husayniyah",
-  "imam ali",
-  "imam hussain",
-  "imam husain",
-  "bibi zainab",
-];
-
-const SUNNI_MOSQUE_KEYWORDS = [
-  "sunni",
-  "hanafi",
-  "shafi",
-  "maliki",
-  "hanbali",
-  "deobandi",
-  "barelvi",
-  "salafi",
-  "ahlus sunnah",
-  "ahl al sunnah",
-];
-
-function inferMosqueSect(place) {
-  const displayName =
-    place?.displayName?.text || place?.displayName || place?.name || "";
-  const address = place?.formattedAddress || "";
-  const haystack = `${displayName} ${address}`.toLowerCase();
-
-  const matchedShia = SHIA_MOSQUE_KEYWORDS.find((keyword) =>
-    haystack.includes(keyword)
-  );
-  if (matchedShia) {
-    return {
-      sect: "SHIA",
-      sectConfidence: matchedShia === "shia" || matchedShia === "jafari" ? "high" : "medium",
-    };
-  }
-
-  const matchedSunni = SUNNI_MOSQUE_KEYWORDS.find((keyword) =>
-    haystack.includes(keyword)
-  );
-  if (matchedSunni) {
-    return {
-      sect: "SUNNI",
-      sectConfidence: matchedSunni === "sunni" ? "high" : "medium",
-    };
-  }
-
-  return {
-    sect: "UNKNOWN",
-    sectConfidence: "low",
-  };
-}
-
-function scoreMosqueForSect(mosque, requestedSect) {
-  const sect = String(requestedSect || "").trim().toUpperCase();
-  const inferred = String(mosque?.sect || "UNKNOWN").toUpperCase();
-  const confidence = String(mosque?.sectConfidence || "low").toLowerCase();
-
-  if (sect === "SHIA") {
-    if (inferred === "SHIA") return confidence === "high" ? 300 : 240;
-    if (inferred === "UNKNOWN") return 140;
-    return 20;
-  }
-
-  if (sect === "SUNNI") {
-    if (inferred === "SUNNI") return confidence === "high" ? 300 : 240;
-    if (inferred === "UNKNOWN") return 140;
-    return 20;
-  }
-
-  if (inferred === "SHIA") return 220;
-  if (inferred === "SUNNI") return 210;
-  return 120;
-}
-
-function buildMosqueTextQueries(query, countryValue, requestedSect) {
-  const q = normalizeQueryText(query);
-  const countryText = countryLabel(countryValue, "");
-  const out = [];
-
-  if (requestedSect === "SHIA") {
-    out.push(normalizeMosqueSearchText(q, countryValue, "SHIA"));
-    if (q) {
-      out.push(countryText ? `jafari mosque in ${q}, ${countryText}` : `jafari mosque in ${q}`);
-      out.push(countryText ? `ahlulbayt mosque in ${q}, ${countryText}` : `ahlulbayt mosque in ${q}`);
-      out.push(countryText ? `imambargah in ${q}, ${countryText}` : `imambargah in ${q}`);
-    }
-  } else if (requestedSect === "SUNNI") {
-    out.push(normalizeMosqueSearchText(q, countryValue, "SUNNI"));
-    if (q) {
-      out.push(countryText ? `sunni masjid in ${q}, ${countryText}` : `sunni masjid in ${q}`);
-    }
-  }
-
-  out.push(normalizeMosqueSearchText(q, countryValue));
-
-  return dedupeStrings(out.filter(Boolean));
-}
-
-
-function normalizePlace(place, requestedSect = "ALL") {
-  const displayName =
-    place?.displayName?.text ||
-    place?.displayName ||
-    place?.name ||
-    "Unknown mosque";
-
-  const placeId =
-    place?.id ||
-    (typeof place?.name === "string" && place.name.startsWith("places/")
-      ? place.name.replace(/^places\//, "")
-      : null);
-
-  const address = place?.formattedAddress || null;
-
-  const inferredSect = inferMosqueSectFromText([
-    displayName,
-    address,
-    place?.primaryTypeDisplayName?.text,
-    place?.editorialSummary?.text,
-  ]);
-
-  return {
-    placeId: placeId || null,
-    name: displayName,
-    address,
-    location:
-      typeof place?.location?.latitude === "number" &&
-      typeof place?.location?.longitude === "number"
-        ? {
-            lat: place.location.latitude,
-            lng: place.location.longitude,
-          }
-        : null,
-    sect: inferredSect,
-    sectConfidence: getSectConfidence(requestedSect, inferredSect),
-  };
-}
-
-
-function buildMosqueSearchQueries(query, countryValue, requestedSect) {
-  const base = normalizeMosqueSearchText(query, countryValue);
-  if (requestedSect === "SHIA") {
-    return dedupeStrings([
-      `shia mosque in ${query}, ${countryLabel(countryValue, "")}`,
-      `jafari mosque in ${query}, ${countryLabel(countryValue, "")}`,
-      `imambargah in ${query}, ${countryLabel(countryValue, "")}`,
-      `ahlulbayt mosque in ${query}, ${countryLabel(countryValue, "")}`,
-      base,
-    ]);
-  }
-
-  if (requestedSect === "SUNNI") {
-    return dedupeStrings([
-      `sunni mosque in ${query}, ${countryLabel(countryValue, "")}`,
-      base,
-    ]);
-  }
-
-  return [base];
-}
-
-function inferMosqueSectFromText(parts) {
-  const haystack = parts.map((part) => String(part || "").toLowerCase()).join(" ");
-  if (!haystack) return "UNKNOWN";
-
-  const shiaSignals = [
-    /shia/,
-    /jafari/,
-    /imambargah/,
-    /imam bargah/,
-    /ahlulbayt/,
-    /ahl ul bayt/,
-    /imam ali/,
-    /karbala/,
-    /hussain/,
-    /husain/,
-  ];
-  const sunniSignals = [/sunni/, /ahlus sunnah/, /ahl al sunnah/];
-
-  if (shiaSignals.some((pattern) => pattern.test(haystack))) return "SHIA";
-  if (sunniSignals.some((pattern) => pattern.test(haystack))) return "SUNNI";
-  return "UNKNOWN";
-}
-
-function getSectConfidence(requestedSect, inferredSect) {
-  if (!requestedSect || requestedSect === "ALL") {
-    return inferredSect === "UNKNOWN" ? "generic" : "inferred";
-  }
-  if (inferredSect === requestedSect) return "match";
-  if (inferredSect === "UNKNOWN") return "generic";
-  return "mismatch";
-}
 
 
 const AMAZON_OAUTH_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
@@ -791,9 +587,9 @@ const ALEXA_APP_LINK_SCOPE = "alexa::skills:account_linking";
 function getAlexaSkillId() {
   return String(
     process.env.ALEXA_SKILL_ID ||
-      process.env.AMAZON_ALEXA_SKILL_ID ||
-      process.env.VITE_ALEXA_SKILL_ID ||
-      ""
+    process.env.AMAZON_ALEXA_SKILL_ID ||
+    process.env.VITE_ALEXA_SKILL_ID ||
+    ""
   ).trim();
 }
 
@@ -812,9 +608,9 @@ function getSkillOauthScope() {
 function getAppLinkStateSecret() {
   return String(
     process.env.ALEXA_APP_LINK_STATE_SECRET ||
-      process.env.ALEXA_OAUTH_CLIENT_SECRET ||
-      process.env.ALEXA_SKILL_CLIENT_SECRET ||
-      "adhancast-app-link-state"
+    process.env.ALEXA_OAUTH_CLIENT_SECRET ||
+    process.env.ALEXA_SKILL_CLIENT_SECRET ||
+    "adhancast-app-link-state"
   );
 }
 
@@ -823,18 +619,18 @@ function getAlexaAppLinkConfig() {
 
   const clientId = String(
     process.env.ALEXA_APP_LINK_CLIENT_ID ||
-      process.env.ALEXA_APP_TO_APP_CLIENT_ID ||
-      process.env.ALEXA_OAUTH_APP_CLIENT_ID ||
-      oauth.clientId ||
-      ""
+    process.env.ALEXA_APP_TO_APP_CLIENT_ID ||
+    process.env.ALEXA_OAUTH_APP_CLIENT_ID ||
+    oauth.clientId ||
+    ""
   ).trim();
 
   const clientSecret = String(
     process.env.ALEXA_APP_LINK_CLIENT_SECRET ||
-      process.env.ALEXA_APP_TO_APP_CLIENT_SECRET ||
-      process.env.ALEXA_OAUTH_APP_CLIENT_SECRET ||
-      oauth.clientSecret ||
-      ""
+    process.env.ALEXA_APP_TO_APP_CLIENT_SECRET ||
+    process.env.ALEXA_OAUTH_APP_CLIENT_SECRET ||
+    oauth.clientSecret ||
+    ""
   ).trim();
 
   return {
@@ -965,8 +761,7 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
 
   if (!resp.ok || !data?.access_token) {
     const err = new Error(
-      `Amazon token exchange failed (${resp.status}): ${
-        data?.error_description || data?.error || "Unknown error"
+      `Amazon token exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"
       }`
     );
     err.status = 502;
@@ -1000,9 +795,9 @@ const OAUTH_RELAY_STATE_TTL_MS = 10 * 60 * 1000;
 function getOauthRelayStateSecret() {
   return String(
     process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
-      process.env.ALEXA_APP_LINK_STATE_SECRET ||
-      process.env.ALEXA_OAUTH_CLIENT_SECRET ||
-      "adhancast-oauth-relay-state"
+    process.env.ALEXA_APP_LINK_STATE_SECRET ||
+    process.env.ALEXA_OAUTH_CLIENT_SECRET ||
+    "adhancast-oauth-relay-state"
   );
 }
 
@@ -1133,8 +928,7 @@ async function exchangeAmazonWebAuthorizationCodeForTokens(params) {
 
   if (!resp.ok || !data?.access_token) {
     const err = new Error(
-      `Amazon web authorization exchange failed (${resp.status}): ${
-        data?.error_description || data?.error || "Unknown error"
+      `Amazon web authorization exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"
       }`
     );
     err.status = 502;
@@ -1679,6 +1473,30 @@ function mapCalcMethodToAlAdhan(method, sect) {
   return 2; // ISNA
 }
 
+function sanitizeCalculationMethodForSect(method, sect) {
+  const normalizedSect =
+    String(sect || "").trim().toUpperCase() === "SHIA" ? "SHIA" : "SUNNI";
+
+  const raw = String(method || "").trim().toLowerCase();
+
+  const shiaAllowed = new Set(["jafari", "tehran"]);
+  const sunniAllowed = new Set([
+    "karachi",
+    "isna",
+    "mwl",
+    "umm al qura",
+    "ummalqura",
+    "makkah",
+    "egypt",
+  ]);
+
+  if (normalizedSect === "SHIA") {
+    return shiaAllowed.has(raw) ? raw : "jafari";
+  }
+
+  return sunniAllowed.has(raw) ? raw : "isna";
+}
+
 function madhhabToSchool(madhhab) {
   return String(madhhab || "").toLowerCase() === "hanafi" ? 1 : 0;
 }
@@ -1792,9 +1610,13 @@ function buildLocationPayload(profile, timing) {
 }
 
 function buildMethodPayload(profile) {
+  const sect = profile.sect || "SUNNI";
   return {
-    sect: profile.sect || "SUNNI",
-    calculationMethod: profile.calculation_method || "isna",
+    sect,
+    calculationMethod: sanitizeCalculationMethodForSect(
+      profile.calculation_method || "isna",
+      sect
+    ),
     madhhab: profile.madhhab || "hanafi",
   };
 }
@@ -1826,15 +1648,15 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
   const url =
     timing.latitude != null && timing.longitude != null
       ? `https://api.aladhan.com/v1/calendar?latitude=${encodeURIComponent(
-          timing.latitude
-        )}&longitude=${encodeURIComponent(
-          timing.longitude
-        )}&method=${method}&school=${school}&month=${month}&year=${year}`
+        timing.latitude
+      )}&longitude=${encodeURIComponent(
+        timing.longitude
+      )}&method=${method}&school=${school}&month=${month}&year=${year}`
       : `https://api.aladhan.com/v1/calendarByCity?city=${encodeURIComponent(
-          city
-        )}&country=${encodeURIComponent(
-          countryForApi
-        )}&method=${method}&school=${school}&month=${month}&year=${year}`;
+        city
+      )}&country=${encodeURIComponent(
+        countryForApi
+      )}&method=${method}&school=${school}&month=${month}&year=${year}`;
 
   const resp = await fetchWithTimeout(url);
   if (!resp.ok) {
@@ -1908,8 +1730,8 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
         timing.source === "mosque"
           ? profile.mosque_name || profile.mosque_address || "Mosque coordinates"
           : timing.source === "personal"
-          ? "Personal coordinates"
-          : "City fallback",
+            ? "Personal coordinates"
+            : "City fallback",
       fallbackReason: timing.fallbackReason || null,
     },
     enabled: enabledMap,
@@ -2101,14 +1923,18 @@ function normalizePlace(place, requestedSect = "ALL") {
       : null);
 
   const address = place?.formattedAddress || null;
-  const inferredSect = inferMosqueSectFromText([displayName, address]);
+
+  const inferredSect = inferMosqueSectFromText([
+    displayName,
+    address,
+    place?.primaryTypeDisplayName?.text,
+    place?.editorialSummary?.text,
+  ]);
 
   return {
     placeId: placeId || null,
     name: displayName,
     address,
-    sect: inferredSect,
-    sectConfidence: getSectConfidence(requestedSect, inferredSect),
     location:
       typeof place?.location?.latitude === "number" &&
       typeof place?.location?.longitude === "number"
@@ -2117,6 +1943,8 @@ function normalizePlace(place, requestedSect = "ALL") {
             lng: place.location.longitude,
           }
         : null,
+    sect: inferredSect,
+    sectConfidence: getSectConfidence(requestedSect, inferredSect),
   };
 }
 
@@ -2984,7 +2812,13 @@ app.get(
   "/api/hadith-of-day",
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
-    const sect = normalizeHadithSect(req.query.sect || "SUNNI");
+    const pool = await getPool();
+    const { profile } = await getUserProfileAndPrayers(
+      pool,
+      req.amazonProfile.user_id
+    );
+
+    const sect = normalizeHadithSect(req.query.sect || profile.sect || "SUNNI");
     const hadith = await getHadithOfDay(sect, new Date());
     res.json(hadith);
   })
@@ -3005,7 +2839,9 @@ app.get(
     const regionCode = getRegionCode(country);
     const rawQuery = normalizeQueryText(req.query.query || profile.city || "");
     const bias = String(req.query.bias || "user").trim().toLowerCase();
-    const requestedSect = resolveRequestedSect(req.query.sect || "ALL");
+    const requestedSect = resolveRequestedSect(
+      req.query.sect || profile.sect || "ALL"
+    );
     const radiusKm = clampNumber(req.query.radiusKm, 1, 50, 25);
     const radiusMeters = radiusKm * 1000;
 
@@ -3235,8 +3071,18 @@ async function handleSaveUserSettings(req, res) {
   );
   const body = req.body || {};
 
-  const sect = body.sect || (body.shia === true ? "SHIA" : undefined);
-  const calc = body.calculationMethod || body.calculation_method;
+  const incomingSect = body.sect || (body.shia === true ? "SHIA" : undefined);
+  const effectiveSect = String(
+    incomingSect || currentProfile.sect || "SUNNI"
+  ).toUpperCase();
+
+  const rawCalc = body.calculationMethod || body.calculation_method;
+  const calc =
+    rawCalc !== undefined && rawCalc !== null && String(rawCalc).trim() !== ""
+      ? sanitizeCalculationMethodForSect(rawCalc, effectiveSect)
+      : undefined;
+
+  const sect = incomingSect ? effectiveSect : undefined;
   const madhhab = body.madhhab;
   const high = body.highLatitudeMethod || body.high_latitude_method;
   const language = body.language;
@@ -3619,15 +3465,15 @@ app.get(
     const url =
       timing.latitude != null && timing.longitude != null
         ? `https://api.aladhan.com/v1/calendar?latitude=${encodeURIComponent(
-            timing.latitude
-          )}&longitude=${encodeURIComponent(
-            timing.longitude
-          )}&method=${method}&school=${school}&month=${month}&year=${year}`
+          timing.latitude
+        )}&longitude=${encodeURIComponent(
+          timing.longitude
+        )}&method=${method}&school=${school}&month=${month}&year=${year}`
         : `https://api.aladhan.com/v1/calendarByCity?city=${encodeURIComponent(
-            city
-          )}&country=${encodeURIComponent(
-            countryForApi
-          )}&method=${method}&school=${school}&month=${month}&year=${year}`;
+          city
+        )}&country=${encodeURIComponent(
+          countryForApi
+        )}&method=${method}&school=${school}&month=${month}&year=${year}`;
 
     const upstream = await fetchWithTimeout(url);
     if (!upstream.ok) {
@@ -3689,8 +3535,8 @@ app.get(
           timing.source === "mosque"
             ? profile.mosque_name || profile.mosque_address || "Mosque coordinates"
             : timing.source === "personal"
-            ? "Personal coordinates"
-            : "City fallback",
+              ? "Personal coordinates"
+              : "City fallback",
         fallbackReason: timing.fallbackReason || null,
       },
       month: `${year}-${pad2(month)}`,
