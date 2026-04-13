@@ -36,11 +36,23 @@ export default function QiblahFinder() {
 
   const [autoAnnounce, setAutoAnnounce] = useState(false);
 
+  const COMPASS_DIRECTION_LABELS: Record<string, string> = {
+    N: "North",
+    NE: "North East",
+    E: "East",
+    SE: "South East",
+    S: "South",
+    SW: "South West",
+    W: "West",
+    NW: "North West",
+  };
+
   const canSpeak = useMemo(() => typeof window !== "undefined" && "speechSynthesis" in window, []);
 
   useEffect(() => {
     if (autoAnnounce && result) {
-      speak(`Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${result.direction}.`);
+      const dirLabel = COMPASS_DIRECTION_LABELS[result.direction] || result.direction;
+      speak(`Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${dirLabel}.`);
     }
   }, [autoAnnounce, result]);
 
@@ -111,7 +123,8 @@ export default function QiblahFinder() {
 
   const handleAnnounce = () => {
     if (!result) return;
-    speak(`Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${result.direction}.`);
+    const dirLabel = COMPASS_DIRECTION_LABELS[result.direction] || result.direction;
+    speak(`Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${dirLabel}.`);
   };
 
   return (
@@ -189,7 +202,7 @@ export default function QiblahFinder() {
                 <p className="text-slate-300">{result.message}</p>
                 <p className="text-slate-400 text-sm mt-2">
                   Bearing: <span className="text-slate-100 font-semibold">{Math.round(result.bearing)}°</span> • Direction:{" "}
-                  <span className="text-slate-100 font-semibold">{result.direction}</span>
+                  <span className="text-slate-100 font-semibold">{COMPASS_DIRECTION_LABELS[result.direction] || result.direction}</span>
                 </p>
               </div>
 

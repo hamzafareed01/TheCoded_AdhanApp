@@ -6,7 +6,6 @@ import {
   getStoredAmazonToken,
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
-import TestAdhanButton from "./TestAdhanButton";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
@@ -818,7 +817,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 <div className={`w-2 h-2 rounded-full mr-2 ${automationOn ? "bg-emerald-400" : "bg-slate-400"}`} />
                 Automation: {automationOn ? "ON" : "OFF"}
               </Badge>
-              <TestAdhanButton />
             </div>
           </div>
 
