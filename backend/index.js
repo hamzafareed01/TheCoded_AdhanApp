@@ -1449,7 +1449,9 @@ function parseOffsetsFromBody(body, fallback) {
   for (const prayer of PRAYERS) {
     if (hasOwn(src, prayer)) {
       const n = Number(src[prayer]);
-      out[prayer] = Number.isFinite(n) ? n : fallback[prayer];
+      out[prayer] = Number.isFinite(n)
+        ? Math.max(0, Math.trunc(n))
+        : fallback[prayer];
     } else {
       out[prayer] = fallback[prayer];
     }
@@ -3327,7 +3329,9 @@ async function handleSaveUserSettings(req, res) {
         .input(
           "offset_min",
           sql.Int,
-          setOffsetMin ? Number(pc.offsetMin ?? pc.offset_min ?? 0) : null
+          setOffsetMin
+            ? Math.max(0, Math.trunc(Number(pc.offsetMin ?? pc.offset_min ?? 0) || 0))
+            : null
         )
 
         .input("set_quiet_enabled", sql.Bit, setQuietEnabled ? 1 : 0)

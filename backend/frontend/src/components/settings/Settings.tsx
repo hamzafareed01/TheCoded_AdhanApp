@@ -155,6 +155,12 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function sanitizeNonNegativeOffset(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.trunc(n));
+}
+
 function normalizeCountry(value: unknown): string {
   const raw = String(value ?? "").trim().replace(/\s+/g, " ");
   if (!raw) return "US";
@@ -713,6 +719,13 @@ export default function Settings({
         latitude: geo.lat,
         longitude: geo.lng,
       };
+      const sanitizedGlobalOffsets: Offsets = {
+        fajr: sanitizeNonNegativeOffset(syncedSettings.globalOffsets.fajr),
+        dhuhr: sanitizeNonNegativeOffset(syncedSettings.globalOffsets.dhuhr),
+        asr: sanitizeNonNegativeOffset(syncedSettings.globalOffsets.asr),
+        maghrib: sanitizeNonNegativeOffset(syncedSettings.globalOffsets.maghrib),
+        isha: sanitizeNonNegativeOffset(syncedSettings.globalOffsets.isha),
+      };
 
       const payload: JsonRecord = {
         sect: syncedSettings.sect,
@@ -729,11 +742,11 @@ export default function Settings({
         useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
         selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
-        globalOffsets: syncedSettings.globalOffsets,
+        globalOffsets: sanitizedGlobalOffsets,
         prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
           prayerName: pc.prayerName,
           enabled: pc.enabled,
-          offsetMin: pc.offsetMin,
+          offsetMin: sanitizeNonNegativeOffset(pc.offsetMin),
           quietEnabled: pc.quietEnabled,
           quietFrom: pc.quietFrom,
           quietTo: pc.quietTo,
@@ -761,7 +774,7 @@ export default function Settings({
           madhhab: syncedSettings.madhhab,
           calculationMethod: syncedSettings.calculationMethod,
           highLatitudeMode: syncedSettings.highLatitudeMethod,
-          offsets: syncedSettings.globalOffsets,
+          offsets: sanitizedGlobalOffsets,
         },
         location: {
           ...(isRecord(onboardingData.location) ? onboardingData.location : {}),
@@ -1021,25 +1034,28 @@ export default function Settings({
                     </h3>
 
                     <div className="space-y-3">
-                      {offsetsRows.map((p) => (
-                        <div
-                          key={p}
-                          className="flex items-center justify-between gap-4"
-                        >
-                          <Label className="text-slate-200 capitalize">{p}</Label>
-                          <Input
-                            type="number"
-                            className="w-28 bg-slate-900 border-slate-700 text-slate-100"
-                            value={settings.globalOffsets[p]}
-                            onChange={(e) =>
-                              updateField("globalOffsets", {
-                                ...settings.globalOffsets,
-                                [p]: Number(e.target.value || 0),
-                              })
-                            }
-                          />
-                        </div>
-                      ))}
+                        {offsetsRows.map((p) => (
+                          <div
+                            key={p}
+                            className="flex items-center justify-between gap-4"
+                          >
+                            <Label className="text-slate-200 capitalize">{p}</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              step={1}
+                              className="w-28 bg-slate-900 border-slate-700 text-slate-100"
+                              value={settings.globalOffsets[p]}
+                              onChange={(e) => {
+                                const nextValue = Math.max(0, Number(e.target.value || 0));
+                                updateField("globalOffsets", {
+                                  ...settings.globalOffsets,
+                                  [p]: nextValue,
+                                });
+                              }}
+                            />
+                          </div>
+                        ))}
                     </div>
                   </div>
 
@@ -1220,13 +1236,16 @@ export default function Settings({
                         <Label className="text-slate-200">Offset (min)</Label>
                         <Input
                           type="number"
-                          className="bg-slate-900 border-slate-700 text-slate-100"
-                          value={pc.offsetMin}
-                          onChange={(e) =>
-                            updatePrayerConfig(pc.prayerName, {
-                              offsetMin: Number(e.target.value || 0),
-                            })
-                          }
+                            min={0}
+                            step={1}
+                            className="bg-slate-900 border-slate-700 text-slate-100"
+                            value={pc.offsetMin}
+                            onChange={(e) => {
+                              const nextValue = Math.max(0, Number(e.target.value || 0));
+                              updatePrayerConfig(pc.prayerName, {
+                                offsetMin: nextValue,
+                              });
+                            }}
                         />
                       </div>
 

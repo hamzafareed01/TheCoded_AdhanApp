@@ -69,6 +69,12 @@ function defaultOffsets(): Offsets {
   return { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
 }
 
+function sanitizeNonNegativeOffset(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.trunc(n));
+}
+
 function normalizeCountry(value: unknown): string {
   const raw = String(value ?? "").trim().toUpperCase();
   return raw || "US";
@@ -270,6 +276,14 @@ const calcMethodChoices = useMemo(() => {
       return;
     }
 
+    const sanitizedOffsets: Offsets = {
+      fajr: sanitizeNonNegativeOffset(offsets.fajr),
+      dhuhr: sanitizeNonNegativeOffset(offsets.dhuhr),
+      asr: sanitizeNonNegativeOffset(offsets.asr),
+      maghrib: sanitizeNonNegativeOffset(offsets.maghrib),
+      isha: sanitizeNonNegativeOffset(offsets.isha),
+    };
+
     const nextPrayerSettings: PrayerSettingsData = {
       sect,
       shia: sect === "SHIA",
@@ -277,7 +291,7 @@ const calcMethodChoices = useMemo(() => {
       madhhab,
       highLatitudeMode,
       highLatitudeMethod: highLatitudeMode,
-      offsets,
+      offsets: sanitizedOffsets,
     };
 
     setOnboardingData({
@@ -293,7 +307,7 @@ const calcMethodChoices = useMemo(() => {
         calculationMethod,
         madhhab,
         highLatitudeMethod: highLatitudeMode,
-        globalOffsets: offsets,
+        globalOffsets: sanitizedOffsets,
       });
 
       if (!resp.ok) {
@@ -444,14 +458,17 @@ const calcMethodChoices = useMemo(() => {
                     <Label className="text-slate-200 capitalize">{p}</Label>
                     <Input
                       type="number"
+                      min={0}
+                      step={1}
                       className="w-28 bg-slate-800 border-slate-700 text-white"
                       value={offsets[p]}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const nextValue = Math.max(0, Number(e.target.value || 0));
                         setOffsets((prev) => ({
                           ...prev,
-                          [p]: Number(e.target.value || 0),
-                        }))
-                      }
+                          [p]: nextValue,
+                        }));
+                      }}
                     />
                   </div>
                 ))}
