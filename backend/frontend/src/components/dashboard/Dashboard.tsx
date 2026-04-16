@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
 import {
   apiFetch,
@@ -20,6 +20,13 @@ import {
   MapPin,
   Clock3,
   BookOpen,
+  Clock,
+  Calendar as CalendarIcon,
+  Wifi,
+  WifiOff,
+  Compass,
+  AlertCircle,
+  Link2,
 } from "lucide-react";
 
 const PRAYER_ORDER = [
@@ -229,13 +236,13 @@ function normalizeToday(payload: unknown): TodayShape | null {
   return {
     location: location
       ? {
-        city: asString(location.city),
-        country: asString(location.country),
-        timezone: asString(location.timezone),
-        latitude: asNumber(location.latitude),
-        longitude: asNumber(location.longitude),
-        label: asString(location.label),
-      }
+          city: asString(location.city),
+          country: asString(location.country),
+          timezone: asString(location.timezone),
+          latitude: asNumber(location.latitude),
+          longitude: asNumber(location.longitude),
+          label: asString(location.label),
+        }
       : undefined,
     prayers12: isObject(src.prayers12) ? (src.prayers12 as PrayerMap) : undefined,
     prayers24: isObject(src.prayers24) ? (src.prayers24 as PrayerMap) : undefined,
@@ -245,47 +252,37 @@ function normalizeToday(payload: unknown): TodayShape | null {
     source: asString(src.source),
     sourceDetail: isObject(src.sourceDetail)
       ? {
-        preferred: asString(src.sourceDetail.preferred),
-        actual: asString(src.sourceDetail.actual),
-        useMosqueLocation:
-          typeof src.sourceDetail.useMosqueLocation === "boolean"
-            ? src.sourceDetail.useMosqueLocation
-            : undefined,
-        label: asString(src.sourceDetail.label),
-        fallbackReason:
-          typeof src.sourceDetail.fallbackReason === "string"
-            ? src.sourceDetail.fallbackReason
-            : null,
-      }
+          preferred: asString(src.sourceDetail.preferred),
+          actual: asString(src.sourceDetail.actual),
+          useMosqueLocation:
+            typeof src.sourceDetail.useMosqueLocation === "boolean"
+              ? src.sourceDetail.useMosqueLocation
+              : undefined,
+          label: asString(src.sourceDetail.label),
+          fallbackReason:
+            typeof src.sourceDetail.fallbackReason === "string"
+              ? src.sourceDetail.fallbackReason
+              : null,
+        }
       : undefined,
     method: method
       ? {
-        sect: asString(method.sect),
-        calculationMethod: asString(method.calculationMethod),
-        madhhab: asString(method.madhhab),
-      }
+          sect: asString(method.sect),
+          calculationMethod: asString(method.calculationMethod),
+          madhhab: asString(method.madhhab),
+        }
       : undefined,
     date: src.date,
     meta: src.meta,
   };
 }
 
-function describeTimingSource(todayData: TodayShape | null, userSettings: SettingsShape | null) {
-  const label = todayData?.sourceDetail?.label;
-  if (label) return label;
-  if (todayData?.source === "mosque") return "Mosque coordinates";
-  if (todayData?.source === "personal") return "Personal coordinates";
-  if (todayData?.source === "city") return "City fallback";
-  if (userSettings?.useMosqueLocation) return "Mosque preferred";
-  return "Personal location";
-}
-
 function normalizeDevices(payload: unknown): Device[] {
   const list = Array.isArray(payload)
     ? payload
     : isObject(payload) && Array.isArray(payload.devices)
-      ? payload.devices
-      : [];
+    ? payload.devices
+    : [];
 
   return list
     .filter((item): item is JsonObject => isObject(item))
@@ -296,6 +293,7 @@ function normalizeDevices(payload: unknown): Device[] {
     }))
     .filter((item) => item.id && item.name);
 }
+
 function normalizeHadith(payload: unknown): HadithShape | null {
   if (!isObject(payload)) return null;
 
@@ -395,8 +393,10 @@ function formatDiff(ms: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-  return `${minutes}m ${seconds}s`;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(seconds).padStart(2, "0")}`;
 }
 
 function getConnectedPlatforms(
@@ -405,8 +405,8 @@ function getConnectedPlatforms(
 ): string[] {
   const fromOnboarding = Array.isArray(onboardingData.connectedPlatforms)
     ? onboardingData.connectedPlatforms.filter(
-      (x): x is string => typeof x === "string"
-    )
+        (x): x is string => typeof x === "string"
+      )
     : [];
 
   const fromLocal = safeReadJson<string[]>("adhan_connected_platforms", []);
@@ -418,19 +418,39 @@ function getConnectedPlatforms(
 }
 
 function titleCase(value?: string | null) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase()) || "—";
+  return (
+    String(value || "")
+      .replace(/([A-Z])/g, " $1")
+      .replace(/[_-]+/g, " ")
+      .trim()
+      .toLowerCase()
+      .replace(/\b\w/g, (c) => c.toUpperCase()) || "—"
+  );
+}
+
+function describeTimingSource(
+  todayData: TodayShape | null,
+  userSettings: SettingsShape | null
+) {
+  const label = todayData?.sourceDetail?.label;
+  if (label) return label;
+  if (todayData?.source === "mosque") return "Mosque coordinates";
+  if (todayData?.source === "personal") return "Personal coordinates";
+  if (todayData?.source === "city") return "City fallback";
+  if (userSettings?.useMosqueLocation) return "Mosque preferred";
+  return "Personal location";
 }
 
 export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const navigate = useNavigate();
+
   const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
     !!getStoredAmazonToken()
   );
   const [hadithOfDay, setHadithOfDay] = useState<HadithShape | null>(null);
   const [loadingHadith, setLoadingHadith] = useState(true);
   const [hadithError, setHadithError] = useState<string | null>(null);
+
   const [todayData, setTodayData] = useState<TodayShape | null>(null);
   const [loadingToday, setLoadingToday] = useState(true);
   const [todayError, setTodayError] = useState<string | null>(null);
@@ -443,11 +463,20 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
   const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
       setHasAmazonToken(!!getStoredAmazonToken());
     });
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
   }, []);
 
   const connectedPlatforms = useMemo(
@@ -459,6 +488,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     todayData?.prayers12 || todayData?.prayers24 || null;
   const prayersForCountdown: PrayerMap | null =
     todayData?.prayers24 || todayData?.prayers12 || null;
+
   const activeTimeZone =
     todayData?.location?.timezone || userSettings?.timezone || "Etc/UTC";
 
@@ -565,7 +595,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         return;
       }
 
-      const nowSeconds = nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
+      const nowSeconds =
+        nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
+
       const entries = COUNTDOWN_PRAYERS.map((code) => {
         const raw = prayersForCountdown[code];
         const seconds = raw ? parsePrayerTimeToSeconds(raw) : null;
@@ -607,10 +639,15 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       setNextPrayerCode(nextEntry.code);
       setNextPrayerTimeDisplay(
-        prayersForDisplay?.[nextEntry.code] || prayersForCountdown[nextEntry.code] || null
+        prayersForDisplay?.[nextEntry.code] ||
+          prayersForCountdown[nextEntry.code] ||
+          null
       );
 
-      const diffMs = Math.max(0, (nextEntry.seconds - adjustedNowSeconds) * 1000);
+      const diffMs = Math.max(
+        0,
+        (nextEntry.seconds - adjustedNowSeconds) * 1000
+      );
       setTimeToNextPrayer(formatDiff(diffMs));
 
       if (!prevEntry) {
@@ -620,7 +657,11 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       const total = nextEntry.seconds - prevEntry.seconds;
       const elapsed = adjustedNowSeconds - prevEntry.seconds;
-      const pct = total > 0 ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100))) : 0;
+      const pct =
+        total > 0
+          ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100)))
+          : 0;
+
       setProgress(pct);
     };
 
@@ -658,32 +699,45 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const locationLabel = todayData?.location?.label
     ? todayData.location.label
     : todayData?.location?.city
-      ? `${todayData.location.city}${todayData.location.country ? `, ${todayData.location.country}` : ""}`
-      : userSettings?.city
-        ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
-        : "";
-
-  const locationCoords =
-    todayData?.location?.latitude != null && todayData?.location?.longitude != null
-      ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
-      : userSettings?.latitude != null && userSettings?.longitude != null
-        ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
-        : null;
+    ? `${todayData.location.city}${
+        todayData.location.country ? `, ${todayData.location.country}` : ""
+      }`
+    : userSettings?.city
+    ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
+    : "";
 
   const timingSourceLabel = describeTimingSource(todayData, userSettings);
   const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
-  const effectiveSect = String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase();
+
+  const locationCoords =
+    todayData?.location?.latitude != null &&
+    todayData?.location?.longitude != null
+      ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
+      : userSettings?.latitude != null && userSettings?.longitude != null
+      ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
+      : null;
+
+  const effectiveSect = String(
+    todayData?.method?.sect || userSettings?.sect || "SUNNI"
+  ).toUpperCase();
+
   const sectLabel = titleCase(effectiveSect);
   const madhhabLabel =
     effectiveSect === "SHIA"
       ? "Shia timing mode"
-      : titleCase(todayData?.method?.madhhab || userSettings?.madhhab || "hanafi");
+      : titleCase(
+          todayData?.method?.madhhab || userSettings?.madhhab || "hanafi"
+        );
+
   const calcLabel = titleCase(
-    todayData?.method?.calculationMethod || userSettings?.calculationMethod || (effectiveSect === "SHIA" ? "jafari" : "isna")
+    todayData?.method?.calculationMethod ||
+      userSettings?.calculationMethod ||
+      (effectiveSect === "SHIA" ? "jafari" : "isna")
   );
+
   const hadithSect: "SUNNI" | "SHIA" =
-    String(todayData?.method?.sect || userSettings?.sect || "SUNNI")
-      .toUpperCase() === "SHIA"
+    String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase() ===
+    "SHIA"
       ? "SHIA"
       : "SUNNI";
 
@@ -726,7 +780,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         if (!cancelled) {
           setHadithOfDay(null);
           setHadithError(
-            err instanceof Error ? err.message : "Could not load hadith of the day."
+            err instanceof Error
+              ? err.message
+              : "Could not load hadith of the day."
           );
         }
       } finally {
@@ -743,20 +799,39 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     };
   }, [hasAmazonToken, hadithSect]);
 
+  const gregorianDate = currentTime.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  const formattedTime = currentTime.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
   if (!hasAmazonToken) {
     return (
-      <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
-            <Logo />
-            <Navigation />
+      <div className="min-h-screen bg-slate-950">
+        <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+          <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <Logo />
+              <Navigation />
+            </div>
           </div>
+        </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8">
-            <h1 className="text-white text-2xl mb-3">Connect Amazon to finish setup</h1>
+        <div className="max-w-7xl mx-auto px-4 py-6 md:px-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8">
+            <h1 className="text-white text-2xl mb-3">
+              Connect Amazon to finish setup
+            </h1>
             <p className="text-slate-300 mb-6">
-              Your backend is live, but the dashboard needs your Amazon access
-              token before it can load prayer times, settings, and device data.
+              Your dashboard needs your Amazon session before it can load
+              prayer times, settings, device data, and the daily hadith.
             </p>
             <div className="flex gap-4 flex-wrap">
               <Button
@@ -780,287 +855,473 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
-          <Logo />
-          <Navigation />
+    <div className="min-h-screen bg-slate-950">
+      <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <Logo />
+            <Navigation />
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 md:px-6">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <span className="text-slate-300 text-sm">
+              {locationLabel || "Location not available"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge
+              variant="outline"
+              className={`gap-2 ${
+                automationOn
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                  : "bg-slate-800 text-slate-400 border-slate-700"
+              }`}
+            >
+              {automationOn ? (
+                <Wifi className="w-3 h-3" />
+              ) : (
+                <WifiOff className="w-3 h-3" />
+              )}
+              {automationOn ? "Automation Active" : "Automation Paused"}
+            </Badge>
+
+            <Badge
+              variant="outline"
+              className="border-slate-700 text-slate-400"
+            >
+              <CheckCircle className="w-3 h-3 mr-1.5" />
+              {deviceCount} Device{deviceCount !== 1 ? "s" : ""}
+            </Badge>
+          </div>
         </div>
 
-        <div className="mb-8 space-y-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <h1 className="text-white mb-2">Assalamu Alaikum, {user?.name || "User"}</h1>
-              <p className="text-slate-400">
-                Here are your prayer times for today{locationLabel ? ` for ${locationLabel}` : ""}.
-              </p>
-              {timingSourceLabel && (
-                <p className="text-slate-500 text-xs mt-2">Prayer source: {timingSourceLabel}</p>
-              )}
-              {timingFallbackReason && (
-                <p className="text-amber-400 text-xs mt-1">{timingFallbackReason}</p>
-              )}
-              {activeTimeZone && (
-                <p className="text-slate-500 text-xs mt-1">Timezone: {activeTimeZone}</p>
-              )}
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-500/20 via-teal-500/10 to-slate-900 border border-emerald-500/20 p-6 md:p-10">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.1),transparent_50%)]" />
+
+          <div className="relative z-10">
+            <div className="flex items-start justify-between gap-4 flex-wrap mb-6 md:mb-8">
+              <div>
+                <p className="text-slate-400 text-sm mb-1">Assalamu Alaikum</p>
+                <h1 className="text-white text-3xl md:text-4xl mb-2">
+                  Next Prayer
+                </h1>
+                <p className="text-slate-400 text-sm">
+                  {timingSourceLabel}
+                  {timingFallbackReason ? ` · ${timingFallbackReason}` : ""}
+                </p>
+              </div>
+
+              <div className="text-right">
+                <p className="text-slate-400 text-sm mb-1">{gregorianDate}</p>
+                <div className="flex justify-end gap-2 flex-wrap">
+                  <Badge className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                    {sectLabel}
+                  </Badge>
+                  <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
+                    {madhhabLabel}
+                  </Badge>
+                  <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
+                    {calcLabel}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6 md:gap-8 items-center">
+              <div>
+                {loadingToday ? (
+                  <div className="space-y-3">
+                    <p className="text-slate-400 text-sm">Loading next prayer…</p>
+                    <div className="text-4xl md:text-5xl text-slate-400">--:--:--</div>
+                  </div>
+                ) : todayError ? (
+                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-amber-400 mt-0.5" />
+                      <div>
+                        <p className="text-amber-300 text-sm font-medium">
+                          Could not load prayer times
+                        </p>
+                        <p className="text-amber-200/80 text-sm mt-1">
+                          {todayError}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-slate-400 text-sm mb-2">Time Remaining</p>
+                      <div className="text-5xl md:text-6xl text-white tracking-tight mb-4 tabular-nums">
+                        {timeToNextPrayer || "--:--:--"}
+                      </div>
+                    </div>
+
+                    <div className="flex items-baseline gap-3 flex-wrap">
+                      <span className="text-2xl md:text-3xl text-emerald-400">
+                        {nextPrayerCode ? PRAYER_LABELS[nextPrayerCode] : "—"}
+                      </span>
+                      <span className="text-xl text-slate-300">
+                        {nextPrayerTimeDisplay || "--:--"}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-900/50 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-500"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <Button
+                  size="lg"
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-500/20 h-12 md:h-14 text-base md:text-lg"
+                  onClick={() => navigate("/alexa-setup")}
+                >
+                  <Link2 className="w-5 h-5 mr-2" />
+                  Open Alexa Setup
+                </Button>
+
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="w-full border-slate-700 text-slate-300 hover:bg-slate-800/50 h-11 md:h-12"
+                  onClick={() => navigate("/settings")}
+                >
+                  {automationOn ? "Manage" : "Resume"} Automation
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-6 md:mt-8 pt-6 border-t border-slate-700/50">
+              <div className="flex items-center gap-2 text-slate-400">
+                <Clock className="w-4 h-4" />
+                <span className="text-sm">
+                  Current Time:{" "}
+                  <span className="text-slate-300 tabular-nums">
+                    {formattedTime}
+                  </span>
+                  {activeTimeZone ? ` · ${activeTimeZone}` : ""}
+                </span>
+              </div>
               {locationCoords && (
-                <p className="text-slate-500 text-xs mt-1">Coordinates: {locationCoords}</p>
+                <div className="mt-2 text-xs text-slate-500">
+                  Coordinates: {locationCoords}
+                </div>
               )}
-              {quietHours && (
-                <p className="text-slate-500 text-xs mt-1">Quiet hours: {quietHours.from}–{quietHours.to}</p>
-              )}
-              {settingsError && <p className="text-amber-400 text-xs mt-1">{settingsError}</p>}
-            </div>
-
-            <div className="flex items-center gap-3 flex-wrap">
-              <Badge className={`px-3 py-1.5 ${automationOn ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-slate-700 text-slate-400 border-slate-600"}`}>
-                <div className={`w-2 h-2 rounded-full mr-2 ${automationOn ? "bg-emerald-400" : "bg-slate-400"}`} />
-                Automation: {automationOn ? "ON" : "OFF"}
-              </Badge>
             </div>
           </div>
+        </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Badge className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-              {sectLabel}
-            </Badge>
-            <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
-              {madhhabLabel}
-            </Badge>
-            <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
-              {calcLabel}
-            </Badge>
-            <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
-              {deviceCount} Alexa device{deviceCount === 1 ? "" : "s"}
-            </Badge>
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-white text-xl">Today&apos;s Prayer Times</h2>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
+              onClick={() => navigate("/calendar")}
+            >
+              <CalendarIcon className="w-4 h-4 mr-2" />
+              Calendar
+            </Button>
           </div>
 
-          <p className="text-slate-500 text-sm">
-            Sect changes affect prayer-time calculation only. All Sunni and Shia
-            Adhan voices remain available for playback.
-          </p>
+          {loadingToday ? (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
+              Loading prayer times…
+            </div>
+          ) : todayError ? (
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-6 text-amber-200">
+              {todayError}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {PRAYER_ORDER.map((code) => {
+                const isNext = nextPrayerCode === code;
+                const isPassed =
+                  !loadingToday &&
+                  !isNext &&
+                  !!prayersForDisplay?.[code] &&
+                  !!nextPrayerCode &&
+                  COUNTDOWN_PRAYERS.includes(code as PrayerCode) &&
+                  COUNTDOWN_PRAYERS.indexOf(code as PrayerCode) <
+                    COUNTDOWN_PRAYERS.indexOf(nextPrayerCode as PrayerCode);
+
+                return (
+                  <div
+                    key={code}
+                    className={`relative p-4 rounded-2xl transition-all ${
+                      isNext
+                        ? "bg-emerald-500/10 border-2 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
+                        : isPassed
+                        ? "bg-slate-900/50 border border-slate-800/50 opacity-60"
+                        : "bg-slate-900 border border-slate-800 hover:border-slate-700"
+                    }`}
+                  >
+                    {isNext && (
+                      <Badge className="absolute -top-2 -right-2 bg-emerald-600 text-white border-0 text-xs">
+                        Next
+                      </Badge>
+                    )}
+
+                    <div className="text-center">
+                      <h3
+                        className={`mb-1 text-sm ${
+                          isNext ? "text-emerald-400" : "text-white"
+                        }`}
+                      >
+                        {PRAYER_LABELS[code]}
+                      </h3>
+                      <p
+                        className={`text-base ${
+                          isNext ? "text-emerald-300" : "text-slate-400"
+                        }`}
+                      >
+                        {prayersForDisplay?.[code] || "--:--"}
+                      </p>
+                    </div>
+
+                    {isPassed && (
+                      <div className="absolute top-2 right-2">
+                        <CheckCircle className="w-4 h-4 text-slate-600" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="grid lg:grid-cols-2 gap-6">
           <div className="space-y-6">
-
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Next Prayer</h2>
-              {loadingToday ? (
-                <p className="text-slate-400">Loading next prayer…</p>
-              ) : todayError ? (
-                <p className="text-amber-400">{todayError}</p>
-              ) : (
-                <>
-                  <p className="text-slate-400 mb-3">Next prayer in</p>
-                  <div className="text-3xl text-emerald-400 font-semibold mb-2">
-                    {timeToNextPrayer || "--:--"}
-                  </div>
-                  <div className="text-slate-300 mb-4">
-                    {nextPrayerCode
-                      ? `${PRAYER_LABELS[nextPrayerCode]} · ${nextPrayerTimeDisplay || "--:--"}`
-                      : "--"}
-                  </div>
-                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
-                  </div>
-                </>
-              )}
-            </div>
+              <h2 className="text-white mb-4 text-xl">Connected Platforms</h2>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Today&apos;s Timetable</h2>
-              {loadingToday ? (
-                <p className="text-slate-400">Loading prayer times…</p>
-              ) : todayError ? (
-                <p className="text-amber-400 mb-4">{todayError}</p>
-              ) : null}
-              <div className="space-y-3">
-                {PRAYER_ORDER.map((code) => (
-                  <div key={code} className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3">
-                    <span className="text-white">{PRAYER_LABELS[code]}</span>
-                    <span className="text-slate-300">{prayersForDisplay?.[code] || "--:--"}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="w-5 h-5 text-emerald-400" />
-                  <h2 className="text-white">Hadith of the Day</h2>
-                </div>
-
-                <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
-                  {hadithSect === "SHIA" ? "Shia" : "Sunni"}
-                </Badge>
-              </div>
-
-              {loadingHadith ? (
-                <p className="text-slate-400">Loading hadith…</p>
-              ) : hadithError ? (
-                <p className="text-amber-400">{hadithError}</p>
-              ) : hadithOfDay ? (
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-emerald-300 text-sm font-medium mb-1">
-                      {hadithOfDay.title}
-                    </div>
-                    <div className="text-slate-500 text-xs">
-                      {hadithOfDay.reference}
-                      {hadithOfDay.narrator ? ` · ${hadithOfDay.narrator}` : ""}
-                    </div>
-                  </div>
-
-                  {hadithOfDay.textArabic ? (
-                    <p className="text-right text-slate-100 text-xl leading-9">
-                      {hadithOfDay.textArabic}
-                    </p>
-                  ) : null}
-
-                  <p className="text-slate-300 leading-7">{hadithOfDay.textEnglish}</p>
-
-                  {hadithOfDay.source ? (
-                    <p className="text-slate-500 text-xs">
-                      Source: {hadithOfDay.source}
-                    </p>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="text-slate-400">No hadith available right now.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-              <div className="flex items-start gap-3">
-                <MapPin className="w-4 h-4 text-emerald-400 mt-1" />
-                <div>
-                  <div className="text-white text-sm font-medium">Location and timing rule</div>
-                  <div className="text-slate-400 text-sm">{locationLabel || "Saved location"}</div>
-                  <div className="text-slate-500 text-xs mt-1">
-                    {userSettings?.useMosqueLocation
-                      ? mosque?.name
-                        ? `Mosque override is ON · ${mosque.name}`
-                        : "Mosque override is ON, but no saved mosque is available yet."
-                      : "Personal-location timing is active."}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <MoonStar className="w-4 h-4 text-cyan-400 mt-1" />
-                <div>
-                  <div className="text-white text-sm font-medium">Prayer calculation</div>
-                  <div className="text-slate-400 text-sm">
-                    {sectLabel} · {madhhabLabel} · {calcLabel}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <Clock3 className="w-4 h-4 text-amber-400 mt-1" />
-                <div>
-                  <div className="text-white text-sm font-medium">Playback rule</div>
-                  <div className="text-slate-400 text-sm">
-                    All Sunni and Shia Adhan voices can be used regardless of sect.
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Connected platforms</h2>
-              {connectedPlatforms.length === 0 ? (
-                <p className="text-slate-400 mb-4">No platform linked yet.</p>
-              ) : (
+              {connectedPlatforms.length > 0 ? (
                 <div className="space-y-3 mb-4">
-                  {connectedPlatforms.map((platform) => (
-                    <div key={platform} className="flex items-center justify-between rounded-xl bg-slate-800/50 px-4 py-3">
-                      <span className="text-white">
-                        {PLATFORM_ICONS[platform] || "•"} {PLATFORM_NAMES[platform] || platform}
-                      </span>
-                      <span className="text-emerald-400 text-sm flex items-center gap-2">
-                        <CheckCircle className="w-4 h-4" /> Connected
-                      </span>
+                  {connectedPlatforms.map((platform: string) => (
+                    <div
+                      key={platform}
+                      className="flex items-center justify-between p-3 bg-slate-800/50 rounded-xl hover:bg-slate-800 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="text-2xl">
+                          {PLATFORM_ICONS[platform] || "•"}
+                        </div>
+                        <span className="text-white">
+                          {PLATFORM_NAMES[platform] || titleCase(platform)}
+                        </span>
+                      </div>
+                      <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 border">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Active
+                      </Badge>
                     </div>
                   ))}
                 </div>
+              ) : (
+                <p className="text-slate-400 mb-4">
+                  No platforms connected yet.
+                </p>
               )}
-              <p className="text-slate-400 text-sm mb-4">{deviceCount} linked Alexa device(s) available</p>
+
+              <p className="text-slate-400 text-sm mb-4">
+                {deviceCount} device{deviceCount === 1 ? "" : "s"} available
+              </p>
+
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full border-slate-700 text-slate-300 hover:bg-slate-800"
                 onClick={() => navigate("/settings")}
               >
-                Manage connections
+                Manage Platforms
               </Button>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Mosque</h2>
-              {mosque ? (
-                <div className="space-y-2 mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/40">
-                      <Building2 className="w-5 h-5 text-emerald-400" />
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div className="flex items-start gap-3">
+                <MapPin className="w-4 h-4 text-emerald-400 mt-1 flex-shrink-0" />
+                <div className="flex-1">
+                  <div className="text-white text-sm font-medium">Location</div>
+                  <div className="text-slate-400 text-sm">
+                    {locationLabel || "Location not available"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <MoonStar className="w-4 h-4 text-cyan-400 mt-1 flex-shrink-0" />
+                <div>
+                  <div className="text-white text-sm font-medium">
+                    Prayer Method
+                  </div>
+                  <div className="text-slate-400 text-sm">
+                    {calcLabel} · {madhhabLabel}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <Clock3 className="w-4 h-4 text-amber-400 mt-1 flex-shrink-0" />
+                <div>
+                  <div className="text-white text-sm font-medium">Timezone</div>
+                  <div className="text-slate-400 text-sm">
+                    {activeTimeZone}
+                  </div>
+                </div>
+              </div>
+
+              {quietHours && (
+                <div className="flex items-start gap-3">
+                  <Volume2 className="w-4 h-4 text-purple-400 mt-1 flex-shrink-0" />
+                  <div>
+                    <div className="text-white text-sm font-medium">
+                      Quiet Hours
                     </div>
-                    <div className="flex-1">
-                      <div className="text-white mb-1">{mosque.name}</div>
-                      <div className="text-slate-400 text-sm">
-                        {mosque.address || mosque.city || "Using mosque location from settings"}
-                      </div>
+                    <div className="text-slate-400 text-sm">
+                      {quietHours.from} – {quietHours.to}
                     </div>
                   </div>
                 </div>
+              )}
+
+              {settingsError && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-3 text-amber-200 text-sm">
+                  {settingsError}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <h2 className="text-white mb-4 text-xl">Mosque</h2>
+
+              {mosque ? (
+                <div className="space-y-2 mb-4">
+                  <div className="flex items-center gap-3 p-4 bg-slate-800/50 rounded-xl">
+                    <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/40 flex-shrink-0">
+                      <Building2 className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white mb-1">{mosque.name}</div>
+                      <div className="text-slate-400 text-sm truncate">
+                        {mosque.address || mosque.city || "Selected mosque"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <Badge
+                    variant="outline"
+                    className="border-emerald-500/30 text-emerald-400 w-full justify-center py-2"
+                  >
+                    {userSettings?.useMosqueLocation
+                      ? "Following mosque timings"
+                      : "Mosque saved, personal timings active"}
+                  </Badge>
+                </div>
               ) : (
-                <p className="text-slate-400 text-sm mb-4">
-                  No mosque selected yet. Choose one from the <Link to="/mosque" className="text-emerald-400 underline">Mosque</Link> tab.
+                <p className="text-slate-400 text-sm mb-4 p-4 bg-slate-800/50 rounded-xl text-center">
+                  No mosque selected. Using calculation-based timings.
                 </p>
               )}
+
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full border-slate-700 text-slate-300 hover:bg-slate-800"
                 onClick={() => navigate("/mosque")}
               >
-                Choose a mosque
+                {mosque ? "Change Mosque" : "Choose a Mosque"}
               </Button>
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4">Quick Actions</h2>
-              <div className="space-y-3">
+              <h2 className="text-white mb-4 text-xl">Quick Actions</h2>
+              <div className="grid grid-cols-2 gap-3">
                 <Button
                   variant="outline"
-                  className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
+                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
                   onClick={() => navigate("/settings")}
                 >
-                  <Edit className="w-4 h-4 mr-3" />
-                  Edit Prayer Settings
+                  <Edit className="w-5 h-5 mb-2 text-emerald-400" />
+                  <span className="text-sm">Prayer Settings</span>
                 </Button>
+
                 <Button
                   variant="outline"
-                  className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
+                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
                   onClick={() => navigate("/settings")}
                 >
-                  <SettingsIcon className="w-4 h-4 mr-3" />
-                  Manage Devices & Quiet Hours
+                  <SettingsIcon className="w-5 h-5 mb-2 text-emerald-400" />
+                  <span className="text-sm">Devices</span>
                 </Button>
+
                 <Button
                   variant="outline"
-                  className="w-full justify-start border-slate-700 text-slate-300 hover:bg-slate-800"
-                  onClick={() => navigate("/settings")}
+                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
+                  onClick={() => navigate("/qiblah")}
                 >
-                  <Volume2 className="w-4 h-4 mr-3" />
-                  Review After-Adhan Playback
+                  <Compass className="w-5 h-5 mb-2 text-emerald-400" />
+                  <span className="text-sm">Qiblah</span>
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
+                  onClick={() => navigate("/dua-quran")}
+                >
+                  <BookOpen className="w-5 h-5 mb-2 text-emerald-400" />
+                  <span className="text-sm">Dua & Qur&apos;an</span>
                 </Button>
               </div>
             </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <BookOpen className="w-5 h-5 text-emerald-400" />
+                <h2 className="text-white text-xl">Daily Reminder</h2>
+              </div>
+
+              {loadingHadith ? (
+                <p className="text-slate-400">Loading hadith of the day…</p>
+              ) : hadithError ? (
+                <p className="text-amber-300 text-sm">{hadithError}</p>
+              ) : hadithOfDay ? (
+                <div className="space-y-3">
+                  <p className="text-slate-300 leading-7 italic">
+                    &ldquo;{hadithOfDay.textEnglish}&rdquo;
+                  </p>
+                  <p className="text-slate-500 text-sm">
+                    {hadithOfDay.reference}
+                    {hadithOfDay.narrator ? ` · ${hadithOfDay.narrator}` : ""}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-slate-400">No daily reminder available.</p>
+              )}
+            </div>
           </div>
+        </div>
+
+        <div className="text-center py-4">
+          <p className="text-slate-500 text-sm">
+            Prayer times are calculated from your saved settings, current timing
+            source, and selected juristic method.
+          </p>
         </div>
       </div>
     </div>
