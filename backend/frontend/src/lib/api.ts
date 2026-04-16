@@ -35,19 +35,37 @@ export function getApiUrl(path: string): string {
 
 export const apiUrl = getApiUrl;
 
+function readLegacyLocalToken(): string | null {
+  if (!isBrowser) return null;
+  return localStorage.getItem(TOKEN_KEY) || null;
+}
+
+function migrateLegacyLocalToken(): string | null {
+  if (!isBrowser) return null;
+
+  const sessionToken = sessionStorage.getItem(TOKEN_KEY);
+  if (sessionToken) {
+    localStorage.removeItem(TOKEN_KEY);
+    return sessionToken;
+  }
+
+  const legacyToken = readLegacyLocalToken();
+  if (!legacyToken) return null;
+
+  sessionStorage.setItem(TOKEN_KEY, legacyToken);
+  localStorage.removeItem(TOKEN_KEY);
+  return legacyToken;
+}
+
 export function getStoredAmazonToken(): string | null {
   if (!isBrowser) return null;
-  return (
-    localStorage.getItem(TOKEN_KEY) ||
-    sessionStorage.getItem(TOKEN_KEY) ||
-    null
-  );
+  return sessionStorage.getItem(TOKEN_KEY) || migrateLegacyLocalToken() || null;
 }
 
 export function setStoredAmazonToken(token: string) {
   if (!isBrowser) return;
-  localStorage.setItem(TOKEN_KEY, token);
   sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.removeItem(TOKEN_KEY);
   window.dispatchEvent(new Event(AUTH_EVENT));
 }
 
