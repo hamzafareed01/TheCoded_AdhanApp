@@ -4,7 +4,7 @@ import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Badge } from "../ui/badge";
-import { Check, Copy, Link2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, Copy, Link2, RefreshCw } from "lucide-react";
 import { apiFetch } from "../../lib/api";
 
 type Template = {
@@ -16,10 +16,32 @@ type Template = {
 
 type LinkStatus = {
   configured?: boolean;
+  appLinkClientConfigured?: boolean;
   linked?: boolean;
+  lwaLinked?: boolean;
   expiresAt?: string | null;
+  lwaExpiresAt?: string | null;
   lastUsedAt?: string | null;
   invocationName?: string | null;
+  skillId?: string | null;
+  skillStage?: string | null;
+  enablementStatus?: string | null;
+  accountLinkStatus?: string | null;
+  endpointHost?: string | null;
+};
+
+type UserSettingsSummary = {
+  selectedAlexaDeviceIds?: string[];
+  useMosqueLocation?: boolean;
+  mosqueName?: string | null;
+  calculationMethod?: string | null;
+  madhhab?: string | null;
+  sect?: string | null;
+  accountEnabled?: boolean;
+};
+
+type DeviceListResponse = {
+  devices?: Array<{ id: string; name: string; platform?: string | null }>;
 };
 
 const FALLBACK_TEMPLATES: Template[] = [
@@ -55,40 +77,29 @@ const FALLBACK_TEMPLATES: Template[] = [
   },
 ];
 
+function formatDateTime(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
+function statusTone(ok: boolean) {
+  return ok ? "default" : "secondary";
+}
+
 export default function AlexaSetup() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<Template[]>(FALLBACK_TEMPLATES);
   const [status, setStatus] = useState<LinkStatus | null>(null);
+  const [settings, setSettings] = useState<UserSettingsSummary | null>(null);
+  const [deviceNames, setDeviceNames] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [templatesRes, statusRes] = await Promise.all([
-          apiFetch("/api/alexa/routines/templates"),
-          apiFetch("/api/alexa/account-linking/status"),
-        ]);
-
-        if (templatesRes.ok) {
-          const payload = (await templatesRes.json()) as { templates?: Template[] };
-          if (Array.isArray(payload.templates) && payload.templates.length > 0) {
-            setTemplates(payload.templates);
-          }
-        }
-
-        if (statusRes.ok) {
-          const payload = (await statusRes.json()) as LinkStatus;
-          setStatus(payload);
-        }
-      } catch {
-        // keep fallback UI
-      }
-    }
-
-    void load();
-  }, []);
-
-  const canCopyLinkingUrl = useMemo(() => {
-    return typeof window !== "undefined";
+  const accountLinkPage = useMemo(() => {
+    return typeof window !== "undefined"
+      ? `${window.location.origin}/onboarding/step2`
+      : "/onboarding/step2";
   }, []);
 
   async function copy(text: string, id: string) {
@@ -106,9 +117,79 @@ export default function AlexaSetup() {
     setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1200);
   }
 
-  const accountLinkPage = canCopyLinkingUrl
-    ? `${window.location.origin}/onboarding/step2`
-    : "/onboarding/step2";
+  async function load() {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const [templatesRes, statusRes, settingsRes, devicesRes] = await Promise.all([
+        apiFetch("/api/alexa/routines/templates"),
+        apiFetch("/api/alexa/account-linking/status"),
+        apiFetch("/api/user/settings"),
+        apiFetch("/api/alexa/devices"),
+      ]);
+
+      if (templatesRes.ok) {
+        const payload = (await templatesRes.json()) as { templates?: Template[] };
+        if (Array.isArray(payload.templates) && payload.templates.length > 0) {
+          setTemplates(payload.templates);
+        }
+      }
+
+      if (statusRes.ok) {
+        const payload = (await statusRes.json()) as LinkStatus;
+        setStatus(payload);
+      } else if (statusRes.status === 401) {
+        setStatus(null);
+        setError("Connect Amazon in onboarding step 2 first, then come back here.");
+      }
+
+      if (settingsRes.ok) {
+        const payload = (await settingsRes.json()) as { settings?: UserSettingsSummary } & UserSettingsSummary;
+        setSettings(payload.settings ?? payload);
+      }
+
+      if (devicesRes.ok) {
+        const payload = (await devicesRes.json()) as DeviceListResponse;
+        const names = Array.isArray(payload.devices)
+          ? payload.devices.map((device) => device.name).filter(Boolean)
+          : [];
+        setDeviceNames(names);
+      }
+    } catch {
+      setError("Could not load Alexa setup details right now.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const selectedDeviceCount = Array.isArray(settings?.selectedAlexaDeviceIds)
+    ? settings?.selectedAlexaDeviceIds.length
+    : 0;
+
+  const sourceLabel = settings?.useMosqueLocation
+    ? settings?.mosqueName || "Mosque timing source"
+    : "Personal location / calculation";
+
+  const nextStep = useMemo(() => {
+    if (!status?.configured || !status?.appLinkClientConfigured) {
+      return "Backend Alexa configuration is incomplete. Check OAuth and app-link environment variables before testing devices.";
+    }
+    if (!status?.lwaLinked) {
+      return "Connect Amazon in onboarding step 2 so the app can save your Alexa link state.";
+    }
+    if (status?.accountLinkStatus !== "LINKED") {
+      return "Enable and link the Alexa skill from onboarding step 2. After linking succeeds, come back here to verify status.";
+    }
+    if (!selectedDeviceCount) {
+      return "Pick at least one Alexa device in Step 5 or Settings so playback targets are predictable.";
+    }
+    return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, then create routines if you want scheduled playback.";
+  }, [selectedDeviceCount, status]);
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -119,51 +200,111 @@ export default function AlexaSetup() {
             <div>
               <div className="text-slate-100 font-semibold text-lg">Alexa Setup</div>
               <div className="text-slate-400 text-sm">
-                Skill linking + routine phrases for prayer-based Alexa playback.
+                Guided Alexa status, routine phrases, and app-controlled playback checks.
               </div>
             </div>
           </div>
-          <Navigation />
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              className="inline-flex items-center gap-2"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh status
+            </Button>
+            <Navigation />
+          </div>
         </div>
+
+        {error ? (
+          <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+            <div className="inline-flex items-center gap-2 font-medium">
+              <AlertTriangle className="w-4 h-4" />
+              {error}
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid lg:grid-cols-3 gap-4 mb-6">
           <Card className="bg-slate-900/40 border-slate-800 lg:col-span-2">
             <CardHeader>
               <CardTitle className="text-slate-100">Current status</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm text-slate-300">
+            <CardContent className="space-y-4 text-sm text-slate-300">
               <div className="flex flex-wrap gap-2">
-                <Badge variant={status?.configured ? "default" : "secondary"}>
-                  {status?.configured ? "OAuth configured" : "OAuth not configured"}
+                <Badge variant={statusTone(!!status?.configured)}>
+                  {status?.configured ? "Skill OAuth ready" : "Skill OAuth missing"}
                 </Badge>
-                <Badge variant={status?.linked ? "default" : "secondary"}>
-                  {status?.linked ? "Skill linked" : "Skill not linked yet"}
+                <Badge variant={statusTone(!!status?.appLinkClientConfigured)}>
+                  {status?.appLinkClientConfigured ? "App link ready" : "App link missing"}
+                </Badge>
+                <Badge variant={statusTone(!!status?.lwaLinked)}>
+                  {status?.lwaLinked ? "Amazon linked" : "Amazon not linked"}
+                </Badge>
+                <Badge variant={statusTone(status?.accountLinkStatus === "LINKED")}> 
+                  {status?.accountLinkStatus === "LINKED" ? "Skill linked" : "Skill not linked"}
                 </Badge>
               </div>
-              <div>
-                Invocation name: <span className="text-slate-100">{status?.invocationName || "adhan home"}</span>
+
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                  <div className="text-slate-400">Invocation name</div>
+                  <div className="text-slate-100 font-medium">{status?.invocationName || "adhan home"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                  <div className="text-slate-400">Skill stage</div>
+                  <div className="text-slate-100 font-medium">{status?.skillStage || "development"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                  <div className="text-slate-400">Enablement status</div>
+                  <div className="text-slate-100 font-medium">{status?.enablementStatus || "Not enabled yet"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                  <div className="text-slate-400">Account-link status</div>
+                  <div className="text-slate-100 font-medium">{status?.accountLinkStatus || "Not linked yet"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                  <div className="text-slate-400">App-link token expiry</div>
+                  <div className="text-slate-100 font-medium">{formatDateTime(status?.lwaExpiresAt)}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                  <div className="text-slate-400">Last Alexa skill use</div>
+                  <div className="text-slate-100 font-medium">{formatDateTime(status?.lastUsedAt)}</div>
+                </div>
               </div>
-              {status?.expiresAt ? (
-                <div>Skill token expires: <span className="text-slate-100">{new Date(status.expiresAt).toLocaleString()}</span></div>
-              ) : null}
-              {status?.lastUsedAt ? (
-                <div>Last Alexa skill use: <span className="text-slate-100">{new Date(status.lastUsedAt).toLocaleString()}</span></div>
-              ) : null}
+
               <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                Adhan Home now supports backend OAuth/account linking and a real skill playback endpoint.
-                Alexa routines still need to be created in the Alexa app because Amazon does not provide a
-                public API for third-party routine creation.
+                <div className="text-slate-400">Next recommended step</div>
+                <div className="mt-1 text-slate-100">{nextStep}</div>
               </div>
             </CardContent>
           </Card>
 
           <Card className="bg-slate-900/40 border-slate-800">
             <CardHeader>
-              <CardTitle className="text-slate-100">Console values</CardTitle>
+              <CardTitle className="text-slate-100">App source of truth</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-slate-300">
               <div>
-                App redirect URL:
+                Timing source:
+                <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-slate-100">
+                  {sourceLabel}
+                </div>
+              </div>
+              <div>Sect: <span className="text-slate-100">{settings?.sect || "SUNNI"}</span></div>
+              <div>Method: <span className="text-slate-100">{settings?.calculationMethod || "isna"}</span></div>
+              <div>Madhhab: <span className="text-slate-100">{settings?.madhhab || "hanafi"}</span></div>
+              <div>Playback enabled: <span className="text-slate-100">{settings?.accountEnabled ? "Yes" : "No"}</span></div>
+              <div>Selected devices: <span className="text-slate-100">{selectedDeviceCount}</span></div>
+              {deviceNames.length ? (
+                <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-xs text-slate-100">
+                  {deviceNames.join(", ")}
+                </div>
+              ) : null}
+              <div>
+                Step 2 callback URL:
                 <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 font-mono text-xs text-slate-100 break-all">
                   {accountLinkPage}
                 </div>
@@ -172,7 +313,7 @@ export default function AlexaSetup() {
                 {copiedId === "link-url" ? (
                   <span className="inline-flex items-center gap-2"><Check className="w-4 h-4" /> Copied</span>
                 ) : (
-                  <span className="inline-flex items-center gap-2"><Link2 className="w-4 h-4" /> Copy auth URL</span>
+                  <span className="inline-flex items-center gap-2"><Link2 className="w-4 h-4" /> Copy callback URL</span>
                 )}
               </Button>
             </CardContent>
@@ -185,13 +326,12 @@ export default function AlexaSetup() {
           </CardHeader>
           <CardContent className="text-slate-200 space-y-2">
             <ol className="list-decimal ml-5 space-y-2">
-              <li>Open the <b>Alexa</b> app and enable the Adhan Home skill.</li>
-              <li>Complete account linking when Alexa opens the Adhan Home authorization page.</li>
-              <li>Tap <b>More</b> → <b>Routines</b> → <b>+</b>.</li>
-              <li>Pick a routine name and the correct prayer time trigger.</li>
-              <li>Tap <b>Add action</b> → <b>Custom</b> → paste the phrase from below.</li>
-              <li>Under <b>From</b>, choose the Echo device that should play the Adhan.</li>
-              <li>Save and test the routine once manually.</li>
+              <li>Finish Amazon connect + skill linking from onboarding step 2.</li>
+              <li>Open the Alexa app, then go to <b>More → Routines → +</b>.</li>
+              <li>Pick the correct prayer-time trigger for the routine.</li>
+              <li>Choose <b>Add action → Custom</b> and paste one of the phrases below.</li>
+              <li>Under <b>From</b>, pick the Echo device that should speak the command.</li>
+              <li>Save, then run the routine once manually before relying on it daily.</li>
             </ol>
           </CardContent>
         </Card>
@@ -212,7 +352,7 @@ export default function AlexaSetup() {
                 <Button variant="secondary" className="w-full" onClick={() => copy(t.phrase, t.id)}>
                   {copiedId === t.id ? (
                     <span className="inline-flex items-center gap-2">
-                      <Check className="w-4 h-4" /> Copied
+                      <CheckCircle2 className="w-4 h-4" /> Copied
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-2">

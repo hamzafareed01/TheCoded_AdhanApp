@@ -82,7 +82,6 @@ type AlexaLinkPending = {
 };
 
 const LS_CONNECTED = "adhan_connected_platforms";
-const LS_TOKENS = "adhan_tokens";
 const LS_ALEXA_LINK_PENDING = "adhan_alexa_link_pending";
 
 function readJson<T>(key: string, fallback: T): T {
@@ -143,7 +142,7 @@ export default function Step2ConnectAccounts({
   );
 
   const [tokens, setTokens] = useState<Record<string, string>>(() =>
-    readJson<Record<string, string>>(LS_TOKENS, onboardingData?.tokens ?? {})
+    onboardingData?.tokens ?? {}
   );
 
   useEffect(() => {
@@ -151,8 +150,12 @@ export default function Step2ConnectAccounts({
   }, [connectedPlatforms]);
 
   useEffect(() => {
-    writeJson(LS_TOKENS, tokens);
-  }, [tokens]);
+    try {
+      localStorage.removeItem("adhan_tokens");
+    } catch {
+      // ignore storage cleanup failures
+    }
+  }, []);
 
   const platforms = useMemo(
     () => [
@@ -500,7 +503,7 @@ export default function Step2ConnectAccounts({
     setOnboardingData?.({
       ...(onboardingData || {}),
       connectedPlatforms,
-      tokens,
+      tokens: {},
     });
     navigate("/onboarding/step3");
   }
