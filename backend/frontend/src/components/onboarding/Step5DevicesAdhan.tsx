@@ -268,11 +268,7 @@ function isAfterAdhanDua(dua: DuaOption) {
   if (dua.id === "after_adhan") return true;
   const tags = Array.isArray(dua.tags) ? dua.tags.join(" ").toLowerCase() : "";
   const title = dua.title.toLowerCase();
-  return (
-    title.includes("after adhan") ||
-    tags.includes("after adhan") ||
-    tags.includes("adhan")
-  );
+  return title.includes("after adhan") || tags.includes("after adhan") || tags.includes("adhan");
 }
 
 export default function Step5DevicesAdhan({
@@ -291,9 +287,7 @@ export default function Step5DevicesAdhan({
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
     Array.isArray(onboardingData.devices)
-      ? onboardingData.devices.filter(
-          (id): id is string => typeof id === "string" && id.trim().length > 0
-        )
+      ? onboardingData.devices.filter((id): id is string => typeof id === "string")
       : []
   );
   const [reciters, setReciters] = useState<Reciter[]>([]);
@@ -304,12 +298,10 @@ export default function Step5DevicesAdhan({
   );
 
   const afterAdhanDuas = useMemo(() => duas.filter(isAfterAdhanDua), [duas]);
-
   const recitersSorted = useMemo(
     () => [...reciters].sort((a, b) => a.name.localeCompare(b.name)),
     [reciters]
   );
-
   const sectLabel = useMemo(() => {
     const sect = String(onboardingData?.prayerSettings?.sect || "SUNNI").toUpperCase();
     return sect === "SHIA" ? "Shia" : "Sunni";
@@ -378,9 +370,7 @@ export default function Step5DevicesAdhan({
           asBoolean(payload.accountEnabled) ??
           asBoolean(payload.account_enabled);
 
-        if (enabledValue !== null) {
-          setAccountEnabled(enabledValue);
-        }
+        setAccountEnabled(enabledValue ?? false);
 
         const selectedDeviceIdsSource = Array.isArray(settings.selectedAlexaDeviceIds)
           ? settings.selectedAlexaDeviceIds
@@ -456,12 +446,8 @@ export default function Step5DevicesAdhan({
     if (devices.length === 0) return;
 
     setSelectedDeviceIds((prev) => {
-      const filtered = prev.filter((id) =>
-        devices.some((device) => device.id === id)
-      );
-
+      const filtered = prev.filter((id) => devices.some((device) => device.id === id));
       if (filtered.length > 0) return filtered;
-
       return devices.map((device) => device.id);
     });
   }, [devices]);
@@ -493,21 +479,14 @@ export default function Step5DevicesAdhan({
 
     setSaving(true);
     try {
-      const normalizedPrayerConfigs = prayerConfigs.map((p) => ({
-        prayerName: p.prayerName,
-        adhanReciterId: p.adhanReciterId,
-        afterAdhan: {
-          type: p.afterAdhan.type,
-          payload: p.afterAdhan.payload ?? null,
-        },
-      }));
-
       const payload: JsonRecord = {
         accountEnabled,
-        account_enabled: accountEnabled,
         selectedAlexaDeviceIds: selectedDeviceIds,
-        selectedDeviceIds: selectedDeviceIds,
-        prayerConfigs: normalizedPrayerConfigs,
+        prayerConfigs: prayerConfigs.map((p) => ({
+          prayerName: p.prayerName,
+          adhanReciterId: p.adhanReciterId,
+          afterAdhan: p.afterAdhan,
+        })),
       };
 
       const resp = await saveSettings(payload);
@@ -521,7 +500,7 @@ export default function Step5DevicesAdhan({
         ...onboardingData,
         devices: selectedDeviceIds,
         accountEnabled,
-        prayerConfigs: normalizedPrayerConfigs,
+        prayerConfigs,
       });
 
       navigate("/onboarding/step6");
@@ -536,118 +515,95 @@ export default function Step5DevicesAdhan({
     }
   };
 
+  const tabs = useMemo(() => ["Linked Devices", "Adhan per Prayer"], []);
+
   return (
-    <div className="min-h-screen bg-slate-950">
-      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
-        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <Logo />
-            <ProgressIndicator currentStep={5} totalSteps={6} />
+    <div className="min-h-screen bg-slate-950 py-8 px-4">
+      <div className="max-w-5xl mx-auto">
+        <Logo className="mb-8" />
+        <ProgressIndicator currentStep={5} totalSteps={6} />
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            <h1 className="text-white text-2xl font-semibold">
+              Devices &amp; Adhan
+            </h1>
+            <Badge
+              variant="outline"
+              className="border-emerald-500/30 text-emerald-400"
+            >
+              Step 5 of 6
+            </Badge>
           </div>
-        </div>
-      </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-8 md:py-12">
-        <div className="mb-8 md:mb-10">
-          <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
-            Select devices & Adhan
-          </h1>
-          <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
-            Choose which Alexa devices will play the Adhan, and pick your preferred reciter for each prayer time.
+          <p className="text-slate-300 mb-6">
+            Enable your account, review linked Alexa devices, and set Adhan plus
+            after-Adhan actions for each prayer.
           </p>
-        </div>
 
-        <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
+          <div className="grid md:grid-cols-3 gap-4 mb-6">
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 px-4 py-3">
+              <div className="text-white text-sm font-medium">Current timing mode</div>
+              <div className="text-slate-400 text-xs mt-1">
+                {sectLabel} calculation mode will be used for prayer timings.
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 px-4 py-3">
+              <div className="text-white text-sm font-medium">Voice library</div>
+              <div className="text-slate-400 text-xs mt-1">
+                Sunni and Shia Adhan voices remain available to both sects.
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-700 bg-slate-800/40 px-4 py-3">
+              <div className="text-white text-sm font-medium">After Adhan audio</div>
+              <div className="text-slate-400 text-xs mt-1">
+                Only the After Adhan dua is offered here for playback.
+              </div>
+            </div>
+          </div>
+
           {error && (
-            <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
-              <p className="text-red-300 text-sm leading-relaxed">{error}</p>
+            <div className="mb-6 text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-md px-3 py-2">
+              {error}
             </div>
           )}
 
-          <div className="mb-8 p-6 rounded-2xl border-2 border-slate-700/60 bg-slate-800/30">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex-1">
-                <div className="text-white font-semibold mb-1">Enable Adhan playback</div>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  Turn this on to activate automatic Adhan announcements at prayer times on your selected devices.
+          <div className="mb-8 p-6 bg-slate-800/50 rounded-xl border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-white">Enable account</Label>
+                <p className="text-slate-400 text-sm mt-1">
+                  Required to activate backend-backed playback and scheduling.
                 </p>
               </div>
               <Switch
                 checked={accountEnabled}
                 onCheckedChange={(v: boolean) => setAccountEnabled(v)}
-                className="data-[state=checked]:bg-emerald-500"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-            <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                <div className="text-white text-sm font-medium">Prayer times</div>
-              </div>
-              <div className="text-slate-400 text-xs leading-relaxed">
-                Using {sectLabel} calculation method
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                <div className="text-white text-sm font-medium">Voice library</div>
-              </div>
-              <div className="text-slate-400 text-xs leading-relaxed">
-                All Adhan voices available
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                <div className="text-white text-sm font-medium">After Adhan</div>
-              </div>
-              <div className="text-slate-400 text-xs leading-relaxed">
-                Optional dua or surah playback
-              </div>
-            </div>
-          </div>
-
-          <Tabs defaultValue="devices" className="w-full">
-            <TabsList className="bg-slate-800/60 border border-slate-700/60 w-full justify-start h-12 p-1 rounded-xl mb-6">
-              <TabsTrigger
-                value="devices"
-                className="flex-1 data-[state=active]:bg-emerald-600 data-[state=active]:text-white rounded-lg transition-all"
-              >
-                Linked Devices
-              </TabsTrigger>
-              <TabsTrigger
-                value="adhan"
-                className="flex-1 data-[state=active]:bg-emerald-600 data-[state=active]:text-white rounded-lg transition-all"
-              >
-                Adhan per Prayer
-              </TabsTrigger>
+          <Tabs defaultValue={tabs[0]} className="w-full">
+            <TabsList className="bg-slate-800 border-slate-700 w-full justify-start overflow-x-auto flex-nowrap">
+              {tabs.map((tab) => (
+                <TabsTrigger
+                  key={tab}
+                  value={tab}
+                  className="data-[state=active]:bg-emerald-600 data-[state=active]:text-white"
+                >
+                  {tab}
+                </TabsTrigger>
+              ))}
             </TabsList>
 
-            <TabsContent value="devices" className="mt-0">
-              <div className="mb-4">
-                <h2 className="text-white text-base font-semibold mb-2">Your Alexa devices</h2>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  Select which devices should announce the Adhan at prayer times.
-                </p>
-              </div>
-
+            <TabsContent value={tabs[0]} className="mt-4">
               {loading ? (
-                <div className="flex items-center gap-3 p-6 rounded-xl border border-slate-700/50 bg-slate-800/30">
-                  <svg className="w-5 h-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  <p className="text-slate-300 text-sm">Loading your linked devices…</p>
-                </div>
+                <p className="text-slate-400 text-sm">Loading linked devices…</p>
               ) : devices.length === 0 ? (
-                <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-6">
-                  <p className="text-slate-300 text-sm leading-relaxed">
-                    No linked Alexa devices found. You can continue and manage devices later from Settings.
-                  </p>
-                </div>
+                <p className="text-slate-300 text-sm">
+                  No linked Alexa devices were returned yet. You can continue and
+                  link or review device usage later.
+                </p>
               ) : (
                 <div className="space-y-3">
                   {devices.map((device) => {
@@ -656,10 +612,10 @@ export default function Step5DevicesAdhan({
                     return (
                       <label
                         key={device.id}
-                        className={`flex items-center gap-4 p-5 rounded-xl border-2 cursor-pointer transition-all ${
+                        className={`flex items-center gap-4 p-4 bg-slate-800/50 rounded-lg border cursor-pointer transition-colors ${
                           checked
                             ? "border-emerald-500/50 bg-emerald-500/10"
-                            : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
+                            : "border-slate-700"
                         }`}
                       >
                         <Checkbox
@@ -667,83 +623,63 @@ export default function Step5DevicesAdhan({
                           onCheckedChange={(value) =>
                             toggleSelectedDevice(device.id, value === true)
                           }
-                          className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
                         />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-white font-medium truncate">{device.name}</div>
+                        <div className="flex-1">
+                          <div className="text-white">{device.name}</div>
                           <div className="text-slate-400 text-sm">
                             {device.platform ? device.platform.toUpperCase() : "ALEXA"}
                           </div>
                         </div>
-                        {checked && (
-                          <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white">
-                            Selected
-                          </Badge>
-                        )}
+                        <Badge variant="secondary">
+                          {checked ? "Selected" : "Linked"}
+                        </Badge>
                       </label>
                     );
                   })}
                 </div>
               )}
 
-              <div className="mt-4 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
-                    <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <p className="text-slate-400 text-xs leading-relaxed flex-1">
-                    Your device selections are saved to your account so all prayer times use the same devices automatically.
-                  </p>
-                </div>
-              </div>
+              <p className="text-xs text-slate-400 mt-4">
+                Selected devices are saved to your backend profile so later
+                playback routing can use the same stored targets consistently.
+              </p>
             </TabsContent>
 
-            <TabsContent value="adhan" className="mt-0">
-              <div className="mb-4">
-                <h2 className="text-white text-base font-semibold mb-2">Customize each prayer</h2>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  Choose your preferred Adhan reciter for each prayer, and optionally add a dua or surah to play after.
-                </p>
-              </div>
-
+            <TabsContent value={tabs[1]} className="mt-4">
               {reciters.length === 0 ? (
-                <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-6">
-                  <p className="text-slate-300 text-sm leading-relaxed">
-                    Reciters are not available right now. Please verify the backend reciter library endpoint.
-                  </p>
-                </div>
+                <p className="text-slate-300 text-sm">
+                  Reciters are not available right now. Please verify the backend
+                  reciter library endpoint.
+                </p>
               ) : (
                 <div className="space-y-4">
                   {prayerConfigs.map((pc) => (
                     <div
                       key={pc.prayerName}
-                      className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5"
+                      className="rounded-xl border border-slate-800 p-4"
                     >
-                      <div className="mb-4">
-                        <h3 className="text-white font-semibold capitalize text-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-slate-100 capitalize">
                           {pc.prayerName}
                         </h3>
                       </div>
 
-                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      <div className="grid md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <Label className="text-slate-200 text-sm font-medium">
-                            Adhan reciter
-                          </Label>
+                          <Label className="text-slate-200">Adhan reciter</Label>
                           <Select
                             value={pc.adhanReciterId ?? NONE_VALUE}
                             onValueChange={(value: string) =>
                               updatePrayer(pc.prayerName, {
-                                adhanReciterId: value === NONE_VALUE ? null : value,
+                                adhanReciterId:
+                                  value === NONE_VALUE ? null : value,
                               })
                             }
                           >
-                            <SelectTrigger className="bg-slate-900/60 border-slate-700/60 text-slate-100 h-11">
+                            <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                               <SelectValue placeholder="Select reciter" />
                             </SelectTrigger>
-                            <SelectContent className="bg-slate-900 border-slate-700 text-slate-100 max-h-80">
+                            <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
                               <SelectItem value={NONE_VALUE}>
                                 No reciter selected
                               </SelectItem>
@@ -758,14 +694,12 @@ export default function Step5DevicesAdhan({
                             </SelectContent>
                           </Select>
                           <p className="text-xs text-slate-500">
-                            All voices remain available unless the backend library explicitly restricts them.
+                            Voice choice is shared across Sunni and Shia timing modes.
                           </p>
                         </div>
 
                         <div className="space-y-2">
-                          <Label className="text-slate-200 text-sm font-medium">
-                            After Adhan
-                          </Label>
+                          <Label className="text-slate-200">After Adhan</Label>
                           <Select
                             value={pc.afterAdhan.type}
                             onValueChange={(value: string) =>
@@ -777,13 +711,13 @@ export default function Step5DevicesAdhan({
                               })
                             }
                           >
-                            <SelectTrigger className="bg-slate-900/60 border-slate-700/60 text-slate-100 h-11">
+                            <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                               <SelectValue />
                             </SelectTrigger>
-                            <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                            <SelectContent className="bg-slate-900 border-slate-700">
                               <SelectItem value="none">None</SelectItem>
-                              <SelectItem value="dua">Play a Dua</SelectItem>
-                              <SelectItem value="surah">Play a Surah</SelectItem>
+                              <SelectItem value="dua">Dua</SelectItem>
+                              <SelectItem value="surah">Surah</SelectItem>
                             </SelectContent>
                           </Select>
 
@@ -795,14 +729,17 @@ export default function Step5DevicesAdhan({
                                   afterAdhan:
                                     value === NONE_VALUE
                                       ? { type: "dua", payload: null }
-                                      : { type: "dua", payload: { duaId: value } },
+                                      : {
+                                          type: "dua",
+                                          payload: { duaId: value },
+                                        },
                                 })
                               }
                             >
-                              <SelectTrigger className="bg-slate-900/60 border-slate-700/60 text-slate-100 h-11">
+                              <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                                 <SelectValue placeholder="Select Dua" />
                               </SelectTrigger>
-                              <SelectContent className="bg-slate-900 border-slate-700 text-slate-100 max-h-60">
+                              <SelectContent className="bg-slate-900 border-slate-700">
                                 <SelectItem value={NONE_VALUE}>
                                   No Dua selected
                                 </SelectItem>
@@ -829,15 +766,17 @@ export default function Step5DevicesAdhan({
                                       ? { type: "surah", payload: null }
                                       : {
                                           type: "surah",
-                                          payload: { surahNumber: Number(value) },
+                                          payload: {
+                                            surahNumber: Number(value),
+                                          },
                                         },
                                 })
                               }
                             >
-                              <SelectTrigger className="bg-slate-900/60 border-slate-700/60 text-slate-100 h-11">
+                              <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
                                 <SelectValue placeholder="Select Surah" />
                               </SelectTrigger>
-                              <SelectContent className="bg-slate-900 border-slate-700 text-slate-100 max-h-60">
+                              <SelectContent className="bg-slate-900 border-slate-700">
                                 <SelectItem value={NONE_VALUE}>
                                   No Surah selected
                                 </SelectItem>
@@ -861,36 +800,11 @@ export default function Step5DevicesAdhan({
             </TabsContent>
           </Tabs>
 
-          {!canContinue && (
-            <div className="mt-6 rounded-xl border border-amber-500/50 bg-amber-500/10 px-5 py-4">
-              <div className="flex items-start gap-3">
-                <svg className="w-5 h-5 text-amber-400 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                  <path
-                    fillRule="evenodd"
-                    d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <div className="flex-1">
-                  <div className="text-amber-300 text-sm font-medium mb-1">
-                    Before you continue
-                  </div>
-                  <p className="text-amber-200/90 text-sm leading-relaxed">
-                    Please enable Adhan playback and choose at least one reciter for any prayer.
-                    {devices.length > 0 &&
-                      selectedDeviceIds.length === 0 &&
-                      " Also select at least one device."}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-col sm:flex-row gap-3 mt-8">
+          <div className="flex gap-4 mt-8">
             <Button
               onClick={() => navigate("/onboarding/step4")}
               variant="outline"
-              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11"
+              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800"
               disabled={saving}
             >
               Back
@@ -898,11 +812,17 @@ export default function Step5DevicesAdhan({
             <Button
               onClick={handleNext}
               disabled={!canContinue}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white"
             >
-              {saving ? "Saving settings…" : "Continue to summary"}
+              {saving ? "Saving…" : "Save & Continue"}
             </Button>
           </div>
+
+          {!canContinue && (
+            <p className="text-xs text-slate-400 mt-3">
+              To continue, enable the account and choose at least one Adhan reciter.
+            </p>
+          )}
         </div>
       </div>
     </div>

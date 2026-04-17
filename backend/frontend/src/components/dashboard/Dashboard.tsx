@@ -23,7 +23,6 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
-  Link2,
 } from "lucide-react";
 import {
   AlexaIcon,
@@ -1006,37 +1005,29 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 )}
               </div>
 
-              <div className="flex flex-col gap-3">
-                <Button
-                  size="lg"
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-500/20 h-12 md:h-14 text-base md:text-lg"
-                  onClick={() => navigate("/alexa-setup")}
-                >
-                  <Link2 className="w-5 h-5 mr-2" />
-                  Open Alexa Setup
-                </Button>
+            </div>
+
+            <div className="mt-6 md:mt-8 pt-6 border-t border-slate-700/50">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-2 text-slate-400">
+                  <Clock className="w-4 h-4" />
+                  <span className="text-sm">
+                    Current Time:{" "}
+                    <span className="text-slate-300 tabular-nums">
+                      {formattedTime}
+                    </span>
+                    {activeTimeZone ? ` · ${activeTimeZone}` : ""}
+                  </span>
+                </div>
 
                 <Button
                   size="lg"
                   variant="outline"
-                  className="w-full border-slate-700 text-slate-300 hover:bg-slate-800/50 h-11 md:h-12"
-                  onClick={() => navigate("/settings")}
+                  className="border-slate-700 text-slate-300 hover:bg-slate-800/50 h-11 md:h-12"
+                  onClick={handleToggleAutomation}
                 >
-                  {automationOn ? "Manage" : "Resume"} Automation
+                  {automationOn ? "Pause" : "Resume"} Automation
                 </Button>
-              </div>
-            </div>
-
-            <div className="mt-6 md:mt-8 pt-6 border-t border-slate-700/50">
-              <div className="flex items-center gap-2 text-slate-400">
-                <Clock className="w-4 h-4" />
-                <span className="text-sm">
-                  Current Time:{" "}
-                  <span className="text-slate-300 tabular-nums">
-                    {formattedTime}
-                  </span>
-                  {activeTimeZone ? ` · ${activeTimeZone}` : ""}
-                </span>
               </div>
               {locationCoords && (
                 <div className="mt-2 text-xs text-slate-500">
@@ -1263,7 +1254,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                           {IconComponent ? (
                             <IconComponent className="w-10 h-10" />
                           ) : (
-                            <Link2 className="w-5 h-5 text-slate-400" />
+                            <div className="w-10 h-10 rounded-full bg-slate-800/70 flex items-center justify-center text-slate-400 text-lg">•</div>
                           )}
                           <span className="text-white">
                             {PLATFORM_NAMES[platform] || titleCase(platform)}
