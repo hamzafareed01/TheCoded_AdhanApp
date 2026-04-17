@@ -4,8 +4,7 @@ import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import { Alert, AlertDescription } from "../ui/alert";
-import { CheckCircle, PartyPopper, XCircle } from "lucide-react";
+import { Sparkles, CheckCircle2, XCircle } from "lucide-react";
 import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
@@ -46,6 +45,7 @@ type OnboardingPrayerSettings = {
   madhhab?: string;
   madhab?: string;
   shia?: boolean;
+  sect?: string;
   highLatitudeMethod?: string;
   highLatitudeMode?: string;
 };
@@ -100,6 +100,7 @@ type SummaryData = {
   accountEnabled: boolean;
   prayerConfigs: PrayerConfig[];
   linkedDeviceCount: number;
+  selectedDeviceIds: string[];
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -149,8 +150,14 @@ function normalizeTimezone(value: unknown): string {
 }
 
 function readConnectedPlatforms(onboardingData: OnboardingData): string[] {
-  const fromData = Array.isArray(onboardingData?.connectedPlatforms)
+  const fromConnected = Array.isArray(onboardingData?.connectedPlatforms)
     ? onboardingData.connectedPlatforms.filter(
+        (x): x is string => typeof x === "string"
+      )
+    : [];
+
+  const fromSelected = Array.isArray(onboardingData?.selectedPlatforms)
+    ? onboardingData.selectedPlatforms.filter(
         (x): x is string => typeof x === "string"
       )
     : [];
@@ -167,7 +174,11 @@ function readConnectedPlatforms(onboardingData: OnboardingData): string[] {
     }
   })();
 
-  const merged = new Set<string>([...fromData, ...fromLocal]);
+  const merged = new Set<string>([
+    ...fromConnected,
+    ...fromSelected,
+    ...fromLocal,
+  ]);
 
   if (getStoredAmazonToken()) {
     merged.add("alexa");
@@ -284,6 +295,7 @@ export default function Step6Summary({
 
     const calculationMethod = prayer.calculationMethod || prayer.method || "isna";
     const madhhab = prayer.madhhab || "hanafi";
+    const sect = prayer.sect || (prayer.shia ? "SHIA" : "SUNNI");
     const madhab = prayer.madhab || (prayer.shia ? "shia" : "sunni");
     const highLatitudeMethod =
       prayer.highLatitudeMethod || prayer.highLatitudeMode || "automatic";
@@ -307,9 +319,11 @@ export default function Step6Summary({
           "07:00"
         : "07:00";
 
-    const linkedDeviceCount = Array.isArray(devicesValue)
-      ? devicesValue.length
-      : 0;
+    const selectedDeviceIds = Array.isArray(devicesValue)
+      ? devicesValue.filter(
+          (id): id is string => typeof id === "string" && id.trim().length > 0
+        )
+      : [];
 
     return {
       platformsConnected,
@@ -322,6 +336,7 @@ export default function Step6Summary({
         useMosqueLocation,
       },
       prayer: {
+        sect,
         calculationMethod,
         madhhab,
         madhab,
@@ -335,13 +350,22 @@ export default function Step6Summary({
       },
       accountEnabled: onboardingData?.accountEnabled !== false,
       prayerConfigs: normalizePrayerConfigs(onboardingData?.prayerConfigs),
-      linkedDeviceCount,
+      linkedDeviceCount: selectedDeviceIds.length,
+      selectedDeviceIds,
     };
   }, [onboardingData]);
 
   function isConnected(platform: string) {
     return summary.platformsConnected.includes(platform);
   }
+
+  const hasReciterConfigured = useMemo(() => {
+    return summary.prayerConfigs.some((config) => !!config.adhanReciterId);
+  }, [summary.prayerConfigs]);
+
+  const isComplete = useMemo(() => {
+    return isConnected("alexa") && summary.accountEnabled && hasReciterConfigured;
+  }, [summary.accountEnabled, hasReciterConfigured, summary.platformsConnected]);
 
   async function finish() {
     setSaving(true);
@@ -355,6 +379,10 @@ export default function Step6Summary({
 
       if (!summary.location.city.trim()) {
         throw new Error("City is required before finishing setup.");
+      }
+
+      if (!hasReciterConfigured) {
+        throw new Error("Please choose at least one Adhan reciter before finishing setup.");
       }
 
       const loginResp = await apiFetch("/api/integrations/alexa/login", {
@@ -394,8 +422,12 @@ export default function Step6Summary({
         calculationMethod: summary.prayer.calculationMethod,
         madhhab: summary.prayer.madhhab,
         shia: summary.prayer.madhab === "shia",
+        sect: summary.prayer.sect,
         highLatitudeMethod: summary.prayer.highLatitudeMethod,
         accountEnabled: summary.accountEnabled,
+        account_enabled: summary.accountEnabled,
+        selectedAlexaDeviceIds: summary.selectedDeviceIds,
+        selectedDeviceIds: summary.selectedDeviceIds,
         quietHours: {
           enabled: summary.quiet.enabled,
           from: summary.quiet.from,
@@ -422,6 +454,7 @@ export default function Step6Summary({
 
       setOnboardingData({
         ...onboardingData,
+        connectedPlatforms: summary.platformsConnected,
         location: {
           ...(isRecord(onboardingData.location) ? onboardingData.location : {}),
           country: summary.location.country,
@@ -431,6 +464,7 @@ export default function Step6Summary({
           longitude: syncedLongitude,
           useMosqueLocation: summary.location.useMosqueLocation,
         },
+        devices: summary.selectedDeviceIds,
         accountEnabled: summary.accountEnabled,
         prayerConfigs: summary.prayerConfigs,
       });
@@ -448,188 +482,245 @@ export default function Step6Summary({
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background via-background to-muted p-6">
-      <Logo className="mb-6" />
-      <ProgressIndicator currentStep={6} totalSteps={6} />
-
-      <div className="w-full max-w-3xl mt-6 space-y-6">
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center gap-2">
-            <PartyPopper className="w-6 h-6" />
-            <h1 className="text-3xl font-bold">Setup Complete</h1>
-            <Badge variant="secondary">Ready</Badge>
+    <div className="min-h-screen bg-slate-950">
+      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <Logo />
+            <ProgressIndicator currentStep={6} totalSteps={6} />
           </div>
-          <p className="text-muted-foreground">
-            Review everything below. When you click <b>Finish</b>, we’ll save
-            your real preferences to your account.
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
+        <div className="mb-8 md:mb-10 text-center">
+          <div className="inline-flex items-center justify-center gap-3 mb-4">
+            <div className="rounded-full bg-gradient-to-br from-emerald-500/20 to-teal-500/20 p-3">
+              <Sparkles className="w-8 h-8 text-emerald-400" />
+            </div>
+          </div>
+          <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
+            You&apos;re all set!
+          </h1>
+          <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl mx-auto">
+            Review your settings below. When everything looks good, click{" "}
+            <strong className="text-white">Complete Setup</strong> to start receiving prayer time notifications.
           </p>
         </div>
 
         {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
+            <p className="text-red-300 text-sm leading-relaxed">{error}</p>
+          </div>
         )}
 
-        <div className="rounded-xl border bg-card p-5 space-y-4">
-          <h2 className="text-lg font-semibold">Connected Accounts</h2>
-
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <div className="font-medium">Amazon (Alexa)</div>
-              <div className="flex items-center gap-2">
-                {isConnected("alexa") ? (
-                  <>
-                    <CheckCircle className="w-5 h-5" />
-                    <span className="text-sm">Connected</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="w-5 h-5" />
-                    <span className="text-sm text-muted-foreground">
-                      Not connected
-                    </span>
-                  </>
-                )}
-              </div>
+        <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10 space-y-8">
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="h-1 w-1 rounded-full bg-emerald-400" />
+              <h2 className="text-white text-lg font-semibold">Connection status</h2>
             </div>
 
-            <div className="flex items-center justify-between">
-              <div className="font-medium">Account Enabled</div>
-              <div className="text-sm">
-                {summary.accountEnabled ? "Yes" : "No"}
-              </div>
-            </div>
-
-            <div className="text-xs text-muted-foreground">
-              Amazon must show connected before you finish, otherwise the
-              dashboard will not be able to load your protected settings.
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border bg-card p-5 space-y-4">
-          <h2 className="text-lg font-semibold">Your Settings</h2>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-muted-foreground">Location</div>
-              <div className="font-medium">
-                {summary.location.city}, {summary.location.country}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {summary.location.timezone}
-              </div>
-              {summary.location.latitude !== null &&
-                summary.location.longitude !== null && (
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {summary.location.latitude.toFixed(5)},{" "}
-                    {summary.location.longitude.toFixed(5)}
+            <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`rounded-lg p-2 ${isConnected("alexa") ? "bg-emerald-500/10" : "bg-slate-700/30"}`}>
+                    <svg className={`w-5 h-5 ${isConnected("alexa") ? "text-emerald-400" : "text-slate-500"}`} fill="currentColor" viewBox="0 0 20 20">
+                      <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-2h2v2zm0-4H9V5h2v4z" />
+                    </svg>
                   </div>
-                )}
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Sect</div>
-              <div className="font-medium">{summary.prayer.sect}</div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Calculation Method</div>
-              <div className="font-medium">
-                {METHOD_LABEL[summary.prayer.calculationMethod.toLowerCase()] ||
-                  summary.prayer.calculationMethod}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Asr (Madhhab)</div>
-              <div className="font-medium">{summary.prayer.madhhab}</div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Preference</div>
-              <div className="font-medium">{summary.prayer.madhab}</div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">High Latitude Rule</div>
-              <div className="font-medium">
-                {HIGHLAT_LABEL[summary.prayer.highLatitudeMethod] ||
-                  summary.prayer.highLatitudeMethod}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Quiet Hours</div>
-              <div className="font-medium">
-                {summary.quiet.enabled
-                  ? `${summary.quiet.from} → ${summary.quiet.to}`
-                  : "Off"}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Use Mosque Location</div>
-              <div className="font-medium">
-                {summary.location.useMosqueLocation ? "Yes" : "No"}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Saved Mosque</div>
-              <div className="font-medium">
-                {summary.location.mosqueName || "Not selected"}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-muted-foreground">Linked Devices</div>
-              <div className="font-medium">{summary.linkedDeviceCount}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border bg-card p-5 space-y-4">
-          <h2 className="text-lg font-semibold">Per-Prayer Adhan</h2>
-
-          {summary.prayerConfigs.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
-              No per-prayer Adhan preferences were found yet.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {summary.prayerConfigs.map((config) => (
-                <div
-                  key={config.prayerName}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <div className="capitalize font-medium">
-                    {config.prayerName}
-                  </div>
-                  <div className="text-muted-foreground text-right">
-                    <div>
-                      Reciter: {config.adhanReciterId || "Not selected"}
-                    </div>
-                    <div>After Adhan: {config.afterAdhan.type}</div>
+                  <div>
+                    <div className="text-white font-medium">Amazon Alexa</div>
+                    <div className="text-slate-400 text-sm">Voice assistant integration</div>
                   </div>
                 </div>
-              ))}
+                <div className="flex items-center gap-2">
+                  {isConnected("alexa") ? (
+                    <>
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      <span className="text-sm text-emerald-400 font-medium">Connected</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-5 h-5 text-slate-500" />
+                      <span className="text-sm text-slate-500">Not connected</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`rounded-lg p-2 ${summary.accountEnabled ? "bg-emerald-500/10" : "bg-slate-700/30"}`}>
+                    <svg className={`w-5 h-5 ${summary.accountEnabled ? "text-emerald-400" : "text-slate-500"}`} fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="text-white font-medium">Adhan playback</div>
+                    <div className="text-slate-400 text-sm">Automatic prayer time announcements</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {summary.accountEnabled ? (
+                    <>
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                      <span className="text-sm text-emerald-400 font-medium">Enabled</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-5 h-5 text-slate-500" />
+                      <span className="text-sm text-slate-500">Disabled</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {!isComplete && (
+                <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
+                  <p className="text-amber-200 text-sm leading-relaxed">
+                    Please ensure Amazon Alexa is connected, Adhan playback is enabled, and at least one reciter is selected before completing setup.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <div className="h-1 w-1 rounded-full bg-emerald-400" />
+              <h2 className="text-white text-lg font-semibold">Location & prayer times</h2>
+            </div>
+
+            <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+                <div>
+                  <div className="text-slate-400 text-sm mb-1">Location</div>
+                  <div className="text-white font-medium">
+                    {summary.location.city}, {summary.location.country}
+                  </div>
+                  <div className="text-slate-500 text-xs mt-0.5">
+                    {summary.location.timezone}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400 text-sm mb-1">Tradition</div>
+                  <div className="text-white font-medium capitalize">
+                    {summary.prayer.sect}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400 text-sm mb-1">Calculation method</div>
+                  <div className="text-white font-medium">
+                    {METHOD_LABEL[summary.prayer.calculationMethod.toLowerCase()] ||
+                      summary.prayer.calculationMethod}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400 text-sm mb-1">Asr madhhab</div>
+                  <div className="text-white font-medium capitalize">
+                    {summary.prayer.madhhab}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400 text-sm mb-1">High latitude rule</div>
+                  <div className="text-white font-medium">
+                    {HIGHLAT_LABEL[summary.prayer.highLatitudeMethod] ||
+                      summary.prayer.highLatitudeMethod}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-slate-400 text-sm mb-1">Linked devices</div>
+                  <div className="text-white font-medium">
+                    {summary.linkedDeviceCount} {summary.linkedDeviceCount === 1 ? "device" : "devices"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {summary.prayerConfigs.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="h-1 w-1 rounded-full bg-emerald-400" />
+                <h2 className="text-white text-lg font-semibold">Adhan preferences</h2>
+              </div>
+
+              <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5">
+                <div className="space-y-3">
+                  {summary.prayerConfigs.map((config) => (
+                    <div
+                      key={config.prayerName}
+                      className="flex items-center justify-between py-2"
+                    >
+                      <div className="text-white font-medium capitalize">
+                        {config.prayerName}
+                      </div>
+                      <div className="text-right">
+                        <div className="text-slate-300 text-sm">
+                          {config.adhanReciterId || "No reciter"}
+                        </div>
+                        {config.afterAdhan.type !== "none" && (
+                          <div className="text-slate-500 text-xs capitalize">
+                            After: {config.afterAdhan.type}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
-        </div>
 
-        <div className="flex justify-between">
-          <Button
-            variant="outline"
-            onClick={() => navigate("/onboarding/step5")}
-            disabled={saving}
-          >
-            Back
-          </Button>
-          <Button onClick={finish} disabled={saving}>
-            {saving ? "Saving..." : "Finish"}
-          </Button>
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
+                <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <div className="text-white font-medium mb-2">Your settings are secure</div>
+                <p className="text-slate-400 text-sm leading-relaxed">
+                  All your preferences will be saved to your account and synced with your Alexa devices. You can change any of these settings later from your dashboard.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 pt-4">
+            <Button
+              variant="outline"
+              onClick={() => navigate("/onboarding/step5")}
+              disabled={saving}
+              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11"
+            >
+              Back to review
+            </Button>
+            <Button
+              onClick={finish}
+              disabled={saving || !isComplete}
+              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? (
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Completing setup...
+                </span>
+              ) : (
+                "Complete setup"
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
