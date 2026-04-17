@@ -10,8 +10,13 @@ let loadingPromise: Promise<void> | null = null;
 const AMAZON_CLIENT_ID_FALLBACK =
   "amzn1.application-oa2-client.383c219cb1ca42fdbd844e17e11aa843";
 
-const AMAZON_RETURN_URL_FALLBACK =
-  "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
+function getDynamicAmazonReturnUrlFallback(): string {
+  if (typeof window === "undefined" || !window.location?.origin) {
+    return "https://nice-ground-009684610-1.centralus.1.azurestaticapps.net/onboarding/step2";
+  }
+
+  return `${window.location.origin.replace(/\/+$/, "")}/onboarding/step2`;
+}
 
 function normalizeEnvString(value: unknown): string {
   const v = String(value ?? "").trim();
@@ -58,7 +63,7 @@ export function getAmazonReturnUrl(): string {
       (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI
   );
 
-  return envReturnUrl || AMAZON_RETURN_URL_FALLBACK;
+  return envReturnUrl || normalizeRedirectUrl(getDynamicAmazonReturnUrlFallback());
 }
 
 export function ensureAmazonSdk(): Promise<void> {
