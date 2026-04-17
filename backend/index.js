@@ -602,6 +602,53 @@ function getAlexaSkillStage() {
   return raw === "live" ? "live" : "development";
 }
 
+function buildAlexaReadinessSummary(input = {}) {
+  const amazonConnected = input.amazonConnected === true;
+  const appToAppLinked = input.appToAppLinked === true || input.lwaLinked === true;
+  const enablementStatus = String(input.enablementStatus || input.skillStatus || "").trim().toUpperCase();
+  const accountLinkStatus = String(input.accountLinkStatus || input.skillAccountLinkStatus || "").trim().toUpperCase();
+
+  const skillEnabled = enablementStatus === "ENABLED" || enablementStatus === "ENABLING";
+  const skillAccountLinked = accountLinkStatus === "LINKED" || input.skillLinked === true || input.linked === true;
+
+  let connectionStage = "ready";
+  if (!amazonConnected) {
+    connectionStage = "amazon_login_required";
+  } else if (!appToAppLinked) {
+    connectionStage = "app_link_required";
+  } else if (!skillEnabled) {
+    connectionStage = "skill_enable_required";
+  } else if (!skillAccountLinked) {
+    connectionStage = "skill_link_required";
+  }
+
+  const statusLabelMap = {
+    amazon_login_required: "Connect Amazon",
+    app_link_required: "Reconnect Amazon app link",
+    skill_enable_required: "Enable Alexa skill",
+    skill_link_required: "Link Alexa skill account",
+    ready: "Ready for Alexa playback",
+  };
+
+  return {
+    amazonConnected,
+    appToAppLinked,
+    skillEnabled,
+    skillAccountLinked,
+    readyForPlayback:
+      amazonConnected && appToAppLinked && skillEnabled && skillAccountLinked,
+    connectionStage,
+    statusLabel: statusLabelMap[connectionStage] || "Check Alexa status",
+    invocationName: input.invocationName || null,
+    skillId: input.skillId || null,
+    skillStage: input.skillStage || null,
+    endpointHost: input.endpointHost || null,
+    enablementStatus: enablementStatus || null,
+    accountLinkStatus: accountLinkStatus || null,
+  };
+}
+
+
 function getSkillOauthScope() {
   return getDefaultAlexaOauthScope();
 }
@@ -2133,6 +2180,19 @@ app.get(
       }
     }
 
+    const alexaPayload = {
+      connected: true,
+      linkedAt: null,
+      displayName: p.name || null,
+      accountId: p.user_id || null,
+      skillLinked: enablement?.data?.accountLink?.status === "LINKED" || !!skillLink.linked,
+      skillEnabled: enablement?.data?.status === "ENABLED" || enablement?.data?.status === "ENABLING",
+      skillStatus: enablement?.data?.status || null,
+      skillAccountLinkStatus: enablement?.data?.accountLink?.status || (skillLink.linked ? "LINKED" : "NOT_LINKED"),
+      skillLinkExpiresAt: skillLink.expiresAt,
+      appToAppLinked: !!storedAlexaLink?.amazonAccessToken,
+    };
+
     res.json({
       userKey: p.user_id,
       amazon: {
@@ -2140,16 +2200,19 @@ app.get(
         email: p.email || null,
       },
       alexa: {
-        connected: true,
-        linkedAt: null,
-        displayName: p.name || null,
-        accountId: p.user_id || null,
-        skillLinked: enablement?.data?.accountLink?.status === "LINKED" || !!skillLink.linked,
-        skillEnabled: enablement?.data?.status === "ENABLED" || enablement?.data?.status === "ENABLING",
-        skillStatus: enablement?.data?.status || null,
-        skillAccountLinkStatus: enablement?.data?.accountLink?.status || (skillLink.linked ? "LINKED" : "NOT_LINKED"),
-        skillLinkExpiresAt: skillLink.expiresAt,
-        appToAppLinked: !!storedAlexaLink?.amazonAccessToken,
+        ...alexaPayload,
+        readiness: buildAlexaReadinessSummary({
+          amazonConnected: alexaPayload.connected,
+          appToAppLinked: alexaPayload.appToAppLinked,
+          skillEnabled: alexaPayload.skillEnabled,
+          skillLinked: alexaPayload.skillLinked,
+          skillStatus: alexaPayload.skillStatus,
+          skillAccountLinkStatus: alexaPayload.skillAccountLinkStatus,
+          invocationName: getSkillInvocationName(),
+          skillId,
+          skillStage: getAlexaSkillStage(),
+          endpointHost: enablement?.endpointHost || storedAlexaLink?.endpointHost || null,
+        }),
       },
       google: {
         connected: false,
@@ -2334,7 +2397,7 @@ app.get(
       }
     }
 
-    res.json({
+    const alexaStatusPayload = {
       configured: oauth.configured,
       clientId: oauth.clientId || null,
       appLinkClientConfigured: getAlexaAppLinkConfig().configured,
@@ -2350,6 +2413,23 @@ app.get(
       endpointHost: enablement?.endpointHost || tokenRecord?.endpointHost || null,
       customerUserId: enablement?.data?.user?.id || tokenRecord?.customerUserId || null,
       ...status,
+    };
+
+    res.json({
+      ...alexaStatusPayload,
+      readiness: buildAlexaReadinessSummary({
+        amazonConnected: true,
+        appToAppLinked: alexaStatusPayload.lwaLinked,
+        lwaLinked: alexaStatusPayload.lwaLinked,
+        linked: alexaStatusPayload.linked,
+        skillLinked: alexaStatusPayload.linked,
+        enablementStatus: alexaStatusPayload.enablementStatus,
+        accountLinkStatus: alexaStatusPayload.accountLinkStatus,
+        invocationName: alexaStatusPayload.invocationName,
+        skillId: alexaStatusPayload.skillId,
+        skillStage: alexaStatusPayload.skillStage,
+        endpointHost: alexaStatusPayload.endpointHost,
+      }),
     });
   })
 );

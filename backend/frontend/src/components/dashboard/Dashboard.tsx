@@ -13,8 +13,6 @@ import { Badge } from "../ui/badge";
 import {
   Building2,
   CheckCircle,
-  Edit,
-  Settings as SettingsIcon,
   Volume2,
   MoonStar,
   MapPin,
@@ -24,10 +22,16 @@ import {
   Calendar as CalendarIcon,
   Wifi,
   WifiOff,
-  Compass,
   AlertCircle,
   Link2,
 } from "lucide-react";
+import {
+  AlexaIcon,
+  GoogleIcon,
+  AppleIcon,
+  SamsungIcon,
+  SonosIcon,
+} from "../shared/BrandIcons";
 
 const PRAYER_ORDER = [
   "fajr",
@@ -57,12 +61,12 @@ const PRAYER_LABELS: Record<PrayerCode, string> = {
   isha: "Isha",
 };
 
-const PLATFORM_ICONS: Record<string, string> = {
-  alexa: "🔵",
-  google: "🔴",
-  apple: "⚫",
-  samsung: "🔵",
-  sonos: "⚫",
+const PLATFORM_ICONS: Record<string, any> = {
+  alexa: AlexaIcon,
+  google: GoogleIcon,
+  apple: AppleIcon,
+  samsung: SamsungIcon,
+  sonos: SonosIcon,
 };
 
 const PLATFORM_NAMES: Record<string, string> = {
@@ -1124,48 +1128,28 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         <div className="grid lg:grid-cols-2 gap-6">
           <div className="space-y-6">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4 text-xl">Connected Platforms</h2>
+              <div className="flex items-center gap-2 mb-4">
+                <BookOpen className="w-5 h-5 text-emerald-400" />
+                <h2 className="text-white text-xl">Hadith of the Day</h2>
+              </div>
 
-              {connectedPlatforms.length > 0 ? (
-                <div className="space-y-3 mb-4">
-                  {connectedPlatforms.map((platform: string) => (
-                    <div
-                      key={platform}
-                      className="flex items-center justify-between p-3 bg-slate-800/50 rounded-xl hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="text-2xl">
-                          {PLATFORM_ICONS[platform] || "•"}
-                        </div>
-                        <span className="text-white">
-                          {PLATFORM_NAMES[platform] || titleCase(platform)}
-                        </span>
-                      </div>
-                      <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 border">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Active
-                      </Badge>
-                    </div>
-                  ))}
+              {loadingHadith ? (
+                <p className="text-slate-400">Loading hadith of the day…</p>
+              ) : hadithError ? (
+                <p className="text-amber-300 text-sm">{hadithError}</p>
+              ) : hadithOfDay ? (
+                <div className="space-y-3">
+                  <p className="text-slate-300 leading-7 italic">
+                    &ldquo;{hadithOfDay.textEnglish}&rdquo;
+                  </p>
+                  <p className="text-slate-500 text-sm">
+                    {hadithOfDay.reference}
+                    {hadithOfDay.narrator ? ` · ${hadithOfDay.narrator}` : ""}
+                  </p>
                 </div>
               ) : (
-                <p className="text-slate-400 mb-4">
-                  No platforms connected yet.
-                </p>
+                <p className="text-slate-400">No daily reminder available.</p>
               )}
-
-              <p className="text-slate-400 text-sm mb-4">
-                {deviceCount} device{deviceCount === 1 ? "" : "s"} available
-              </p>
-
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full border-slate-700 text-slate-300 hover:bg-slate-800"
-                onClick={() => navigate("/settings")}
-              >
-                Manage Platforms
-              </Button>
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
@@ -1176,15 +1160,16 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <div className="text-slate-400 text-sm">
                     {locationLabel || "Location not available"}
                   </div>
+                  {locationCoords && (
+                    <div className="text-slate-500 text-xs mt-1">{locationCoords}</div>
+                  )}
                 </div>
               </div>
 
               <div className="flex items-start gap-3">
                 <MoonStar className="w-4 h-4 text-cyan-400 mt-1 flex-shrink-0" />
                 <div>
-                  <div className="text-white text-sm font-medium">
-                    Prayer Method
-                  </div>
+                  <div className="text-white text-sm font-medium">Prayer Method</div>
                   <div className="text-slate-400 text-sm">
                     {calcLabel} · {madhhabLabel}
                   </div>
@@ -1195,9 +1180,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 <Clock3 className="w-4 h-4 text-amber-400 mt-1 flex-shrink-0" />
                 <div>
                   <div className="text-white text-sm font-medium">Timezone</div>
-                  <div className="text-slate-400 text-sm">
-                    {activeTimeZone}
-                  </div>
+                  <div className="text-slate-400 text-sm">{activeTimeZone}</div>
                 </div>
               </div>
 
@@ -1205,9 +1188,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 <div className="flex items-start gap-3">
                   <Volume2 className="w-4 h-4 text-purple-400 mt-1 flex-shrink-0" />
                   <div>
-                    <div className="text-white text-sm font-medium">
-                      Quiet Hours
-                    </div>
+                    <div className="text-white text-sm font-medium">Quiet Hours</div>
                     <div className="text-slate-400 text-sm">
                       {quietHours.from} – {quietHours.to}
                     </div>
@@ -1267,69 +1248,51 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <h2 className="text-white mb-4 text-xl">Quick Actions</h2>
-              <div className="grid grid-cols-2 gap-3">
-                <Button
-                  variant="outline"
-                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
-                  onClick={() => navigate("/settings")}
-                >
-                  <Edit className="w-5 h-5 mb-2 text-emerald-400" />
-                  <span className="text-sm">Prayer Settings</span>
-                </Button>
+              <h2 className="text-white mb-4 text-xl">Connected Platforms</h2>
 
-                <Button
-                  variant="outline"
-                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
-                  onClick={() => navigate("/settings")}
-                >
-                  <SettingsIcon className="w-5 h-5 mb-2 text-emerald-400" />
-                  <span className="text-sm">Devices</span>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
-                  onClick={() => navigate("/qiblah")}
-                >
-                  <Compass className="w-5 h-5 mb-2 text-emerald-400" />
-                  <span className="text-sm">Qiblah</span>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  className="border-slate-700 text-slate-300 hover:bg-slate-800 justify-start h-auto py-4 flex-col items-start"
-                  onClick={() => navigate("/dua-quran")}
-                >
-                  <BookOpen className="w-5 h-5 mb-2 text-emerald-400" />
-                  <span className="text-sm">Dua & Qur&apos;an</span>
-                </Button>
-              </div>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <BookOpen className="w-5 h-5 text-emerald-400" />
-                <h2 className="text-white text-xl">Daily Reminder</h2>
-              </div>
-
-              {loadingHadith ? (
-                <p className="text-slate-400">Loading hadith of the day…</p>
-              ) : hadithError ? (
-                <p className="text-amber-300 text-sm">{hadithError}</p>
-              ) : hadithOfDay ? (
-                <div className="space-y-3">
-                  <p className="text-slate-300 leading-7 italic">
-                    &ldquo;{hadithOfDay.textEnglish}&rdquo;
-                  </p>
-                  <p className="text-slate-500 text-sm">
-                    {hadithOfDay.reference}
-                    {hadithOfDay.narrator ? ` · ${hadithOfDay.narrator}` : ""}
-                  </p>
+              {connectedPlatforms.length > 0 ? (
+                <div className="space-y-3 mb-4">
+                  {connectedPlatforms.map((platform: string) => {
+                    const IconComponent = PLATFORM_ICONS[platform];
+                    return (
+                      <div
+                        key={platform}
+                        className="flex items-center justify-between p-3 bg-slate-800/50 rounded-xl hover:bg-slate-800 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          {IconComponent ? (
+                            <IconComponent className="w-10 h-10" />
+                          ) : (
+                            <Link2 className="w-5 h-5 text-slate-400" />
+                          )}
+                          <span className="text-white">
+                            {PLATFORM_NAMES[platform] || titleCase(platform)}
+                          </span>
+                        </div>
+                        <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 border">
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          Active
+                        </Badge>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
-                <p className="text-slate-400">No daily reminder available.</p>
+                <p className="text-slate-400 mb-4">No platforms connected yet.</p>
               )}
+
+              <p className="text-slate-400 text-sm mb-4">
+                {deviceCount} device{deviceCount === 1 ? "" : "s"} available
+              </p>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full border-slate-700 text-slate-300 hover:bg-slate-800"
+                onClick={() => navigate("/settings")}
+              >
+                Manage Platforms
+              </Button>
             </div>
           </div>
         </div>

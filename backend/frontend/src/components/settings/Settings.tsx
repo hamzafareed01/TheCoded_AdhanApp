@@ -112,6 +112,47 @@ type SettingsProps = {
   setOnboardingData: (data: Record<string, unknown>) => void;
 };
 
+type AlexaReadiness = {
+  amazonConnected?: boolean;
+  appToAppLinked?: boolean;
+  skillEnabled?: boolean;
+  skillAccountLinked?: boolean;
+  readyForPlayback?: boolean;
+  connectionStage?: string | null;
+  statusLabel?: string | null;
+  invocationName?: string | null;
+  skillId?: string | null;
+  skillStage?: "development" | "live" | null;
+  endpointHost?: string | null;
+  enablementStatus?: string | null;
+  accountLinkStatus?: string | null;
+};
+
+type IntegrationStatus = {
+  alexa?: {
+    connected?: boolean;
+    displayName?: string | null;
+    appToAppLinked?: boolean;
+    skillEnabled?: boolean;
+    skillLinked?: boolean;
+    skillStatus?: string | null;
+    skillAccountLinkStatus?: string | null;
+    readiness?: AlexaReadiness;
+  };
+};
+
+type AlexaAccountLinkStatus = {
+  invocationName?: string | null;
+  skillId?: string | null;
+  skillStage?: "development" | "live" | null;
+  lwaLinked?: boolean;
+  linked?: boolean;
+  enablementStatus?: string | null;
+  accountLinkStatus?: string | null;
+  readiness?: AlexaReadiness;
+};
+
+
 const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const NONE_VALUE = "__none__";
@@ -509,6 +550,8 @@ export default function Settings({
   const [surahs, setSurahs] = useState<SurahItem[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [integrationStatus, setIntegrationStatus] = useState<IntegrationStatus | null>(null);
+  const [alexaLinkStatus, setAlexaLinkStatus] = useState<AlexaAccountLinkStatus | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -538,6 +581,47 @@ export default function Settings({
     () => [...reciters].sort((a, b) => a.name.localeCompare(b.name)),
     [reciters]
   );
+  const alexaReadiness = useMemo(
+    () => alexaLinkStatus?.readiness || integrationStatus?.alexa?.readiness || null,
+    [alexaLinkStatus, integrationStatus]
+  );
+
+  const alexaChecks = useMemo(
+    () => [
+      {
+        key: "amazon",
+        label: "Amazon sign-in",
+        value: alexaReadiness?.amazonConnected ?? !!integrationStatus?.alexa?.connected,
+      },
+      {
+        key: "appLink",
+        label: "App-to-app link",
+        value:
+          alexaReadiness?.appToAppLinked ??
+          integrationStatus?.alexa?.appToAppLinked ??
+          alexaLinkStatus?.lwaLinked ??
+          false,
+      },
+      {
+        key: "skillEnabled",
+        label: "Skill enabled",
+        value:
+          alexaReadiness?.skillEnabled ??
+          integrationStatus?.alexa?.skillEnabled ??
+          false,
+      },
+      {
+        key: "accountLinked",
+        label: "Skill account linked",
+        value:
+          alexaReadiness?.skillAccountLinked ??
+          integrationStatus?.alexa?.skillLinked ??
+          alexaLinkStatus?.linked ??
+          false,
+      },
+    ],
+    [alexaLinkStatus, alexaReadiness, integrationStatus]
+  );
 
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
@@ -556,13 +640,15 @@ export default function Settings({
           return;
         }
 
-        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
+        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes, integrationsRes, linkStatusRes] =
           await Promise.all([
             apiFetch("/api/user/settings"),
             apiFetch("/api/library/reciters?type=adhan"),
             apiFetch("/api/duas"),
             apiFetch("/api/quran/surahs"),
             apiFetch("/api/alexa/devices"),
+            apiFetch("/api/integrations"),
+            apiFetch("/api/alexa/account-linking/status"),
           ]);
 
         if (!settingsRes.ok) {
@@ -597,6 +683,20 @@ export default function Settings({
         if (devicesRes.ok) {
           const devicesJson = await devicesRes.json();
           setDevices(normalizeDevices(devicesJson));
+        }
+
+        if (integrationsRes.ok) {
+          const integrationsJson = await integrationsRes.json();
+          setIntegrationStatus(isRecord(integrationsJson) ? (integrationsJson as IntegrationStatus) : null);
+        } else {
+          setIntegrationStatus(null);
+        }
+
+        if (linkStatusRes.ok) {
+          const linkStatusJson = await linkStatusRes.json();
+          setAlexaLinkStatus(isRecord(linkStatusJson) ? (linkStatusJson as AlexaAccountLinkStatus) : null);
+        } else {
+          setAlexaLinkStatus(null);
         }
 
         await loadSchedules();
@@ -899,6 +999,43 @@ export default function Settings({
               <div className="text-slate-400 text-xs mt-1">
                 Only the After Adhan dua is offered for playback. Other duas remain readable in the Dua &amp; Qur’an page.
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/40 px-5 py-5">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <div className="text-slate-100 text-sm font-medium">Alexa readiness</div>
+                <div className="text-slate-400 text-xs mt-1">
+                  {alexaReadiness?.statusLabel || (hasAmazonToken ? "Check your Alexa connection stages below." : "Connect Amazon in onboarding step 2.")}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                onClick={() => window.location.assign("/onboarding/step2")}
+              >
+                Manage Alexa connection
+              </Button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mt-4">
+              {alexaChecks.map((item) => (
+                <div
+                  key={item.key}
+                  className={`rounded-xl border px-4 py-3 ${item.value ? "border-emerald-500/30 bg-emerald-500/10" : "border-slate-800 bg-slate-900/50"}`}
+                >
+                  <div className={`text-sm font-medium ${item.value ? "text-emerald-100" : "text-slate-200"}`}>{item.label}</div>
+                  <div className={`text-xs mt-1 ${item.value ? "text-emerald-300/80" : "text-slate-500"}`}>{item.value ? "Ready" : "Pending"}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-2 mt-4 text-xs text-slate-400">
+              {alexaLinkStatus?.invocationName && <span>Invocation: {alexaLinkStatus.invocationName}</span>}
+              {alexaLinkStatus?.skillStage && <span>• Stage: {alexaLinkStatus.skillStage}</span>}
+              {alexaLinkStatus?.enablementStatus && <span>• Enablement: {alexaLinkStatus.enablementStatus}</span>}
+              {alexaLinkStatus?.accountLinkStatus && <span>• Account link: {alexaLinkStatus.accountLinkStatus}</span>}
             </div>
           </div>
 
