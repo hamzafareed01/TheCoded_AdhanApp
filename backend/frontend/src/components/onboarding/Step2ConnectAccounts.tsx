@@ -50,6 +50,7 @@ type IntegrationStatus = {
     skillStatus?: string | null;
     skillAccountLinkStatus?: string | null;
     appToAppLinked?: boolean;
+    readiness?: AlexaReadiness;
   };
   google?: { connected: boolean; linkedAt: string | null };
 };
@@ -63,6 +64,7 @@ type AlexaLinkStatus = {
   lwaLinked?: boolean;
   enablementStatus?: string | null;
   accountLinkStatus?: string | null;
+  readiness?: AlexaReadiness;
 };
 
 type AlexaLinkStartResponse = {
@@ -78,6 +80,23 @@ type AlexaLinkPending = {
   redirectUri: string;
   startedAt: number;
 };
+
+type AlexaReadiness = {
+  amazonConnected?: boolean;
+  appToAppLinked?: boolean;
+  skillEnabled?: boolean;
+  skillAccountLinked?: boolean;
+  readyForPlayback?: boolean;
+  connectionStage?: string | null;
+  statusLabel?: string | null;
+  invocationName?: string | null;
+  skillId?: string | null;
+  skillStage?: "development" | "live" | null;
+  endpointHost?: string | null;
+  enablementStatus?: string | null;
+  accountLinkStatus?: string | null;
+};
+
 
 const LS_CONNECTED = "adhan_connected_platforms";
 const LS_ALEXA_LINK_PENDING = "adhan_alexa_link_pending";
@@ -498,7 +517,31 @@ export default function Step2ConnectAccounts({
     !!serverStatus?.alexa?.skillLinked ||
     alexaStatus?.accountLinkStatus === "LINKED" ||
     alexaStatus?.linked === true;
+  const alexaReadiness = alexaStatus?.readiness || serverStatus?.alexa?.readiness || null;
   const continueEnabled = amazonConnected;
+
+  const readinessChecks = [
+    {
+      key: "amazon",
+      label: "Amazon sign-in",
+      value: alexaReadiness?.amazonConnected ?? amazonConnected,
+    },
+    {
+      key: "appLink",
+      label: "App-to-app link",
+      value: alexaReadiness?.appToAppLinked ?? serverStatus?.alexa?.appToAppLinked ?? false,
+    },
+    {
+      key: "skillEnabled",
+      label: "Skill enabled",
+      value: alexaReadiness?.skillEnabled ?? serverStatus?.alexa?.skillEnabled ?? false,
+    },
+    {
+      key: "skillAccount",
+      label: "Skill account linked",
+      value: alexaReadiness?.skillAccountLinked ?? skillLinked,
+    },
+  ];
 
   return (
     <div className="min-h-screen bg-slate-950">
