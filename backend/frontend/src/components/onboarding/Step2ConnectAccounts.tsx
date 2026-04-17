@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../ui/button";
@@ -19,8 +19,6 @@ import {
   getAmazonReturnUrl,
 } from "../../lib/amazonLogin";
 
-// Retrigger deploy..delete later if not needed
-
 type AmazonAuthorizeResponse = {
   access_token?: string;
   error?: string;
@@ -32,7 +30,7 @@ type PlatformKey = "alexa" | "google";
 
 type OnboardingData = {
   connectedPlatforms?: PlatformKey[];
-  tokens?: Record<string, string>;
+  [key: string]: unknown;
 };
 
 type Props = {
@@ -141,10 +139,6 @@ export default function Step2ConnectAccounts({
     readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
   );
 
-  const [tokens, setTokens] = useState<Record<string, string>>(() =>
-    onboardingData?.tokens ?? {}
-  );
-
   useEffect(() => {
     writeJson(LS_CONNECTED, connectedPlatforms);
   }, [connectedPlatforms]);
@@ -157,25 +151,22 @@ export default function Step2ConnectAccounts({
     }
   }, []);
 
-  const platforms = useMemo(
-    () => [
-      {
-        key: "alexa" as const,
-        name: "Amazon Alexa",
-        desc: "Connect Amazon first, then enable the AdhanCast Alexa skill without making users search manually.",
-        Icon: AlexaIcon,
-        badge: "Required",
-      },
-      {
-        key: "google" as const,
-        name: "Google Assistant",
-        desc: "Coming soon after Alexa linking is complete.",
-        Icon: GoogleIcon,
-        badge: "Coming Soon",
-      },
-    ],
-    []
-  );
+  const platforms = [
+    {
+      key: "alexa" as const,
+      name: "Amazon Alexa",
+      desc: "Connect Amazon first, then enable the AdhanCast Alexa skill without making users search manually.",
+      Icon: AlexaIcon,
+      badge: "Required",
+    },
+    {
+      key: "google" as const,
+      name: "Google Assistant",
+      desc: "Coming soon after Alexa linking is complete.",
+      Icon: GoogleIcon,
+      badge: "Coming Soon",
+    },
+  ];
 
   const isConnected = (key: PlatformKey) => connectedPlatforms.includes(key);
 
@@ -185,11 +176,6 @@ export default function Step2ConnectAccounts({
 
   const markDisconnected = (key: PlatformKey) => {
     setConnectedPlatforms((prev) => prev.filter((p) => p !== key));
-    setTokens((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
   };
 
   async function refreshServerStatus() {
@@ -241,6 +227,7 @@ export default function Step2ConnectAccounts({
 
   async function completeAlexaLogin(accessToken: string) {
     setStoredAmazonToken(accessToken);
+
     const linkRes = await apiFetch("/api/integrations/alexa/login", {
       method: "POST",
       body: JSON.stringify({ accessToken }),
@@ -251,7 +238,6 @@ export default function Step2ConnectAccounts({
       throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
     }
 
-    setTokens((prev) => ({ ...prev, alexa: accessToken }));
     markConnected("alexa");
     setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
 
@@ -408,43 +394,43 @@ export default function Step2ConnectAccounts({
   }
 
   async function startAlexaSkillLinking() {
-  setError(null);
-  setInfo(null);
-  setLoadingKey("alexa");
+    setError(null);
+    setInfo(null);
+    setLoadingKey("alexa");
 
-  if (!getStoredAmazonToken()) {
-    setLoadingKey(null);
-    setError("Connect your Amazon account first.");
-    return;
-  }
-
-  try {
-    const redirectUri = currentAlexaLinkUrl();
-
-    const resp = await apiFetch("/api/alexa/account-linking/start", {
-      method: "POST",
-      body: JSON.stringify({ redirectUri }),
-    });
-
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => "");
-      throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+    if (!getStoredAmazonToken()) {
+      setLoadingKey(null);
+      setError("Connect your Amazon account first.");
+      return;
     }
 
-    const data = (await resp.json()) as AlexaLinkStartResponse;
+    try {
+      const redirectUri = currentAlexaLinkUrl();
 
-    storePendingAlexaLink({
-      state: data.state,
-      codeVerifier: data.codeVerifier,
-      redirectUri: data.redirectUri,
-      startedAt: Date.now(),
-    });
+      const resp = await apiFetch("/api/alexa/account-linking/start", {
+        method: "POST",
+        body: JSON.stringify({ redirectUri }),
+      });
 
-    window.location.assign(data.authorizationUrl);
-  } catch (e: unknown) {
-    setLoadingKey(null);
-    setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
-  }
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => "");
+        throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+      }
+
+      const data = (await resp.json()) as AlexaLinkStartResponse;
+
+      storePendingAlexaLink({
+        state: data.state,
+        codeVerifier: data.codeVerifier,
+        redirectUri: data.redirectUri,
+        startedAt: Date.now(),
+      });
+
+      window.location.assign(data.authorizationUrl);
+    } catch (e: unknown) {
+      setLoadingKey(null);
+      setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
+    }
   }
 
   async function disconnectAlexa() {
@@ -503,7 +489,6 @@ export default function Step2ConnectAccounts({
     setOnboardingData?.({
       ...(onboardingData || {}),
       connectedPlatforms,
-      tokens: {},
     });
     navigate("/onboarding/step3");
   }
@@ -516,150 +501,247 @@ export default function Step2ConnectAccounts({
   const continueEnabled = amazonConnected;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      <div className="mx-auto max-w-3xl px-6 py-10">
-        <div className="flex items-center justify-between">
-          <Logo />
-          <ProgressIndicator currentStep={2} totalSteps={6} />
+    <div className="min-h-screen bg-slate-950">
+      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <Logo />
+            <ProgressIndicator currentStep={2} totalSteps={6} />
+          </div>
         </div>
+      </div>
 
-        <div className="mt-8">
-          <h1 className="text-2xl font-semibold">Connect your accounts</h1>
-          <p className="mt-2 text-muted-foreground">
-            Step 2 now does two things: connect your Amazon account for the app,
-            then enable and link the Alexa skill from this same screen.
+      <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
+        <div className="mb-8 md:mb-10">
+          <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
+            Connect your account
+          </h1>
+          <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
+            Sign in with Amazon to connect your Alexa devices. We&apos;ll guide you through enabling the Alexa skill in the next step.
           </p>
         </div>
 
-        {error && (
-          <div className="mt-6 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive-foreground">
-            {error}
-          </div>
-        )}
+        <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
+          {error && (
+            <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
+              <p className="text-red-300 text-sm leading-relaxed">{error}</p>
+            </div>
+          )}
 
-        {info && (
-          <div className="mt-6 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-            {info}
-          </div>
-        )}
+          {info && (
+            <div className="mb-6 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-5 py-4">
+              <p className="text-emerald-300 text-sm leading-relaxed">{info}</p>
+            </div>
+          )}
 
-        <div className="mt-8 space-y-4">
-          {platforms.map((platform) => {
-            const connected = isConnected(platform.key);
-            const busy = loadingKey === platform.key;
-            const serverConnected =
-              platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
-            const linked = platform.key === "alexa" ? skillLinked : false;
-            const disabled = platform.key !== "alexa";
+          <div className="space-y-4 mb-8">
+            {platforms.map((platform) => {
+              const busy = loadingKey === platform.key;
+              const serverConnected =
+                platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
+              const linked = platform.key === "alexa" ? skillLinked : false;
+              const disabled = platform.key !== "alexa";
 
-            return (
-              <div
-                key={platform.key}
-                className={`rounded-2xl border p-5 shadow-sm transition ${disabled
-                    ? "border-border/50 bg-card/60 opacity-70"
-                    : linked
-                      ? "border-emerald-500/40 bg-emerald-500/5"
+              return (
+                <div
+                  key={platform.key}
+                  className={`rounded-2xl border-2 p-6 transition-all ${
+                    disabled
+                      ? "border-slate-800/50 bg-slate-900/30 opacity-60"
+                      : linked
+                      ? "border-emerald-500/40 bg-emerald-500/10"
                       : serverConnected
-                        ? "border-sky-500/40 bg-sky-500/5"
-                        : "border-border bg-card"
+                      ? "border-sky-500/40 bg-sky-500/5"
+                      : "border-slate-800/60 bg-slate-900/60"
                   }`}
-              >
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <div className="flex items-start gap-4">
-                    <div className="grid h-14 w-14 place-items-center rounded-2xl bg-muted">
-                      <platform.Icon className="h-8 w-8" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="font-medium">{platform.name}</div>
-                        <Badge variant={platform.key === "alexa" ? "default" : "secondary"}>
-                          {platform.badge}
-                        </Badge>
-                        {serverConnected && <Badge variant="outline">Amazon connected</Badge>}
-                        {linked && <Badge className="bg-emerald-600 hover:bg-emerald-600">Skill linked</Badge>}
+                >
+                  <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+                    <div className="flex items-start gap-4 flex-1">
+                      <div
+                        className={`grid h-16 w-16 place-items-center rounded-xl ${
+                          linked
+                            ? "bg-emerald-500/10 ring-2 ring-emerald-500/30"
+                            : serverConnected
+                            ? "bg-sky-500/10 ring-2 ring-sky-500/30"
+                            : "bg-slate-800/60 ring-1 ring-slate-700/60"
+                        }`}
+                      >
+                        <platform.Icon className="h-9 w-9" />
                       </div>
 
-                      <div className="text-sm text-muted-foreground">{platform.desc}</div>
-
-                      {platform.key === "alexa" && serverStatus?.alexa?.displayName && (
-                        <div className="text-sm text-muted-foreground">
-                          Connected as: <span className="font-medium text-foreground">{serverStatus.alexa.displayName}</span>
-                        </div>
-                      )}
-
-                      {platform.key === "alexa" && (
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                          <span>App login: {serverConnected ? "ready" : "not connected"}</span>
-                          <span>•</span>
-                          <span>
-                            Skill: {linked ? "linked" : alexaStatus?.enablementStatus || serverStatus?.alexa?.skillStatus || "not linked"}
-                          </span>
-                          {alexaStatus?.invocationName && (
-                            <>
-                              <span>•</span>
-                              <span>Invocation: {alexaStatus.invocationName}</span>
-                            </>
+                      <div className="space-y-2.5 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="font-semibold text-white text-lg">{platform.name}</div>
+                          {platform.badge && (
+                            <Badge
+                              variant={platform.key === "alexa" ? "default" : "secondary"}
+                              className={
+                                platform.key === "alexa"
+                                  ? "bg-emerald-600 hover:bg-emerald-600"
+                                  : ""
+                              }
+                            >
+                              {platform.badge}
+                            </Badge>
                           )}
                         </div>
+
+                        <div className="text-sm text-slate-400 leading-relaxed">
+                          {platform.desc}
+                        </div>
+
+                        {platform.key === "alexa" && serverConnected && (
+                          <div className="flex flex-wrap items-center gap-3 pt-2">
+                            {serverStatus?.alexa?.displayName && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                                <span className="text-slate-300">
+                                  Signed in as{" "}
+                                  <span className="font-medium text-white">
+                                    {serverStatus.alexa.displayName}
+                                  </span>
+                                </span>
+                              </div>
+                            )}
+                            {linked && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                                <span className="text-emerald-400 font-medium">
+                                  Alexa skill enabled
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {platform.key === "alexa" && serverConnected && (
+                          <details className="text-xs text-slate-500 pt-1">
+                            <summary className="cursor-pointer hover:text-slate-400 transition-colors">
+                              View technical details
+                            </summary>
+                            <div className="flex flex-wrap gap-2 mt-2 pl-3">
+                              <span>App: {serverConnected ? "connected" : "not connected"}</span>
+                              <span>•</span>
+                              <span>
+                                Skill:{" "}
+                                {linked
+                                  ? "linked"
+                                  : alexaStatus?.enablementStatus ||
+                                    serverStatus?.alexa?.skillStatus ||
+                                    "not linked"}
+                              </span>
+                              {alexaStatus?.invocationName && (
+                                <>
+                                  <span>•</span>
+                                  <span>Invocation: {alexaStatus.invocationName}</span>
+                                </>
+                              )}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 md:flex-col md:items-stretch md:min-w-[160px]">
+                      {platform.key === "alexa" ? (
+                        !serverConnected ? (
+                          <Button
+                            onClick={() => void handleConnect(platform.key)}
+                            disabled={busy}
+                            className="flex-1 md:w-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11"
+                          >
+                            {busy ? "Connecting…" : "Sign in with Amazon"}
+                          </Button>
+                        ) : linked ? (
+                          <>
+                            <Button variant="secondary" disabled className="flex-1 md:w-full">
+                              ✓ Connected
+                            </Button>
+                            <Button
+                              onClick={() => void handleDisconnect(platform.key)}
+                              disabled={busy}
+                              variant="outline"
+                              className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                            >
+                              {busy ? "Disconnecting…" : "Disconnect"}
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button
+                              onClick={() => void handleConnect(platform.key)}
+                              disabled={busy}
+                              className="flex-1 md:w-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11"
+                            >
+                              {busy ? "Opening…" : "Enable Alexa skill"}
+                            </Button>
+                            <Button
+                              onClick={() => void handleDisconnect(platform.key)}
+                              disabled={busy}
+                              variant="outline"
+                              className="border-slate-700 text-slate-300 hover:bg-slate-800 text-sm"
+                            >
+                              {busy ? "Disconnecting…" : "Disconnect"}
+                            </Button>
+                          </>
+                        )
+                      ) : (
+                        <Button disabled variant="secondary" className="flex-1 md:w-full">
+                          Coming Soon
+                        </Button>
                       )}
                     </div>
                   </div>
+                </div>
+              );
+            })}
+          </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    {platform.key === "alexa" ? (
-                      !serverConnected ? (
-                        <Button onClick={() => void handleConnect(platform.key)} disabled={busy}>
-                          {busy ? "Connecting…" : "Connect Amazon"}
-                        </Button>
-                      ) : linked ? (
-                        <>
-                          <Button variant="secondary" disabled>
-                            Linked
-                          </Button>
-                          <Button onClick={() => void handleDisconnect(platform.key)} disabled={busy} variant="outline">
-                            {busy ? "Disconnecting…" : "Disconnect"}
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button onClick={() => void handleConnect(platform.key)} disabled={busy}>
-                            {busy ? "Opening Alexa…" : "Enable Alexa skill"}
-                          </Button>
-                          <Button onClick={() => void handleDisconnect(platform.key)} disabled={busy} variant="outline">
-                            {busy ? "Disconnecting…" : "Disconnect"}
-                          </Button>
-                        </>
-                      )
-                    ) : (
-                      <Button disabled variant="secondary">
-                        Coming Soon
-                      </Button>
-                    )}
-                  </div>
+          <div className="mb-8 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
+                <svg
+                  className="w-5 h-5 text-emerald-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <div className="font-medium text-white mb-2 text-sm">How this works</div>
+                <div className="space-y-1.5 text-sm text-slate-400 leading-relaxed">
+                  <div>• First, sign in with your Amazon account to access this app</div>
+                  <div>• Then, enable the Alexa skill to control your devices</div>
+                  <div>• You&apos;ll configure prayer times and device settings in the next steps</div>
                 </div>
               </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-muted-foreground">
-          <div className="font-medium text-foreground">What happens here</div>
-          <div className="mt-2 space-y-1">
-            <div>1. Connect Amazon so the app can save your settings and devices.</div>
-            <div>2. Enable and link the Alexa skill from this same screen.</div>
-            <div>3. Step 5 and Settings will stay the source of truth for reciters, devices, and after-Adhan playback.</div>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-10 flex items-center justify-between">
-          <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>
-            Back
-          </Button>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button
+              variant="outline"
+              onClick={() => navigate("/onboarding/step1")}
+              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11"
+            >
+              Back
+            </Button>
 
-          <Button onClick={handleContinue} disabled={!continueEnabled}>
-            Continue
-          </Button>
+            <Button
+              onClick={handleContinue}
+              disabled={!continueEnabled}
+              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {continueEnabled ? "Continue to location" : "Connect Amazon to continue"}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
