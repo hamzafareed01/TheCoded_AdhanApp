@@ -1,414 +1,324 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
-import { Label } from "../ui/label";
 import { Input } from "../ui/input";
-import { Switch } from "../ui/switch";
-import { apiFetch } from "../../lib/api";
-import { LocateFixed, MapPin, Clock3, Globe2 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
+import { Label } from "../ui/label";
+import { Settings2 } from "lucide-react";
+import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
-type LocationSettings = {
-  country: string;
-  city: string;
-  timezone: string;
-  useMosqueLocation: boolean;
-  latitude?: number;
-  longitude?: number;
+type Sect = "SUNNI" | "SHIA";
+type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
+
+export type PrayerMethod =
+  | "isna"
+  | "karachi"
+  | "mwl"
+  | "makkah"
+  | "egypt"
+  | "ummAlQura"
+  | "tehran"
+  | "jafari";
+
+export type HighLatitudeMode =
+  | "automatic"
+  | "middle_of_the_night"
+  | "one_seventh"
+  | "angle_based";
+
+type Offsets = Record<PrayerName, number>;
+
+type PrayerSettingsData = {
+  sect?: Sect;
+  shia?: boolean;
+  calculationMethod?: PrayerMethod;
+  madhhab?: "hanafi" | "shafi";
+  highLatitudeMode?: HighLatitudeMode;
+  highLatitudeMethod?: HighLatitudeMode;
+  offsets?: Partial<Offsets>;
 };
 
 type OnboardingData = {
-  location?: Partial<LocationSettings>;
+  location?: {
+    country?: string;
+    city?: string;
+    timezone?: string;
+  };
+  prayerSettings?: PrayerSettingsData;
   [key: string]: unknown;
 };
 
-type Step3LocationProps = {
+type Step4PrayerSettingsProps = {
   onboardingData: OnboardingData;
   setOnboardingData: (data: OnboardingData) => void;
 };
 
-function normalizeCity(value: string) {
-  return String(value || "").trim().replace(/\s+/g, " ");
+const PRAYERS: PrayerName[] = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+
+function defaultOffsets(): Offsets {
+  return { fajr: 0, dhuhr: 0, asr: 0, maghrib: 0, isha: 0 };
 }
 
-function normalizeCountry(value: string) {
-  return String(value || "").trim().replace(/\s+/g, " ");
+function sanitizeNonNegativeOffset(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.trunc(n));
 }
 
-function normalizeTimezone(value: string) {
-  return String(value || "").trim();
+function sanitizeOffsets(value: Partial<Offsets> | Record<string, unknown> | undefined | null): Offsets {
+  const base = defaultOffsets();
+
+  return {
+    fajr: sanitizeNonNegativeOffset(value?.fajr ?? base.fajr),
+    dhuhr: sanitizeNonNegativeOffset(value?.dhuhr ?? base.dhuhr),
+    asr: sanitizeNonNegativeOffset(value?.asr ?? base.asr),
+    maghrib: sanitizeNonNegativeOffset(value?.maghrib ?? base.maghrib),
+    isha: sanitizeNonNegativeOffset(value?.isha ?? base.isha),
+  };
 }
 
-function makeResolvedKey(country: string, city: string) {
-  return `${normalizeCountry(country).toLowerCase()}::${normalizeCity(city).toLowerCase()}`;
+function normalizeCountry(value: unknown): string {
+  const raw = String(value ?? "").trim().toUpperCase();
+  return raw || "US";
 }
 
-function getBrowserTimezone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC";
-  } catch {
-    return "Etc/UTC";
-  }
-}
-
-function getGlobalTimezones() {
-  try {
-    const values = (Intl as typeof Intl & {
-      supportedValuesOf?: (key: string) => string[];
-    }).supportedValuesOf?.("timeZone");
-
-    if (Array.isArray(values) && values.length > 0) {
-      return values;
-    }
-  } catch {
-    // ignore and use fallback
+function getDefaultMethodForCountry(country: string, sect: Sect): PrayerMethod {
+  if (sect === "SHIA") {
+    return country === "IR" ? "tehran" : "jafari";
   }
 
-  return [
-    "UTC",
-    "Africa/Cairo",
-    "Africa/Johannesburg",
-    "America/Chicago",
-    "America/Los_Angeles",
-    "America/New_York",
-    "America/Toronto",
-    "Asia/Dhaka",
-    "Asia/Dubai",
-    "Asia/Karachi",
-    "Asia/Kolkata",
-    "Asia/Kuala_Lumpur",
-    "Asia/Riyadh",
-    "Asia/Singapore",
-    "Asia/Tokyo",
-    "Australia/Sydney",
-    "Europe/Berlin",
-    "Europe/Istanbul",
-    "Europe/London",
-    "Europe/Paris",
-    "Pacific/Auckland",
+  if (country === "PK") return "karachi";
+  if (country === "SA") return "ummAlQura";
+  if (country === "EG") return "egypt";
+  if (country === "US" || country === "CA") return "isna";
+  return "mwl";
+}
+
+function normalizeMethod(
+  value: unknown,
+  country: string,
+  sect: Sect
+): PrayerMethod {
+  const raw = String(value ?? "").trim();
+  const allowed: PrayerMethod[] =
+    sect === "SHIA"
+      ? ["jafari", "tehran"]
+      : ["isna", "karachi", "mwl", "makkah", "egypt", "ummAlQura"];
+
+  if (allowed.includes(raw as PrayerMethod)) {
+    return raw as PrayerMethod;
+  }
+
+  return getDefaultMethodForCountry(country, sect);
+}
+
+function normalizeHighLatitudeMode(value: unknown): HighLatitudeMode {
+  const raw = String(value ?? "").trim();
+
+  const allowed: HighLatitudeMode[] = [
+    "automatic",
+    "middle_of_the_night",
+    "one_seventh",
+    "angle_based",
   ];
+
+  return allowed.includes(raw as HighLatitudeMode)
+    ? (raw as HighLatitudeMode)
+    : "automatic";
 }
 
-export default function Step3Location({
+function normalizeMadhhab(value: unknown): "hanafi" | "shafi" {
+  return String(value ?? "").trim().toLowerCase() === "shafi"
+    ? "shafi"
+    : "hanafi";
+}
+
+async function saveSettings(payload: Record<string, unknown>) {
+  const put = await apiFetch("/api/user/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+  if (put.ok) return put;
+
+  return apiFetch("/api/user/settings", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export default function Step4PrayerSettings({
   onboardingData,
   setOnboardingData,
-}: Step3LocationProps) {
+}: Step4PrayerSettingsProps) {
   const navigate = useNavigate();
 
-  const initialCountry = normalizeCountry(onboardingData?.location?.country || "");
-  const initialCity = normalizeCity(onboardingData?.location?.city || "");
-  const initialTimezone = normalizeTimezone(onboardingData?.location?.timezone || "");
-  const initialLatitude =
-    typeof onboardingData?.location?.latitude === "number"
-      ? onboardingData.location.latitude
-      : undefined;
-  const initialLongitude =
-    typeof onboardingData?.location?.longitude === "number"
-      ? onboardingData.location.longitude
-      : undefined;
+  const existing = onboardingData?.prayerSettings || {};
+  const country = normalizeCountry(onboardingData?.location?.country);
 
-  const [location, setLocation] = useState<LocationSettings>({
-    country: initialCountry,
-    city: initialCity,
-    timezone: initialTimezone,
-    useMosqueLocation: onboardingData?.location?.useMosqueLocation ?? true,
-    latitude: initialLatitude,
-    longitude: initialLongitude,
-  });
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [timezoneManuallyEdited, setTimezoneManuallyEdited] = useState(Boolean(initialTimezone));
-  const [geocoding, setGeocoding] = useState(false);
-  const [usingDeviceLocation, setUsingDeviceLocation] = useState(false);
-  const [geocodeError, setGeocodeError] = useState<string | null>(null);
-  const [resolvedKey, setResolvedKey] = useState<string | null>(
-    initialLatitude != null && initialLongitude != null
-      ? makeResolvedKey(initialCountry, initialCity)
-      : null
+  const initialSect: Sect =
+    existing?.shia === true || existing?.sect === "SHIA" ? "SHIA" : "SUNNI";
+
+  const [sect, setSect] = useState<Sect>(initialSect);
+  const [calculationMethod, setCalculationMethod] = useState<PrayerMethod>(
+    normalizeMethod(existing?.calculationMethod, country, initialSect)
   );
-  const [resolvedMessage, setResolvedMessage] = useState<string | null>(
-    initialLatitude != null && initialLongitude != null
-      ? `Coordinates loaded: ${initialLatitude.toFixed(5)}, ${initialLongitude.toFixed(5)}`
-      : null
+  const [madhhab, setMadhhab] = useState<"hanafi" | "shafi">(
+    normalizeMadhhab(existing?.madhhab)
+  );
+  const [highLatitudeMode, setHighLatitudeMode] = useState<HighLatitudeMode>(
+    normalizeHighLatitudeMode(
+      existing?.highLatitudeMode || existing?.highLatitudeMethod
+    )
+  );
+  const [offsets, setOffsets] = useState<Offsets>(
+    sanitizeOffsets(existing?.offsets)
   );
 
-  const timezoneOptions = useMemo(() => getGlobalTimezones(), []);
+  useEffect(() => {
+    async function hydrate() {
+      if (existing && Object.keys(existing).length > 0) {
+        const nextSect: Sect =
+          existing?.shia === true || existing?.sect === "SHIA" ? "SHIA" : "SUNNI";
 
-  const currentCityNormalized = useMemo(
-    () => normalizeCity(location.city),
-    [location.city]
-  );
-
-  const currentCountryNormalized = useMemo(
-    () => normalizeCountry(location.country),
-    [location.country]
-  );
-
-  const currentLookupKey = useMemo(
-    () => makeResolvedKey(currentCountryNormalized, currentCityNormalized),
-    [currentCountryNormalized, currentCityNormalized]
-  );
-
-  const clearResolvedCoordinates = () => {
-    setResolvedKey(null);
-    setResolvedMessage(null);
-    setLocation((prev) => ({
-      ...prev,
-      latitude: undefined,
-      longitude: undefined,
-    }));
-  };
-
-  const handleCountryChange = (value: string) => {
-    const nextCountry = normalizeCountry(value);
-
-    setLocation((prev) => ({
-      ...prev,
-      country: nextCountry,
-      timezone: nextCountry ? prev.timezone : "",
-    }));
-
-    if (!nextCountry) {
-      setLocation((prev) => ({
-        ...prev,
-        country: "",
-        timezone: "",
-      }));
-    }
-
-    if (resolvedKey) clearResolvedCoordinates();
-    setTimezoneManuallyEdited(false);
-    setGeocodeError(null);
-  };
-
-  const handleCityChange = (value: string) => {
-    setLocation((prev) => ({
-      ...prev,
-      city: value,
-    }));
-    if (resolvedKey) clearResolvedCoordinates();
-    setGeocodeError(null);
-  };
-
-  const handleTimezoneChange = (value: string) => {
-    setTimezoneManuallyEdited(true);
-    setLocation((prev) => ({
-      ...prev,
-      timezone: value,
-    }));
-  };
-
-  const runGeocode = async (loc: LocationSettings) => {
-    setGeocodeError(null);
-
-    const cityTrimmed = normalizeCity(loc.city);
-    const countryTrimmed = normalizeCountry(loc.country);
-
-    if (!cityTrimmed) {
-      setGeocodeError("Please enter a city.");
-      return null;
-    }
-
-    if (!countryTrimmed) {
-      setGeocodeError("Please enter a country.");
-      return null;
-    }
-
-    setGeocoding(true);
-
-    try {
-      const params = new URLSearchParams({
-        city: cityTrimmed,
-        country: countryTrimmed,
-      });
-
-      const res = await apiFetch(`/api/geocode?${params.toString()}`);
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        const message =
-          typeof data?.error === "string"
-            ? data.error
-            : "Could not look up coordinates for this location. Please try again.";
-        setGeocodeError(message);
-        return null;
-      }
-
-      const lat = typeof data?.lat === "number" ? data.lat : undefined;
-      const lng = typeof data?.lng === "number" ? data.lng : undefined;
-      const geocodedTimezone =
-        typeof data?.timezone === "string" ? data.timezone.trim() : undefined;
-
-      if (lat == null || lng == null) {
-        setGeocodeError(
-          "The geocoding service did not return valid coordinates for this location."
+        setSect(nextSect);
+        setCalculationMethod(
+          normalizeMethod(existing?.calculationMethod, country, nextSect)
         );
-        return null;
-      }
-
-      return {
-        lat,
-        lng,
-        city: cityTrimmed,
-        country: countryTrimmed,
-        formatted:
-          typeof data?.formatted === "string" && data.formatted.trim()
-            ? data.formatted
-            : `${cityTrimmed}, ${countryTrimmed}`,
-        geocodedTimezone,
-      };
-    } catch (err) {
-      console.error("Geocoding request failed", err);
-      setGeocodeError(
-        "Could not reach the geocoding service. Check your connection and try again."
-      );
-      return null;
-    } finally {
-      setGeocoding(false);
-    }
-  };
-
-  const handleUseDeviceLocation = async () => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setGeocodeError("Device location is not available in this browser.");
-      return;
-    }
-
-    setUsingDeviceLocation(true);
-    setGeocodeError(null);
-    setResolvedMessage(null);
-
-    try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0,
-        });
-      });
-
-      const lat = position.coords.latitude;
-      const lng = position.coords.longitude;
-
-      const params = new URLSearchParams({
-        lat: String(lat),
-        lng: String(lng),
-      });
-
-      const res = await apiFetch(`/api/geocode?${params.toString()}`);
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        throw new Error(
-          typeof data?.error === "string"
-            ? data.error
-            : "Could not resolve your device location."
+        setMadhhab(normalizeMadhhab(existing?.madhhab));
+        setHighLatitudeMode(
+          normalizeHighLatitudeMode(
+            existing?.highLatitudeMode || existing?.highLatitudeMethod
+          )
         );
+        setOffsets(sanitizeOffsets(existing?.offsets));
+        return;
       }
 
-      const reverseCity = normalizeCity(
-        String(data?.city || data?.query || location.city || "")
-      );
-      const reverseCountry = normalizeCountry(
-        String(data?.countryCode || data?.country || location.country || "")
-      );
-      const reverseTimezone = normalizeTimezone(
-        String(data?.timezone || getBrowserTimezone())
-      );
+      const token = getStoredAmazonToken();
+      if (!token) return;
 
-      setLocation((prev) => ({
-        ...prev,
-        city: reverseCity || prev.city,
-        country: reverseCountry || prev.country,
-        timezone: reverseTimezone || prev.timezone,
-        latitude: lat,
-        longitude: lng,
-      }));
-      setTimezoneManuallyEdited(true);
-      setResolvedKey(makeResolvedKey(reverseCountry, reverseCity || location.city));
-      setResolvedMessage(
-        `Using device location${data?.formatted ? ` · ${data.formatted}` : ""} · ${lat.toFixed(
-          5
-        )}, ${lng.toFixed(5)}`
-      );
-    } catch (err) {
-      console.error(err);
-      setGeocodeError(
-        err instanceof Error
-          ? err.message
-          : "Could not access your device location."
-      );
-    } finally {
-      setUsingDeviceLocation(false);
+      try {
+        setLoading(true);
+        const res = await apiFetch("/api/user/settings");
+        if (!res.ok) return;
+
+        const payload = await res.json();
+        const s = payload?.settings ?? payload ?? {};
+
+        const nextSect: Sect =
+          s?.shia === true || s?.sect === "SHIA" ? "SHIA" : "SUNNI";
+
+        setSect(nextSect);
+        setCalculationMethod(
+          normalizeMethod(s?.calculationMethod, country, nextSect)
+        );
+        setMadhhab(normalizeMadhhab(s?.madhhab));
+        setHighLatitudeMode(
+          normalizeHighLatitudeMode(s?.highLatitudeMethod)
+        );
+        setOffsets(sanitizeOffsets(s?.globalOffsets));
+      } catch {
+        // keep local defaults
+      } finally {
+        setLoading(false);
+      }
     }
+
+    void hydrate();
+  }, [country]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setCalculationMethod((prev) => normalizeMethod(prev, country, sect));
+  }, [sect, country]);
+
+  const calcMethodChoices = useMemo(() => {
+    if (sect === "SHIA") {
+      return [
+        { value: "jafari", label: "Jafari" },
+        { value: "tehran", label: "Tehran" },
+      ] as const;
+    }
+
+    return [
+      { value: "isna", label: "ISNA (North America)" },
+      { value: "mwl", label: "Muslim World League" },
+      { value: "karachi", label: "Karachi" },
+      { value: "ummAlQura", label: "Umm Al-Qura" },
+      { value: "makkah", label: "Makkah" },
+      { value: "egypt", label: "Egyptian Survey" },
+    ] as const;
+  }, [sect]);
+
+  const updateOffset = (prayer: PrayerName, rawValue: string) => {
+    setOffsets((prev) => ({
+      ...prev,
+      [prayer]: sanitizeNonNegativeOffset(rawValue),
+    }));
   };
 
-  const handleNext = async () => {
-    const cityTrimmed = normalizeCity(location.city);
-    const countryTrimmed = normalizeCountry(location.country);
-    const timezoneTrimmed = normalizeTimezone(location.timezone);
+  const handleContinue = async () => {
+    setError(null);
 
-    if (!countryTrimmed) {
-      setGeocodeError("Please enter a country.");
+    const token = getStoredAmazonToken();
+    if (!token) {
+      setError("Please connect Amazon in Step 2 before saving prayer settings.");
       return;
     }
 
-    if (!cityTrimmed) {
-      setGeocodeError("Please enter a city.");
-      return;
-    }
+    const sanitizedOffsets = sanitizeOffsets(offsets);
 
-    if (!timezoneTrimmed) {
-      setGeocodeError("Please select a timezone.");
-      return;
-    }
-
-    let lat = location.latitude;
-    let lng = location.longitude;
-    let finalTimezone = timezoneTrimmed;
-
-    if (resolvedKey !== currentLookupKey || lat == null || lng == null) {
-      const result = await runGeocode({
-        ...location,
-        city: cityTrimmed,
-        country: countryTrimmed,
-      });
-
-      if (!result) return;
-
-      lat = result.lat;
-      lng = result.lng;
-
-      if ((!timezoneTrimmed || !timezoneManuallyEdited) && result.geocodedTimezone) {
-        finalTimezone = result.geocodedTimezone;
-      }
-
-      setResolvedKey(currentLookupKey);
-      setResolvedMessage(
-        `Coordinates confirmed for ${result.formatted}: ${result.lat.toFixed(
-          5
-        )}, ${result.lng.toFixed(5)}${
-          result.geocodedTimezone ? ` · Timezone: ${result.geocodedTimezone}` : ""
-        }`
-      );
-    }
-
-    const updatedLocation: LocationSettings = {
-      ...location,
-      country: countryTrimmed,
-      city: cityTrimmed,
-      timezone: finalTimezone,
-      latitude: lat,
-      longitude: lng,
+    const nextPrayerSettings: PrayerSettingsData = {
+      sect,
+      shia: sect === "SHIA",
+      calculationMethod,
+      madhhab,
+      highLatitudeMode,
+      highLatitudeMethod: highLatitudeMode,
+      offsets: sanitizedOffsets,
     };
 
-    setLocation(updatedLocation);
     setOnboardingData({
       ...onboardingData,
-      location: updatedLocation,
+      prayerSettings: nextPrayerSettings,
     });
 
-    navigate("/onboarding/step4");
+    setSaving(true);
+    try {
+      const resp = await saveSettings({
+        sect,
+        shia: sect === "SHIA",
+        calculationMethod,
+        madhhab,
+        highLatitudeMethod: highLatitudeMode,
+        globalOffsets: sanitizedOffsets,
+      });
+
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => "");
+        throw new Error(
+          `Could not save prayer settings (${resp.status}). ${msg}`.trim()
+        );
+      }
+
+      navigate("/onboarding/step5");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Could not save prayer settings.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -417,7 +327,7 @@ export default function Step3Location({
         <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <Logo />
-            <ProgressIndicator currentStep={3} totalSteps={6} />
+            <ProgressIndicator currentStep={4} totalSteps={6} />
           </div>
         </div>
       </div>
@@ -425,237 +335,294 @@ export default function Step3Location({
       <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
         <div className="mb-8 md:mb-10">
           <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
-            Set your location
+            Configure prayer times
           </h1>
           <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
-            Your location helps us calculate precise prayer times based on the
-            position of the sun in your area.
+            Choose your calculation method and fine-tune settings to match your local mosque or community.
           </p>
         </div>
 
         <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
-          <div className="mb-7 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+          {error && (
+            <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
+              <p className="text-red-300 text-sm leading-relaxed">{error}</p>
+            </div>
+          )}
+
+          {loading && (
+            <div className="mb-6 rounded-xl border border-slate-700/50 bg-slate-800/30 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <svg className="w-4 h-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <p className="text-slate-300 text-sm">Loading your saved prayer settings...</p>
+              </div>
+            </div>
+          )}
+
+          <div className="mb-8">
+            <h2 className="text-white text-base font-semibold mb-4">Basic settings</h2>
+
+            <div className="mb-6">
+              <Label className="text-white mb-3 block text-sm font-medium">Tradition</Label>
+              <RadioGroup
+                value={sect}
+                onValueChange={(value: string) => setSect(value as Sect)}
+                className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+              >
+                <div className="relative">
+                  <RadioGroupItem value="SUNNI" id="sect-sunni" className="peer sr-only" />
+                  <Label
+                    htmlFor="sect-sunni"
+                    className={`flex items-center justify-between p-5 rounded-xl border-2 cursor-pointer transition-all ${
+                      sect === "SUNNI"
+                        ? "border-emerald-500/50 bg-emerald-500/10"
+                        : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`h-5 w-5 rounded-full border-2 flex items-center justify-center ${
+                          sect === "SUNNI" ? "border-emerald-500 bg-emerald-500" : "border-slate-600"
+                        }`}
+                      >
+                        {sect === "SUNNI" && (
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path
+                              fillRule="evenodd"
+                              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-white font-medium">Sunni</div>
+                        <div className="text-slate-400 text-xs mt-0.5">Standard calculation methods</div>
+                      </div>
+                    </div>
+                  </Label>
+                </div>
+
+                <div className="relative">
+                  <RadioGroupItem value="SHIA" id="sect-shia" className="peer sr-only" />
+                  <Label
+                    htmlFor="sect-shia"
+                    className={`flex items-center justify-between p-5 rounded-xl border-2 cursor-pointer transition-all ${
+                      sect === "SHIA"
+                        ? "border-emerald-500/50 bg-emerald-500/10"
+                        : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`h-5 w-5 rounded-full border-2 flex items-center justify-center ${
+                          sect === "SHIA" ? "border-emerald-500 bg-emerald-500" : "border-slate-600"
+                        }`}
+                      >
+                        {sect === "SHIA" && (
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path
+                              fillRule="evenodd"
+                              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-white font-medium">Shia</div>
+                        <div className="text-slate-400 text-xs mt-0.5">Jafari calculation methods</div>
+                      </div>
+                    </div>
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+
+            <div className="mb-6">
+              <Label className="text-white mb-2 block text-sm font-medium">
+                Calculation method
+              </Label>
+              <Select
+                value={calculationMethod}
+                onValueChange={(value: string) =>
+                  setCalculationMethod(value as PrayerMethod)
+                }
+              >
+                <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                  <SelectValue placeholder="Select calculation method" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                  {calcMethodChoices.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-2 text-xs text-slate-500">
+                {sect === "SUNNI"
+                  ? "Different regions use different angle calculations for Fajr and Isha."
+                  : "Choose between Jafari or Tehran calculation methods."}
+              </p>
+            </div>
+
+            {sect === "SUNNI" && (
+              <div>
+                <Label className="text-white mb-2 block text-sm font-medium">
+                  Madhhab (Asr calculation)
+                </Label>
+                <Select
+                  value={madhhab}
+                  onValueChange={(value: string) =>
+                    setMadhhab(value as "hanafi" | "shafi")
+                  }
+                >
+                  <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                    <SelectValue placeholder="Select madhhab" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                    <SelectItem value="hanafi">Hanafi (later Asr)</SelectItem>
+                    <SelectItem value="shafi">Shafi / Standard</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-2 text-xs text-slate-500">
+                  Hanafi calculates Asr when shadow length equals object height + noon shadow.
+                </p>
+              </div>
+            )}
+
+            {sect === "SHIA" && (
+              <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+                <p className="text-sm text-slate-300 leading-relaxed">
+                  Shia prayer times use Jafari jurisprudence. The Asr madhhab option only applies to Sunni calculations.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <details className="group mb-8">
+            <summary className="flex items-center justify-between cursor-pointer p-4 rounded-xl border border-slate-700/60 bg-slate-800/30 hover:bg-slate-800/50 transition-colors">
+              <div className="flex items-center gap-3">
+                <Settings2 className="w-5 h-5 text-emerald-400" />
+                <div>
+                  <div className="text-white font-semibold">Advanced settings</div>
+                  <div className="text-slate-400 text-sm">High latitude rules and time offsets</div>
+                </div>
+              </div>
+              <svg
+                className="w-5 h-5 text-slate-400 transition-transform group-open:rotate-180"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+
+            <div className="mt-4 space-y-6 p-5 rounded-xl border border-slate-700/50 bg-slate-800/20">
+              <div>
+                <Label className="text-white mb-2 block text-sm font-medium">
+                  High latitude rule
+                </Label>
+                <Select
+                  value={highLatitudeMode}
+                  onValueChange={(value: string) =>
+                    setHighLatitudeMode(value as HighLatitudeMode)
+                  }
+                >
+                  <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                    <SelectValue placeholder="Select high latitude rule" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                    <SelectItem value="automatic">Automatic</SelectItem>
+                    <SelectItem value="middle_of_the_night">
+                      Middle of the Night
+                    </SelectItem>
+                    <SelectItem value="one_seventh">One Seventh</SelectItem>
+                    <SelectItem value="angle_based">Angle Based</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-2 text-xs text-slate-500">
+                  Only relevant for locations above 48° latitude where twilight doesn&apos;t occur.
+                </p>
+              </div>
+
+              <div>
+                <div className="mb-4">
+                  <div className="text-white font-medium mb-1">Prayer time adjustments</div>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    Add minutes to each prayer time to match your local mosque or community.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {PRAYERS.map((p) => (
+                    <div
+                      key={p}
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg bg-slate-800/40 border border-slate-700/40"
+                    >
+                      <Label className="text-slate-200 capitalize font-medium text-sm">
+                        {p}
+                      </Label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          inputMode="numeric"
+                          className="w-20 bg-slate-900/60 border-slate-700/60 text-white h-9 text-center"
+                          value={offsets[p]}
+                          onChange={(e) => updateOffset(p, e.target.value)}
+                          onBlur={(e) => updateOffset(p, e.target.value)}
+                        />
+                        <span className="text-slate-500 text-xs">min</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  Offsets cannot be negative. These values are saved and used consistently across your app.
+                </p>
+              </div>
+            </div>
+          </details>
+
+          <div className="mb-8 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
-                <svg
-                  className="w-4 h-4 text-emerald-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                  />
+                <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
               <div className="flex-1">
                 <div className="text-white text-sm font-medium mb-1">
-                  Your location stays private
+                  These settings are saved to your account
                 </div>
                 <p className="text-slate-400 text-sm leading-relaxed">
-                  Location is only used to calculate accurate prayer times. We
-                  don&apos;t share or sell your data.
+                  You can adjust these anytime from the Settings page after completing onboarding.
                 </p>
               </div>
-            </div>
-          </div>
-
-          <div className="mb-8">
-            <h2 className="text-white text-base font-semibold mb-3">Quick setup</h2>
-            <div className="rounded-xl border-2 border-emerald-500/20 bg-emerald-500/5 p-5">
-              <div className="flex flex-col gap-4">
-                <div className="flex items-start gap-3">
-                  <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
-                    <MapPin className="w-5 h-5 text-emerald-400" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-white font-medium mb-1">
-                      Use your current location
-                    </div>
-                    <p className="text-slate-400 text-sm leading-relaxed">
-                      Automatically fill in your city, country, timezone, and
-                      coordinates for the most accurate results.
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  onClick={handleUseDeviceLocation}
-                  disabled={usingDeviceLocation || geocoding}
-                  className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11"
-                >
-                  <LocateFixed className="w-4 h-4 mr-2" />
-                  {usingDeviceLocation ? "Getting location…" : "Use my location"}
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          <div className="mb-8">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="h-px flex-1 bg-slate-700/50" />
-              <span className="text-slate-500 text-sm">Or enter manually</span>
-              <div className="h-px flex-1 bg-slate-700/50" />
-            </div>
-
-            <div className="space-y-5">
-              <div>
-                <Label
-                  htmlFor="country"
-                  className="text-white mb-2 block text-sm font-medium"
-                >
-                  Country or region
-                </Label>
-                <div className="relative">
-                  <Globe2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                  <Input
-                    id="country"
-                    value={location.country}
-                    onChange={(e) => handleCountryChange(e.target.value)}
-                    className="pl-10 bg-slate-800/60 border-slate-700/60 text-white h-11"
-                    placeholder="Type any country, e.g. United States, India, Saudi Arabia"
-                  />
-                </div>
-                <p className="mt-2 text-xs text-slate-500">
-                  You can enter any country globally. Timezone becomes available after this field is filled.
-                </p>
-              </div>
-
-              <div>
-                <Label
-                  htmlFor="city"
-                  className="text-white mb-2 block text-sm font-medium"
-                >
-                  City
-                </Label>
-                <Input
-                  id="city"
-                  value={location.city}
-                  onChange={(e) => handleCityChange(e.target.value)}
-                  className="bg-slate-800/60 border-slate-700/60 text-white h-11"
-                  placeholder="e.g., Chicago, Karachi, London"
-                />
-                {geocodeError && (
-                  <p className="mt-2 text-xs text-red-400 flex items-center gap-1.5">
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                      <path
-                        fillRule="evenodd"
-                        d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {geocodeError}
-                  </p>
-                )}
-                {geocoding && !geocodeError && (
-                  <p className="mt-2 text-xs text-slate-400 flex items-center gap-1.5">
-                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      />
-                    </svg>
-                    Verifying coordinates…
-                  </p>
-                )}
-                {!geocoding && !geocodeError && resolvedMessage && (
-                  <p className="mt-2 text-xs text-emerald-400 flex items-center gap-1.5">
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                      <path
-                        fillRule="evenodd"
-                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {resolvedMessage}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <Label
-                  htmlFor="timezone"
-                  className="text-white mb-2 block text-sm font-medium"
-                >
-                  Timezone
-                </Label>
-                <Input
-                  id="timezone"
-                  list="timezone-options"
-                  value={location.timezone}
-                  onChange={(e) => handleTimezoneChange(e.target.value)}
-                  disabled={!location.country}
-                  className="bg-slate-800/60 border-slate-700/60 text-white h-11 disabled:opacity-50"
-                  placeholder={location.country ? "Select or search timezone" : "Enter country first"}
-                />
-                <datalist id="timezone-options">
-                  {timezoneOptions.map((timezone) => (
-                    <option key={timezone} value={timezone} />
-                  ))}
-                </datalist>
-
-                <div className="mt-2 flex items-start gap-2 text-xs text-slate-500">
-                  <Clock3 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                  <p>
-                    {location.country
-                      ? `Timezone selection is now enabled for ${location.country}. We will also verify it when we geocode ${location.city || "your city"}.`
-                      : "Choose a country first, then select the correct timezone for your city."}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="mb-8 p-5 bg-slate-800/30 rounded-2xl border border-slate-700/60">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1">
-                <div className="text-white font-medium mb-1">
-                  Fine-tune with mosque location
-                </div>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  After setup, you can select a nearby mosque to use its exact
-                  coordinates for even more precise prayer times.
-                </p>
-              </div>
-              <Switch
-                checked={location.useMosqueLocation}
-                onCheckedChange={(checked: boolean) =>
-                  setLocation((prev) => ({
-                    ...prev,
-                    useMosqueLocation: checked,
-                  }))
-                }
-              />
             </div>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3">
             <Button
-              onClick={() => navigate("/onboarding/step2")}
               variant="outline"
+              onClick={() => navigate("/onboarding/step3")}
               className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11"
-              disabled={geocoding || usingDeviceLocation}
+              disabled={saving}
             >
               Back
             </Button>
             <Button
-              onClick={handleNext}
+              onClick={handleContinue}
               className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium"
-              disabled={geocoding || usingDeviceLocation}
+              disabled={saving}
             >
-              {geocoding ? "Verifying…" : "Continue to prayer settings"}
+              {saving ? "Saving settings…" : "Continue to devices"}
             </Button>
           </div>
         </div>
