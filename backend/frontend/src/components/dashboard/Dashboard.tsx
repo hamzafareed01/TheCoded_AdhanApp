@@ -213,7 +213,8 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
     latitude: asNumber(src.latitude),
     longitude: asNumber(src.longitude),
     useMosqueLocation: src.useMosqueLocation === true,
-    accountEnabled: src.accountEnabled === true,
+    accountEnabled:
+      src.accountEnabled === true || src.account_enabled === true,
     prayerConfigs: normalizePrayerConfigs(src.prayerConfigs),
     mosqueId: typeof src.mosqueId === "string" ? src.mosqueId : null,
     mosqueName: typeof src.mosqueName === "string" ? src.mosqueName : null,
@@ -236,13 +237,13 @@ function normalizeToday(payload: unknown): TodayShape | null {
   return {
     location: location
       ? {
-          city: asString(location.city),
-          country: asString(location.country),
-          timezone: asString(location.timezone),
-          latitude: asNumber(location.latitude),
-          longitude: asNumber(location.longitude),
-          label: asString(location.label),
-        }
+        city: asString(location.city),
+        country: asString(location.country),
+        timezone: asString(location.timezone),
+        latitude: asNumber(location.latitude),
+        longitude: asNumber(location.longitude),
+        label: asString(location.label),
+      }
       : undefined,
     prayers12: isObject(src.prayers12) ? (src.prayers12 as PrayerMap) : undefined,
     prayers24: isObject(src.prayers24) ? (src.prayers24 as PrayerMap) : undefined,
@@ -252,25 +253,25 @@ function normalizeToday(payload: unknown): TodayShape | null {
     source: asString(src.source),
     sourceDetail: isObject(src.sourceDetail)
       ? {
-          preferred: asString(src.sourceDetail.preferred),
-          actual: asString(src.sourceDetail.actual),
-          useMosqueLocation:
-            typeof src.sourceDetail.useMosqueLocation === "boolean"
-              ? src.sourceDetail.useMosqueLocation
-              : undefined,
-          label: asString(src.sourceDetail.label),
-          fallbackReason:
-            typeof src.sourceDetail.fallbackReason === "string"
-              ? src.sourceDetail.fallbackReason
-              : null,
-        }
+        preferred: asString(src.sourceDetail.preferred),
+        actual: asString(src.sourceDetail.actual),
+        useMosqueLocation:
+          typeof src.sourceDetail.useMosqueLocation === "boolean"
+            ? src.sourceDetail.useMosqueLocation
+            : undefined,
+        label: asString(src.sourceDetail.label),
+        fallbackReason:
+          typeof src.sourceDetail.fallbackReason === "string"
+            ? src.sourceDetail.fallbackReason
+            : null,
+      }
       : undefined,
     method: method
       ? {
-          sect: asString(method.sect),
-          calculationMethod: asString(method.calculationMethod),
-          madhhab: asString(method.madhhab),
-        }
+        sect: asString(method.sect),
+        calculationMethod: asString(method.calculationMethod),
+        madhhab: asString(method.madhhab),
+      }
       : undefined,
     date: src.date,
     meta: src.meta,
@@ -281,8 +282,8 @@ function normalizeDevices(payload: unknown): Device[] {
   const list = Array.isArray(payload)
     ? payload
     : isObject(payload) && Array.isArray(payload.devices)
-    ? payload.devices
-    : [];
+      ? payload.devices
+      : [];
 
   return list
     .filter((item): item is JsonObject => isObject(item))
@@ -405,16 +406,18 @@ function getConnectedPlatforms(
 ): string[] {
   const fromOnboarding = Array.isArray(onboardingData.connectedPlatforms)
     ? onboardingData.connectedPlatforms.filter(
-        (x): x is string => typeof x === "string"
-      )
+      (x): x is string => typeof x === "string"
+    )
     : [];
 
   const fromLocal = safeReadJson<string[]>("adhan_connected_platforms", []);
   const merged = new Set<string>([...fromOnboarding, ...fromLocal]);
 
-  return Array.from(merged).filter(
-    (platform) => platform !== "alexa" || hasAmazonToken
-  );
+  if (hasAmazonToken) {
+    merged.add("alexa");
+  }
+
+  return Array.from(merged);
 }
 
 function titleCase(value?: string | null) {
@@ -640,8 +643,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       setNextPrayerCode(nextEntry.code);
       setNextPrayerTimeDisplay(
         prayersForDisplay?.[nextEntry.code] ||
-          prayersForCountdown[nextEntry.code] ||
-          null
+        prayersForCountdown[nextEntry.code] ||
+        null
       );
 
       const diffMs = Math.max(
@@ -669,7 +672,25 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     const interval = window.setInterval(updateCountdown, 1000);
     return () => window.clearInterval(interval);
   }, [prayersForCountdown, prayersForDisplay, activeTimeZone]);
+  const currentTimeSeconds = useMemo(() => {
+    const nowParts = getNowInTimeZone(activeTimeZone);
+    if (!nowParts) return null;
+    return nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
+  }, [currentTime, activeTimeZone]);
 
+  const nextPrayerForToday = useMemo(() => {
+    if (!prayersForCountdown || currentTimeSeconds == null) return null;
+
+    for (const code of PRAYER_ORDER) {
+      const raw = prayersForCountdown[code];
+      const seconds = raw ? parsePrayerTimeToSeconds(raw) : null;
+      if (seconds != null && seconds > currentTimeSeconds) {
+        return code;
+      }
+    }
+
+    return null;
+  }, [prayersForCountdown, currentTimeSeconds]);
   const quietHours = useMemo<QuietHours | null>(() => {
     const configs = Array.isArray(userSettings?.prayerConfigs)
       ? userSettings.prayerConfigs
@@ -699,23 +720,22 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const locationLabel = todayData?.location?.label
     ? todayData.location.label
     : todayData?.location?.city
-    ? `${todayData.location.city}${
-        todayData.location.country ? `, ${todayData.location.country}` : ""
+      ? `${todayData.location.city}${todayData.location.country ? `, ${todayData.location.country}` : ""
       }`
-    : userSettings?.city
-    ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
-    : "";
+      : userSettings?.city
+        ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
+        : "";
 
   const timingSourceLabel = describeTimingSource(todayData, userSettings);
   const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
 
   const locationCoords =
     todayData?.location?.latitude != null &&
-    todayData?.location?.longitude != null
+      todayData?.location?.longitude != null
       ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
       : userSettings?.latitude != null && userSettings?.longitude != null
-      ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
-      : null;
+        ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
+        : null;
 
   const effectiveSect = String(
     todayData?.method?.sect || userSettings?.sect || "SUNNI"
@@ -726,18 +746,18 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     effectiveSect === "SHIA"
       ? "Shia timing mode"
       : titleCase(
-          todayData?.method?.madhhab || userSettings?.madhhab || "hanafi"
-        );
+        todayData?.method?.madhhab || userSettings?.madhhab || "hanafi"
+      );
 
   const calcLabel = titleCase(
     todayData?.method?.calculationMethod ||
-      userSettings?.calculationMethod ||
-      (effectiveSect === "SHIA" ? "jafari" : "isna")
+    userSettings?.calculationMethod ||
+    (effectiveSect === "SHIA" ? "jafari" : "isna")
   );
 
   const hadithSect: "SUNNI" | "SHIA" =
     String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase() ===
-    "SHIA"
+      "SHIA"
       ? "SHIA"
       : "SUNNI";
 
@@ -807,6 +827,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   });
 
   const formattedTime = currentTime.toLocaleTimeString("en-US", {
+    timeZone: activeTimeZone,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -877,11 +898,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           <div className="flex items-center gap-2 flex-wrap">
             <Badge
               variant="outline"
-              className={`gap-2 ${
-                automationOn
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : "bg-slate-800 text-slate-400 border-slate-700"
-              }`}
+              className={`gap-2 ${automationOn
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                : "bg-slate-800 text-slate-400 border-slate-700"
+                }`}
             >
               {automationOn ? (
                 <Wifi className="w-3 h-3" />
@@ -1048,26 +1068,25 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               {PRAYER_ORDER.map((code) => {
-                const isNext = nextPrayerCode === code;
+                const prayerRaw = prayersForCountdown?.[code];
+                const prayerSeconds = prayerRaw ? parsePrayerTimeToSeconds(prayerRaw) : null;
+
+                const isNext = nextPrayerForToday === code;
                 const isPassed =
-                  !loadingToday &&
-                  !isNext &&
-                  !!prayersForDisplay?.[code] &&
-                  !!nextPrayerCode &&
-                  COUNTDOWN_PRAYERS.includes(code as PrayerCode) &&
-                  COUNTDOWN_PRAYERS.indexOf(code as PrayerCode) <
-                    COUNTDOWN_PRAYERS.indexOf(nextPrayerCode as PrayerCode);
+                  currentTimeSeconds != null &&
+                  prayerSeconds != null &&
+                  prayerSeconds <= currentTimeSeconds &&
+                  !isNext;
 
                 return (
                   <div
                     key={code}
-                    className={`relative p-4 rounded-2xl transition-all ${
-                      isNext
-                        ? "bg-emerald-500/10 border-2 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
-                        : isPassed
+                    className={`relative p-4 rounded-2xl transition-all ${isNext
+                      ? "bg-emerald-500/10 border-2 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
+                      : isPassed
                         ? "bg-slate-900/50 border border-slate-800/50 opacity-60"
                         : "bg-slate-900 border border-slate-800 hover:border-slate-700"
-                    }`}
+                      }`}
                   >
                     {isNext && (
                       <Badge className="absolute -top-2 -right-2 bg-emerald-600 text-white border-0 text-xs">
@@ -1077,16 +1096,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
                     <div className="text-center">
                       <h3
-                        className={`mb-1 text-sm ${
-                          isNext ? "text-emerald-400" : "text-white"
-                        }`}
+                        className={`mb-1 text-sm ${isNext ? "text-emerald-400" : "text-white"
+                          }`}
                       >
                         {PRAYER_LABELS[code]}
                       </h3>
                       <p
-                        className={`text-base ${
-                          isNext ? "text-emerald-300" : "text-slate-400"
-                        }`}
+                        className={`text-base ${isNext ? "text-emerald-300" : "text-slate-400"
+                          }`}
                       >
                         {prayersForDisplay?.[code] || "--:--"}
                       </p>
