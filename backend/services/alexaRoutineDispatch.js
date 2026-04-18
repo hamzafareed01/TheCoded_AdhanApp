@@ -123,6 +123,26 @@ function resolveAudioUrl(req, reciterId) {
   return makeAbsoluteUrl(req, '/audio/adhan_makkah_sudais.mp3');
 }
 
+function getSurahAudioEdition() {
+  const value = String(process.env.ADHAN_QURAN_SURAH_AUDIO_EDITION || 'ar.alafasy').trim();
+  return value || 'ar.alafasy';
+}
+
+function getSurahAudioBitrate() {
+  const value = String(process.env.ADHAN_QURAN_SURAH_AUDIO_BITRATE || '128').trim();
+  return ['192', '128', '64', '48', '40', '32'].includes(value) ? value : '128';
+}
+
+function resolveSurahAudioUrl(surahNumber) {
+  const n = Number(surahNumber);
+  if (!Number.isInteger(n) || n < 1 || n > 114) return '';
+
+  const edition = getSurahAudioEdition();
+  const bitrate = getSurahAudioBitrate();
+
+  return `https://cdn.islamic.network/quran/audio-surah/${bitrate}/${edition}/${n}.mp3`;
+}
+
 function findDua(duaId) {
   const wanted = normalizeId(duaId);
   if (!wanted) return null;
@@ -170,22 +190,44 @@ function normalizeAfterPayload(value) {
 }
 
 function enrichAfterPayload(req, afterType, afterPayload) {
-  if (afterType !== 'dua' || !afterPayload || typeof afterPayload !== 'object') {
+  if (!afterPayload || typeof afterPayload !== 'object') {
     return afterPayload;
   }
 
-  const duaId = afterPayload.duaId || afterPayload.id;
-  const dua = findDua(duaId);
-  if (!dua) return afterPayload;
+  if (afterType === 'dua') {
+    const duaId = afterPayload.duaId || afterPayload.id;
+    const dua = findDua(duaId);
+    if (!dua) return afterPayload;
 
-  return {
-    ...afterPayload,
-    duaId: afterPayload.duaId || dua.id,
-    id: afterPayload.id || dua.id,
-    title: afterPayload.title || dua.title,
-    translation: afterPayload.translation || dua.translation || null,
-    audioUrl: afterPayload.audioUrl || makeAbsoluteUrl(req, dua.audioUrl || dua.audioPath || dua.audio),
-  };
+    return {
+      ...afterPayload,
+      duaId: afterPayload.duaId || dua.id,
+      id: afterPayload.id || dua.id,
+      title: afterPayload.title || dua.title,
+      translation: afterPayload.translation || dua.translation || null,
+      audioUrl:
+        afterPayload.audioUrl ||
+        makeAbsoluteUrl(req, dua.audioUrl || dua.audioPath || dua.audio),
+    };
+  }
+
+  if (afterType === 'surah') {
+    const surahNumber = Number(afterPayload.surahNumber || afterPayload.number);
+    if (!Number.isInteger(surahNumber) || surahNumber < 1 || surahNumber > 114) {
+      return afterPayload;
+    }
+
+    return {
+      ...afterPayload,
+      surahNumber,
+      number: afterPayload.number || surahNumber,
+      title: afterPayload.title || `Surah ${surahNumber}`,
+      nameEnglish: afterPayload.nameEnglish || afterPayload.title || `Surah ${surahNumber}`,
+      audioUrl: afterPayload.audioUrl || resolveSurahAudioUrl(surahNumber),
+    };
+  }
+
+  return afterPayload;
 }
 
 function buildAfterAdhanLabel(afterType, afterPayload) {
