@@ -5,6 +5,8 @@ const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const PRAYER_TIMES_CACHE_TTL_MS = 60 * 1000;
+const prayerTimesCache = new Map();
 
 dotenv.config();
 const { getPool, sql } = require("./db/sql");
@@ -1623,7 +1625,152 @@ function buildMethodPayload(profile) {
   };
 }
 
+function roundCoord(value) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Number(value.toFixed(6))
+    : null;
+}
+
+function buildPrayerTimesCacheKey(profile, prayers, targetDate = new Date()) {
+  const date =
+    targetDate instanceof Date
+      ? targetDate.toISOString().slice(0, 10)
+      : new Date(targetDate).toISOString().slice(0, 10);
+
+  const prayerBits = (Array.isArray(prayers) ? prayers : [])
+    .map((r) => {
+      const prayerName = String(r?.prayer_name || "");
+      const offsetMin = Number(r?.offset_min || 0);
+      const enabled = r?.enabled === false ? 0 : 1;
+      return `${prayerName}:${offsetMin}:${enabled}`;
+    })
+    .sort()
+    .join("|");
+
+  return JSON.stringify({
+    date,
+    city: normalizeQueryText(profile.city || "Chicago"),
+    country: profile.country || "US",
+    timezone: profile.timezone || "Etc/UTC",
+    sect: profile.sect || "SUNNI",
+    calculationMethod: profile.calculation_method || "isna",
+    madhhab: profile.madhhab || "hanafi",
+    latitude: roundCoord(profile.latitude),
+    longitude: roundCoord(profile.longitude),
+    mosqueLat: roundCoord(profile.mosque_lat),
+    mosqueLng: roundCoord(profile.mosque_lng),
+    useMosqueLocation: !!profile.use_mosque_location,
+    offsetFajr: profile.offset_fajr || 0,
+    offsetDhuhr: profile.offset_dhuhr || 0,
+    offsetAsr: profile.offset_asr || 0,
+    offsetMaghrib: profile.offset_maghrib || 0,
+    offsetIsha: profile.offset_isha || 0,
+    prayerBits,
+  });
+}
+
+function getCachedPrayerTimes(cacheKey) {
+  const cached = prayerTimesCache.get(cacheKey);
+  if (!cached) return null;
+
+  if (cached.expiresAt <= Date.now()) {
+    prayerTimesCache.delete(cacheKey);
+    return null;
+  }
+
+  return cached.value;
+}
+
+function setCachedPrayerTimes(cacheKey, value) {
+  prayerTimesCache.set(cacheKey, {
+    value,
+    expiresAt: Date.now() + PRAYER_TIMES_CACHE_TTL_MS,
+  });
+
+  if (prayerTimesCache.size > 200) {
+    const firstKey = prayerTimesCache.keys().next().value;
+    if (firstKey) {
+      prayerTimesCache.delete(firstKey);
+    }
+  }
+}
+
+function roundCoord(value) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Number(value.toFixed(6))
+    : null;
+}
+
+function buildPrayerTimesCacheKey(profile, prayers, targetDate = new Date()) {
+  const date =
+    targetDate instanceof Date
+      ? targetDate.toISOString().slice(0, 10)
+      : new Date(targetDate).toISOString().slice(0, 10);
+
+  const prayerBits = (Array.isArray(prayers) ? prayers : [])
+    .map((r) => {
+      const prayerName = String(r?.prayer_name || "");
+      const offsetMin = Number(r?.offset_min || 0);
+      const enabled = r?.enabled === false ? 0 : 1;
+      return `${prayerName}:${offsetMin}:${enabled}`;
+    })
+    .sort()
+    .join("|");
+
+  return JSON.stringify({
+    date,
+    city: normalizeQueryText(profile.city || "Chicago"),
+    country: profile.country || "US",
+    timezone: profile.timezone || "Etc/UTC",
+    sect: profile.sect || "SUNNI",
+    calculationMethod: profile.calculation_method || "isna",
+    madhhab: profile.madhhab || "hanafi",
+    latitude: roundCoord(profile.latitude),
+    longitude: roundCoord(profile.longitude),
+    mosqueLat: roundCoord(profile.mosque_lat),
+    mosqueLng: roundCoord(profile.mosque_lng),
+    useMosqueLocation: !!profile.use_mosque_location,
+    offsetFajr: profile.offset_fajr || 0,
+    offsetDhuhr: profile.offset_dhuhr || 0,
+    offsetAsr: profile.offset_asr || 0,
+    offsetMaghrib: profile.offset_maghrib || 0,
+    offsetIsha: profile.offset_isha || 0,
+    prayerBits,
+  });
+}
+
+function getCachedPrayerTimes(cacheKey) {
+  const cached = prayerTimesCache.get(cacheKey);
+  if (!cached) return null;
+
+  if (cached.expiresAt <= Date.now()) {
+    prayerTimesCache.delete(cacheKey);
+    return null;
+  }
+
+  return cached.value;
+}
+
+function setCachedPrayerTimes(cacheKey, value) {
+  prayerTimesCache.set(cacheKey, {
+    value,
+    expiresAt: Date.now() + PRAYER_TIMES_CACHE_TTL_MS,
+  });
+
+  if (prayerTimesCache.size > 200) {
+    const firstKey = prayerTimesCache.keys().next().value;
+    if (firstKey) {
+      prayerTimesCache.delete(firstKey);
+    }
+  }
+}
+
 async function computePrayerTimesForProfile(profile, prayers, targetDate = new Date()) {
+  const cacheKey = buildPrayerTimesCacheKey(profile, prayers, targetDate);
+  const cached = getCachedPrayerTimes(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const perPrayerOffset = {};
   const enabledMap = {};
   for (const r of prayers || []) {
@@ -1707,41 +1854,44 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     isha: to12h(adjusted24.isha),
   };
 
-  return {
-    location: buildLocationPayload(profile, timing),
-    mosque: {
-      id: profile.mosque_id || null,
-      name: profile.mosque_name || null,
-      address: profile.mosque_address || null,
-      latitude:
-        typeof profile.mosque_lat === "number" && Number.isFinite(profile.mosque_lat)
-          ? profile.mosque_lat
-          : null,
-      longitude:
-        typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
-          ? profile.mosque_lng
-          : null,
-    },
-    method: buildMethodPayload(profile),
-    source: timing.source,
-    sourceDetail: {
-      preferred: profile.use_mosque_location ? "mosque" : "personal",
-      actual: timing.source,
-      useMosqueLocation: !!profile.use_mosque_location,
-      label:
-        timing.source === "mosque"
-          ? profile.mosque_name || profile.mosque_address || "Mosque coordinates"
-          : timing.source === "personal"
-            ? "Personal coordinates"
-            : "City fallback",
-      fallbackReason: timing.fallbackReason || null,
-    },
-    enabled: enabledMap,
-    prayers24: adjusted24,
-    prayers12: adjusted12,
-    date: selected?.date || null,
-    meta: selected?.meta || json?.data?.meta || null,
-  };
+const result = {
+  location: buildLocationPayload(profile, timing),
+  mosque: {
+    id: profile.mosque_id || null,
+    name: profile.mosque_name || null,
+    address: profile.mosque_address || null,
+    latitude:
+      typeof profile.mosque_lat === "number" && Number.isFinite(profile.mosque_lat)
+        ? profile.mosque_lat
+        : null,
+    longitude:
+      typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
+        ? profile.mosque_lng
+        : null,
+  },
+  method: buildMethodPayload(profile),
+  source: timing.source,
+  sourceDetail: {
+    preferred: profile.use_mosque_location ? "mosque" : "personal",
+    actual: timing.source,
+    useMosqueLocation: !!profile.use_mosque_location,
+    label:
+      timing.source === "mosque"
+        ? profile.mosque_name || profile.mosque_address || "Mosque coordinates"
+        : timing.source === "personal"
+          ? "Personal coordinates"
+          : "City fallback",
+    fallbackReason: timing.fallbackReason || null,
+  },
+  enabled: enabledMap,
+  prayers24: adjusted24,
+  prayers12: adjusted12,
+  date: selected?.date || null,
+  meta: selected?.meta || json?.data?.meta || null,
+};
+
+setCachedPrayerTimes(cacheKey, result);
+return result;
 }
 
 
@@ -1939,11 +2089,11 @@ function normalizePlace(place, requestedSect = "ALL") {
     address,
     location:
       typeof place?.location?.latitude === "number" &&
-      typeof place?.location?.longitude === "number"
+        typeof place?.location?.longitude === "number"
         ? {
-            lat: place.location.latitude,
-            lng: place.location.longitude,
-          }
+          lat: place.location.latitude,
+          lng: place.location.longitude,
+        }
         : null,
     sect: inferredSect,
     sectConfidence: getSectConfidence(requestedSect, inferredSect),

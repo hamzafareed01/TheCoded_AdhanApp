@@ -36,17 +36,24 @@ export const apiUrl = getApiUrl;
 
 function readTokenFromStorage(): string | null {
   if (!isBrowser) return null;
-  return (
-    localStorage.getItem(TOKEN_KEY) ||
-    sessionStorage.getItem(TOKEN_KEY) ||
-    null
-  );
+
+  const sessionToken = sessionStorage.getItem(TOKEN_KEY);
+  if (sessionToken) return sessionToken;
+
+  const localToken = localStorage.getItem(TOKEN_KEY);
+  if (localToken) {
+    // keep session in sync after reload
+    sessionStorage.setItem(TOKEN_KEY, localToken);
+    return localToken;
+  }
+
+  return null;
 }
 
 function writeTokenToStorage(token: string) {
   if (!isBrowser) return;
-  localStorage.setItem(TOKEN_KEY, token);
   sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
 export function getStoredAmazonToken(): string | null {
@@ -142,4 +149,40 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
     credentials,
     mode: "cors",
   });
+}
+
+export async function repairAmazonSession(): Promise<boolean> {
+  const token = getStoredAmazonToken();
+  if (!token) return false;
+
+  try {
+    const resp = await apiFetch("/api/integrations/alexa/login", {
+      method: "POST",
+      body: JSON.stringify({ accessToken: token }),
+    });
+
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function apiFetchWithAmazonRepair(
+  path: string,
+  init: RequestInit = {},
+  options: { retryOn401?: boolean } = {}
+) {
+  const retryOn401 = options.retryOn401 ?? true;
+
+  const first = await apiFetch(path, init);
+  if (!retryOn401 || first.status !== 401) {
+    return first;
+  }
+
+  const repaired = await repairAmazonSession();
+  if (!repaired) {
+    return first;
+  }
+
+  return apiFetch(path, init);
 }
