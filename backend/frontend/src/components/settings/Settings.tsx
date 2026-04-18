@@ -15,6 +15,7 @@ import {
 } from "../ui/select";
 import {
   apiFetch,
+  apiFetchWithAmazonRepair,
   getStoredAmazonToken,
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
@@ -290,8 +291,8 @@ function normalizeSettings(payload: unknown): UserSettings {
   const offsetsSource = isRecord(src.globalOffsets)
     ? src.globalOffsets
     : isRecord(src.offsets)
-    ? src.offsets
-    : {};
+      ? src.offsets
+      : {};
 
   return {
     sect,
@@ -303,8 +304,8 @@ function normalizeSettings(payload: unknown): UserSettings {
     calculationMethod: getSafeCalculationMethod(
       sect,
       asString(src.calculationMethod) ??
-        asString(src.calculation_method) ??
-        (sect === "SHIA" ? "jafari" : "isna")
+      asString(src.calculation_method) ??
+      (sect === "SHIA" ? "jafari" : "isna")
     ),
     highLatitudeMethod:
       asString(src.highLatitudeMethod) ??
@@ -323,8 +324,8 @@ function normalizeSettings(payload: unknown): UserSettings {
     mosqueLng: asNumber(src.mosqueLng),
     selectedAlexaDeviceIds: Array.isArray(src.selectedAlexaDeviceIds)
       ? src.selectedAlexaDeviceIds.filter(
-          (id): id is string => typeof id === "string" && id.trim().length > 0
-        )
+        (id): id is string => typeof id === "string" && id.trim().length > 0
+      )
       : [],
     accountEnabled:
       asBoolean(src.accountEnabled) ??
@@ -345,8 +346,8 @@ function normalizeReciters(payload: unknown): Reciter[] {
   const list = Array.isArray(payload)
     ? payload
     : isRecord(payload) && Array.isArray(payload.reciters)
-    ? payload.reciters
-    : [];
+      ? payload.reciters
+      : [];
 
   return list
     .filter((item): item is JsonRecord => isRecord(item))
@@ -402,8 +403,8 @@ function normalizeDevices(payload: unknown): Device[] {
   const list = Array.isArray(payload)
     ? payload
     : isRecord(payload) && Array.isArray(payload.devices)
-    ? payload.devices
-    : [];
+      ? payload.devices
+      : [];
 
   return list
     .filter((item): item is JsonRecord => isRecord(item))
@@ -431,10 +432,10 @@ function normalizeSchedules(payload: unknown): Schedule[] {
       deviceId: asString(item.deviceId),
       payload: isRecord(item.payload)
         ? {
-            surahNumber: asNumber(item.payload.surahNumber) ?? 1,
-            title: asString(item.payload.title),
-            reciterId: asString(item.payload.reciterId),
-          }
+          surahNumber: asNumber(item.payload.surahNumber) ?? 1,
+          title: asString(item.payload.title),
+          reciterId: asString(item.payload.reciterId),
+        }
         : { surahNumber: 1 },
       createdAt: asString(item.createdAt) ?? undefined,
     }))
@@ -466,7 +467,7 @@ async function geocodeLocation(city: string, country: string) {
   if (!res.ok) {
     throw new Error(
       (isRecord(data) && asString(data.error)) ||
-        "Could not geocode the selected location."
+      "Could not geocode the selected location."
     );
   }
 
@@ -558,11 +559,11 @@ export default function Settings({
 
         const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
           await Promise.all([
-            apiFetch("/api/user/settings"),
+            apiFetchWithAmazonRepair("/api/user/settings"),
             apiFetch("/api/library/reciters?type=adhan"),
             apiFetch("/api/duas"),
             apiFetch("/api/quran/surahs"),
-            apiFetch("/api/alexa/devices"),
+            apiFetchWithAmazonRepair("/api/alexa/devices"),
           ]);
 
         if (!settingsRes.ok) {
@@ -609,7 +610,7 @@ export default function Settings({
   }, [hasAmazonToken]);
 
   async function loadSchedules() {
-    const res = await apiFetch("/api/user/schedules");
+    const res = await apiFetchWithAmazonRepair("/api/user/schedules");
     if (!res.ok) return;
 
     const json = await res.json();
@@ -928,11 +929,10 @@ export default function Settings({
                       <button
                         type="button"
                         onClick={() => updateField("sect", "SUNNI")}
-                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                          settings.sect === "SUNNI"
-                            ? "border-emerald-500 bg-emerald-500/10 text-white"
-                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
-                        }`}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${settings.sect === "SUNNI"
+                          ? "border-emerald-500 bg-emerald-500/10 text-white"
+                          : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                          }`}
                       >
                         <div className="font-medium">Sunni</div>
                         <div className="text-xs text-slate-400 mt-1">
@@ -943,11 +943,10 @@ export default function Settings({
                       <button
                         type="button"
                         onClick={() => updateField("sect", "SHIA")}
-                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
-                          settings.sect === "SHIA"
-                            ? "border-emerald-500 bg-emerald-500/10 text-white"
-                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
-                        }`}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${settings.sect === "SHIA"
+                          ? "border-emerald-500 bg-emerald-500/10 text-white"
+                          : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                          }`}
                       >
                         <div className="font-medium">Shia</div>
                         <div className="text-xs text-slate-400 mt-1">
@@ -1034,28 +1033,28 @@ export default function Settings({
                     </h3>
 
                     <div className="space-y-3">
-                        {offsetsRows.map((p) => (
-                          <div
-                            key={p}
-                            className="flex items-center justify-between gap-4"
-                          >
-                            <Label className="text-slate-200 capitalize">{p}</Label>
-                            <Input
-                              type="number"
-                              min={0}
-                              step={1}
-                              className="w-28 bg-slate-900 border-slate-700 text-slate-100"
-                              value={settings.globalOffsets[p]}
-                              onChange={(e) => {
-                                const nextValue = Math.max(0, Number(e.target.value || 0));
-                                updateField("globalOffsets", {
-                                  ...settings.globalOffsets,
-                                  [p]: nextValue,
-                                });
-                              }}
-                            />
-                          </div>
-                        ))}
+                      {offsetsRows.map((p) => (
+                        <div
+                          key={p}
+                          className="flex items-center justify-between gap-4"
+                        >
+                          <Label className="text-slate-200 capitalize">{p}</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="w-28 bg-slate-900 border-slate-700 text-slate-100"
+                            value={settings.globalOffsets[p]}
+                            onChange={(e) => {
+                              const nextValue = Math.max(0, Number(e.target.value || 0));
+                              updateField("globalOffsets", {
+                                ...settings.globalOffsets,
+                                [p]: nextValue,
+                              });
+                            }}
+                          />
+                        </div>
+                      ))}
                     </div>
                   </div>
 
@@ -1089,11 +1088,10 @@ export default function Settings({
                           return (
                             <label
                               key={device.id}
-                              className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 cursor-pointer ${
-                                checked
-                                  ? "border-emerald-500/50 bg-emerald-500/10"
-                                  : "border-slate-700"
-                              }`}
+                              className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 cursor-pointer ${checked
+                                ? "border-emerald-500/50 bg-emerald-500/10"
+                                : "border-slate-700"
+                                }`}
                             >
                               <div>
                                 <div className="text-slate-100">{device.name}</div>
@@ -1236,16 +1234,16 @@ export default function Settings({
                         <Label className="text-slate-200">Offset (min)</Label>
                         <Input
                           type="number"
-                            min={0}
-                            step={1}
-                            className="bg-slate-900 border-slate-700 text-slate-100"
-                            value={pc.offsetMin}
-                            onChange={(e) => {
-                              const nextValue = Math.max(0, Number(e.target.value || 0));
-                              updatePrayerConfig(pc.prayerName, {
-                                offsetMin: nextValue,
-                              });
-                            }}
+                          min={0}
+                          step={1}
+                          className="bg-slate-900 border-slate-700 text-slate-100"
+                          value={pc.offsetMin}
+                          onChange={(e) => {
+                            const nextValue = Math.max(0, Number(e.target.value || 0));
+                            updatePrayerConfig(pc.prayerName, {
+                              offsetMin: nextValue,
+                            });
+                          }}
                         />
                       </div>
 
@@ -1398,9 +1396,9 @@ export default function Settings({
                                   v === NONE_VALUE
                                     ? { type: "surah", payload: null }
                                     : {
-                                        type: "surah",
-                                        payload: { surahNumber: Number(v) },
-                                      },
+                                      type: "surah",
+                                      payload: { surahNumber: Number(v) },
+                                    },
                               })
                             }
                           >
@@ -1528,11 +1526,10 @@ export default function Settings({
                           <button
                             key={d}
                             type="button"
-                            className={`px-2 py-1 rounded border text-xs ${
-                              newDays[i]
-                                ? "border-emerald-500 text-emerald-300"
-                                : "border-slate-700 text-slate-300"
-                            }`}
+                            className={`px-2 py-1 rounded border text-xs ${newDays[i]
+                              ? "border-emerald-500 text-emerald-300"
+                              : "border-slate-700 text-slate-300"
+                              }`}
                             onClick={() => toggleDay(i)}
                           >
                             {d}
@@ -1575,10 +1572,9 @@ export default function Settings({
                               .filter(Boolean)
                               .join(", ")}
                             {s.deviceId
-                              ? ` · Device: ${
-                                  devices.find((d) => d.id === s.deviceId)?.name ||
-                                  s.deviceId
-                                }`
+                              ? ` · Device: ${devices.find((d) => d.id === s.deviceId)?.name ||
+                              s.deviceId
+                              }`
                               : ""}
                           </div>
                         </div>
