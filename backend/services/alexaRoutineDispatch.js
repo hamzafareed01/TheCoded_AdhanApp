@@ -40,7 +40,7 @@ function readDuas() {
 }
 
 function getSkillInvocationName() {
-  return String(process.env.ALEXA_SKILL_INVOCATION_NAME || 'adhan home').trim();
+  return String(process.env.ALEXA_SKILL_INVOCATION_NAME || 'adhan cast').trim();
 }
 
 function getPublicApiBase(req) {
