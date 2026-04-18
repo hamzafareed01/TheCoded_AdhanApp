@@ -1,4 +1,3 @@
-//ignore this comment line
 // src/lib/api.ts
 
 function normalizeBase(base: string): string {
@@ -35,37 +34,28 @@ export function getApiUrl(path: string): string {
 
 export const apiUrl = getApiUrl;
 
-function readLegacyLocalToken(): string | null {
+function readTokenFromStorage(): string | null {
   if (!isBrowser) return null;
-  return localStorage.getItem(TOKEN_KEY) || null;
+  return (
+    localStorage.getItem(TOKEN_KEY) ||
+    sessionStorage.getItem(TOKEN_KEY) ||
+    null
+  );
 }
 
-function migrateLegacyLocalToken(): string | null {
-  if (!isBrowser) return null;
-
-  const sessionToken = sessionStorage.getItem(TOKEN_KEY);
-  if (sessionToken) {
-    localStorage.removeItem(TOKEN_KEY);
-    return sessionToken;
-  }
-
-  const legacyToken = readLegacyLocalToken();
-  if (!legacyToken) return null;
-
-  sessionStorage.setItem(TOKEN_KEY, legacyToken);
-  localStorage.removeItem(TOKEN_KEY);
-  return legacyToken;
+function writeTokenToStorage(token: string) {
+  if (!isBrowser) return;
+  localStorage.setItem(TOKEN_KEY, token);
+  sessionStorage.setItem(TOKEN_KEY, token);
 }
 
 export function getStoredAmazonToken(): string | null {
-  if (!isBrowser) return null;
-  return sessionStorage.getItem(TOKEN_KEY) || migrateLegacyLocalToken() || null;
+  return readTokenFromStorage();
 }
 
 export function setStoredAmazonToken(token: string) {
   if (!isBrowser) return;
-  sessionStorage.setItem(TOKEN_KEY, token);
-  localStorage.removeItem(TOKEN_KEY);
+  writeTokenToStorage(token);
   window.dispatchEvent(new Event(AUTH_EVENT));
 }
 

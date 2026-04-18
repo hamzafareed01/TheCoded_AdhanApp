@@ -138,6 +138,25 @@ function findDua(duaId) {
   );
 }
 
+function parseStringArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeAfterPayload(value) {
   if (!value) return null;
   if (typeof value === 'object') return value;
@@ -198,7 +217,7 @@ function buildRoutineTemplates() {
 }
 
 async function resolvePrayerPlaybackPlan(pool, params) {
-  const { userId, prayerName, req } = params;
+  const { userId, prayerName, req, deviceId } = params;
   const normalizedPrayer = String(prayerName || '').trim().toLowerCase();
   if (!PRAYERS.includes(normalizedPrayer)) {
     const err = new Error('Unsupported prayer name.');
@@ -210,7 +229,8 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     .request()
     .input('user_id', sql.UniqueIdentifier, userId)
     .query(`
-      SELECT TOP 1 account_enabled, city, country, timezone, mosque_name, calculation_method, madhhab, sect
+      SELECT TOP 1 account_enabled, city, country, timezone, mosque_name, calculation_method, madhhab, sect,
+        selected_alexa_device_ids_json
       FROM dbo.user_profiles
       WHERE user_id = @user_id
     `);
@@ -220,6 +240,21 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     const err = new Error('Account playback is disabled for this user.');
     err.status = 403;
     throw err;
+  }
+  const selectedDeviceIds = parseStringArray(profile.selected_alexa_device_ids_json);
+  const normalizedDeviceId = String(deviceId || '').trim();
+  if (selectedDeviceIds.length > 0) {
+    if (!normalizedDeviceId) {
+      const err = new Error('This Alexa request did not include a device ID, so playback could not be verified against your selected devices.');
+      err.status = 403;
+      throw err;
+    }
+
+    if (!selectedDeviceIds.includes(normalizedDeviceId)) {
+      const err = new Error('This Alexa device is not enabled in your AdhanCast settings.');
+      err.status = 403;
+      throw err;
+    }
   }
 
   const prayerResult = await pool
@@ -274,6 +309,8 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       calculationMethod: profile.calculation_method || 'isna',
       madhhab: profile.madhhab || 'hanafi',
       sect: profile.sect || 'SUNNI',
+      selectedDeviceIds,
+      requestedDeviceId: normalizedDeviceId || null,
     },
   };
 }
