@@ -836,6 +836,38 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     second: "2-digit",
   });
 
+
+async function handleToggleAutomation() {
+  if (!hasAmazonToken) {
+    navigate("/settings");
+    return;
+  }
+
+  const newEnabled = !automationOn;
+
+  try {
+    const res = await apiFetch("/api/user/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accountEnabled: newEnabled }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to update automation (${res.status})`);
+    }
+
+    const updatedPayload = await res.json();
+    setUserSettings(normalizeSettings(updatedPayload));
+  } catch (err) {
+    console.error("Failed to toggle automation:", err);
+    alert(
+      err instanceof Error
+        ? err.message
+        : "Could not update automation setting."
+    );
+  }
+}
+
   if (!hasAmazonToken) {
     return (
       <div className="min-h-screen bg-slate-950">
