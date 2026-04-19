@@ -490,6 +490,21 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     [onboardingData, hasAmazonToken]
   );
 
+  const onboardingLocation = isObject(onboardingData.location)
+    ? onboardingData.location
+    : null;
+  const onboardingPrayerSettings = isObject(onboardingData.prayerSettings)
+    ? onboardingData.prayerSettings
+    : null;
+  const onboardingMosque = isObject(onboardingData.mosque)
+    ? onboardingData.mosque
+    : null;
+  const fallbackDeviceCount = Array.isArray(onboardingData.devices)
+    ? onboardingData.devices.filter((id): id is string => typeof id === "string")
+        .length
+    : 0;
+  const displayDeviceCount = deviceCount || fallbackDeviceCount;
+
   const prayersForDisplay: PrayerMap | null =
     todayData?.prayers12 || todayData?.prayers24 || null;
   const prayersForCountdown: PrayerMap | null =
@@ -502,8 +517,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     async function loadSettingsAndDevices() {
       if (!hasAmazonToken) {
         setUserSettings(null);
-        setSettingsError("Please connect Amazon to load your settings.");
-        setDeviceCount(0);
+        setSettingsError(null);
+        setDeviceCount(fallbackDeviceCount);
         return;
       }
 
@@ -549,7 +564,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     async function loadToday() {
       if (!hasAmazonToken) {
         setTodayData(null);
-        setTodayError("Please connect Amazon to load prayer times.");
+        setTodayError(null);
         setLoadingToday(false);
         return;
       }
@@ -709,16 +724,30 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     };
   }, [userSettings?.prayerConfigs]);
 
-  const automationOn = !!userSettings?.accountEnabled;
+  const automationOn =
+    typeof userSettings?.accountEnabled === "boolean"
+      ? !!userSettings.accountEnabled
+      : onboardingData.accountEnabled === true;
 
   const mosque = useMemo(() => {
-    if (!userSettings?.mosqueId && !userSettings?.mosqueName) return null;
-    return {
-      name: userSettings.mosqueName || "Selected mosque",
-      address: userSettings.mosqueAddress || null,
-      city: userSettings.mosqueCity || null,
-    };
-  }, [userSettings]);
+    if (userSettings?.mosqueId || userSettings?.mosqueName) {
+      return {
+        name: userSettings.mosqueName || "Selected mosque",
+        address: userSettings.mosqueAddress || null,
+        city: userSettings.mosqueCity || null,
+      };
+    }
+
+    if (onboardingMosque) {
+      return {
+        name: asString(onboardingMosque.name) || "Selected mosque",
+        address: asString(onboardingMosque.address),
+        city: asString(onboardingMosque.city),
+      };
+    }
+
+    return null;
+  }, [userSettings, onboardingMosque]);
 
   const locationLabel = todayData?.location?.label
     ? todayData.location.label
@@ -759,7 +788,12 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   );
 
   const hadithSect: "SUNNI" | "SHIA" =
-    String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase() ===
+    String(
+      todayData?.method?.sect ||
+        userSettings?.sect ||
+        asString(onboardingPrayerSettings?.sect) ||
+        "SUNNI"
+    ).toUpperCase() ===
       "SHIA"
       ? "SHIA"
       : "SUNNI";
@@ -770,7 +804,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     async function loadHadith() {
       if (!hasAmazonToken) {
         setHadithOfDay(null);
-        setHadithError("Please connect Amazon to load the daily hadith.");
+        setHadithError(null);
         setLoadingHadith(false);
         return;
       }
@@ -868,48 +902,6 @@ async function handleToggleAutomation() {
   }
 }
 
-  if (!hasAmazonToken) {
-    return (
-      <div className="min-h-screen bg-slate-950">
-        <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
-          <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <Logo />
-              <Navigation />
-            </div>
-          </div>
-        </div>
-
-        <div className="max-w-7xl mx-auto px-4 py-6 md:px-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8">
-            <h1 className="text-white text-2xl mb-3">
-              Connect Amazon to finish setup
-            </h1>
-            <p className="text-slate-300 mb-6">
-              Your dashboard needs your Amazon session before it can load
-              prayer times, settings, device data, and the daily hadith.
-            </p>
-            <div className="flex gap-4 flex-wrap">
-              <Button
-                onClick={() => navigate("/onboarding/step2")}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              >
-                Connect Amazon
-              </Button>
-              <Button
-                variant="outline"
-                className="border-slate-700 text-slate-300"
-                onClick={() => navigate("/settings")}
-              >
-                Open Settings
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-950">
       <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
@@ -951,7 +943,7 @@ async function handleToggleAutomation() {
               className="border-slate-700 text-slate-400"
             >
               <CheckCircle className="w-3 h-3 mr-1.5" />
-              {deviceCount} Device{deviceCount !== 1 ? "s" : ""}
+              {displayDeviceCount} Device{displayDeviceCount !== 1 ? "s" : ""}
             </Badge>
           </div>
         </div>
@@ -1305,7 +1297,7 @@ async function handleToggleAutomation() {
               )}
 
               <p className="text-slate-400 text-sm mb-4">
-                {deviceCount} device{deviceCount === 1 ? "" : "s"} available
+                {displayDeviceCount} device{displayDeviceCount === 1 ? "" : "s"} available
               </p>
 
               <Button

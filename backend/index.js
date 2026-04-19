@@ -2862,6 +2862,7 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
+        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -3853,13 +3854,14 @@ app.use((err, req, res, next) => {
   console.error(err);
   if (res.headersSent) return next(err);
 
-  const status = Number(err?.status || 500);
+  const status = Number(err?.status || err?.statusCode || 500);
   res.status(status).json({
     error: String(err?.message || err || "Internal server error"),
+    code: typeof err?.code === "string" ? err.code : undefined,
   });
 });
 
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
-  console.log(`AdhanHome API listening on ${port}`);
+  console.log(`AdhanCast API listening on ${port}`);
 });

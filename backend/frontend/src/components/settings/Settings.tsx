@@ -1095,7 +1095,7 @@ export default function Settings({
                             >
                               <div>
                                 <div className="text-slate-100">{device.name}</div>
-                                <div className="text-xs text-slate-400">Selected devices can use your Adhan Home Alexa playback flow.</div>
+                                <div className="text-xs text-slate-400">Selected devices can use your AdhanCast Alexa playback flow.</div>
                               </div>
                               <Checkbox
                                 checked={checked}
