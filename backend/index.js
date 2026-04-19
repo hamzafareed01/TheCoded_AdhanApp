@@ -2857,28 +2857,68 @@ app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
+    const startedAt = Date.now();
     const pool = await getPool();
-    const { profile, prayers } = await getUserProfileAndPrayersByUserId(
-      pool,
-      req.skillAuth.userId
-    );
+    const requestId = req.headers["x-amzn-requestid"] || null;
 
-    const result = await computePrayerTimesForProfile(profile, prayers, new Date());
+    try {
+      const profile = await loadUserProfile(pool, req.skillAuth.userId);
+      const prayers = await loadPrayerRows(pool, req.skillAuth.userId);
+      const result = await computePrayerTimesForProfile(profile, prayers);
 
-    res.json({
-      ...result,
-      userContext: {
+      await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
-        sect: profile.sect || "SUNNI",
-        calculationMethod: profile.calculation_method || "isna",
-        madhhab: profile.madhhab || "hanafi",
-        timezone: profile.timezone || "Etc/UTC",
-        city: profile.city || "Chicago",
-        country: profile.country || "US",
-        useMosqueLocation: !!profile.use_mosque_location,
-        mosqueName: profile.mosque_name || null,
-      },
-    });
+        requestId,
+        prayerName: null,
+        deviceId: null,
+        triggerSource: "skill",
+        status: "resolved",
+        message: "Resolved prayer times for Alexa skill",
+        payload: {
+          durationMs: Date.now() - startedAt,
+          source: result?.source || null,
+          sourceDetail: result?.sourceDetail || null,
+          timezone: result?.location?.timezone || null,
+        },
+      });
+
+      res.json({
+        prayers12: result?.prayers12 || {},
+        prayers24: result?.prayers24 || {},
+        location: result?.location || null,
+        source: result?.source || null,
+        sourceDetail: result?.sourceDetail || null,
+        method: result?.method || null,
+        date: result?.date || null,
+        meta: result?.meta || null,
+      });
+    } catch (err) {
+      const status = Number(err?.statusCode || err?.status || 500);
+      const code =
+        typeof err?.code === "string" ? err.code : "PRAYER_TIMES_FAILED";
+      const message =
+        String(err?.message || "Could not resolve prayer times.");
+
+      await logAlexaDispatch(pool, {
+        userId: req.skillAuth.userId,
+        requestId,
+        prayerName: null,
+        deviceId: null,
+        triggerSource: "skill",
+        status: "failed",
+        message,
+        payload: {
+          code,
+          durationMs: Date.now() - startedAt,
+        },
+      });
+
+      res.status(status).json({
+        error: message,
+        code,
+        status,
+      });
+    }
   })
 );
 
@@ -2886,11 +2926,16 @@ app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
+    const startedAt = Date.now();
     const pool = await getPool();
-    const prayerName = String(req.body?.prayerName || req.body?.prayer || "").trim().toLowerCase();
+    const prayerName = String(req.body?.prayerName || req.body?.prayer || "")
+      .trim()
+      .toLowerCase();
     const requestId = req.body?.requestId ? String(req.body.requestId) : null;
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
-    const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
+    const alexaUserId = req.body?.alexaUserId
+      ? String(req.body.alexaUserId)
+      : null;
 
     if (alexaUserId) {
       await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
@@ -2914,14 +2959,22 @@ app.post(
         status: "resolved",
         message: `Resolved ${prayerName} playback`,
         payload: {
-          reciterId: plan.reciterId,
-          afterAdhan: plan.afterAdhan,
-          userContext: plan.userContext,
+          durationMs: Date.now() - startedAt,
+          reciterId: plan?.reciterId || null,
+          reciterName: plan?.reciterName || null,
+          prayerLabel: plan?.prayerLabel || null,
+          hasAfterAdhan: !!plan?.afterAdhan,
         },
       });
 
       res.json(plan);
     } catch (err) {
+      const status = Number(err?.statusCode || err?.status || 500);
+      const code =
+        typeof err?.code === "string" ? err.code : "PLAYBACK_PLAN_FAILED";
+      const message =
+        String(err?.message || "Could not resolve playback plan.");
+
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
         requestId,
@@ -2929,13 +2982,19 @@ app.post(
         deviceId,
         triggerSource: "skill",
         status: "failed",
-        message: String(err?.message || err),
+        message,
         payload: {
+          code,
           alexaUserId,
+          durationMs: Date.now() - startedAt,
         },
       });
 
-      throw err;
+      res.status(status).json({
+        error: message,
+        code,
+        status,
+      });
     }
   })
 );
