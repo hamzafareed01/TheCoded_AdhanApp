@@ -11,6 +11,7 @@ let parsedAudioMap = null;
 function createAlexaSkillError(statusCode, code, message, extra = {}) {
   const err = new Error(message);
   err.statusCode = statusCode;
+  err.status = statusCode;
   err.code = code;
   Object.assign(err, extra);
   return err;
@@ -278,6 +279,7 @@ function buildRoutineTemplates() {
     };
   });
 }
+
 
 async function resolvePrayerPlaybackPlan(pool, params) {
   const { userId, prayerName, req, deviceId } = params;
