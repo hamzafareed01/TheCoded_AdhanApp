@@ -5,8 +5,6 @@ const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const PRAYER_TIMES_CACHE_TTL_MS = 60 * 1000;
-const prayerTimesCache = new Map();
 
 dotenv.config();
 const { getPool, sql } = require("./db/sql");
@@ -42,7 +40,6 @@ app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }
 // -----------------------------
 // Constants
 // -----------------------------
-// re-trigger deploy for update....delete later
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
@@ -214,6 +211,97 @@ async function getHadithOfDay(sectValue, date = new Date()) {
 }
 
 const tokenCache = new Map(); // token -> { profile, exp }
+const APP_SESSION_PREFIX = "adhapp";
+const APP_SESSION_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.APP_SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000) ||
+    7 * 24 * 60 * 60 * 1000
+);
+
+function getAppSessionSecret() {
+  return String(
+    process.env.APP_SESSION_SECRET ||
+      process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
+      process.env.ALEXA_APP_LINK_STATE_SECRET ||
+      "adhancast-app-session-secret"
+  );
+}
+
+function createAppSessionToken(params) {
+  const payload = {
+    userId: String(params.userId || "").trim(),
+    amazonUserId: String(params.amazonUserId || "").trim(),
+    displayName: params.displayName ? String(params.displayName).trim() : null,
+    email: params.email ? String(params.email).trim() : null,
+    ts: Date.now(),
+    exp: Date.now() + APP_SESSION_TTL_MS,
+    nonce: crypto.randomBytes(12).toString("hex"),
+  };
+
+  const encoded = base64UrlEncode(JSON.stringify(payload));
+  const signature = crypto
+    .createHmac("sha256", getAppSessionSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  return {
+    token: `${APP_SESSION_PREFIX}_${encoded}.${signature}`,
+    expiresAt: new Date(payload.exp).toISOString(),
+  };
+}
+
+function verifyAppSessionToken(token) {
+  const raw = String(token || "").trim();
+  const prefix = `${APP_SESSION_PREFIX}_`;
+
+  if (!raw.startsWith(prefix)) {
+    return null;
+  }
+
+  const body = raw.slice(prefix.length);
+  const splitAt = body.lastIndexOf(".");
+  if (splitAt <= 0) {
+    const err = new Error("App session token is invalid.");
+    err.status = 401;
+    throw err;
+  }
+
+  const encoded = body.slice(0, splitAt);
+  const signature = body.slice(splitAt + 1);
+
+  const expected = crypto
+    .createHmac("sha256", getAppSessionSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  if (signature !== expected) {
+    const err = new Error("App session token could not be verified.");
+    err.status = 401;
+    throw err;
+  }
+
+  const payload = JSON.parse(base64UrlDecode(encoded));
+
+  if (!payload?.userId || !payload?.amazonUserId || !payload?.exp) {
+    const err = new Error("App session token payload is incomplete.");
+    err.status = 401;
+    throw err;
+  }
+
+  if (Number(payload.exp) <= Date.now()) {
+    const err = new Error("App session token has expired.");
+    err.status = 401;
+    throw err;
+  }
+
+  return payload;
+}
 
 const regionDisplay =
   typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function"
@@ -252,7 +340,7 @@ const corsOptions = {
 
     return cb(new Error("CORS blocked for origin: " + origin), false);
   },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204,
 };
@@ -295,8 +383,8 @@ function getBearerToken(req) {
 
 function getAmazonTokenFromRequest(req) {
   return (
-    getBearerToken(req) ||
-    String(req.body?.accessToken || req.body?.access_token || "").trim()
+    String(req.body?.accessToken || req.body?.access_token || "").trim() ||
+    getBearerToken(req)
   );
 }
 
@@ -1206,6 +1294,18 @@ async function requireAmazonAuth(req, res, next) {
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
 
+    const appSession = verifyAppSessionToken(token);
+    if (appSession) {
+      req.amazonProfile = {
+        user_id: appSession.amazonUserId,
+        name: appSession.displayName || null,
+        email: appSession.email || null,
+      };
+      req.amazonToken = token;
+      req.appSession = appSession;
+      return next();
+    }
+
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
@@ -1625,152 +1725,7 @@ function buildMethodPayload(profile) {
   };
 }
 
-function roundCoord(value) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Number(value.toFixed(6))
-    : null;
-}
-
-function buildPrayerTimesCacheKey(profile, prayers, targetDate = new Date()) {
-  const date =
-    targetDate instanceof Date
-      ? targetDate.toISOString().slice(0, 10)
-      : new Date(targetDate).toISOString().slice(0, 10);
-
-  const prayerBits = (Array.isArray(prayers) ? prayers : [])
-    .map((r) => {
-      const prayerName = String(r?.prayer_name || "");
-      const offsetMin = Number(r?.offset_min || 0);
-      const enabled = r?.enabled === false ? 0 : 1;
-      return `${prayerName}:${offsetMin}:${enabled}`;
-    })
-    .sort()
-    .join("|");
-
-  return JSON.stringify({
-    date,
-    city: normalizeQueryText(profile.city || "Chicago"),
-    country: profile.country || "US",
-    timezone: profile.timezone || "Etc/UTC",
-    sect: profile.sect || "SUNNI",
-    calculationMethod: profile.calculation_method || "isna",
-    madhhab: profile.madhhab || "hanafi",
-    latitude: roundCoord(profile.latitude),
-    longitude: roundCoord(profile.longitude),
-    mosqueLat: roundCoord(profile.mosque_lat),
-    mosqueLng: roundCoord(profile.mosque_lng),
-    useMosqueLocation: !!profile.use_mosque_location,
-    offsetFajr: profile.offset_fajr || 0,
-    offsetDhuhr: profile.offset_dhuhr || 0,
-    offsetAsr: profile.offset_asr || 0,
-    offsetMaghrib: profile.offset_maghrib || 0,
-    offsetIsha: profile.offset_isha || 0,
-    prayerBits,
-  });
-}
-
-function getCachedPrayerTimes(cacheKey) {
-  const cached = prayerTimesCache.get(cacheKey);
-  if (!cached) return null;
-
-  if (cached.expiresAt <= Date.now()) {
-    prayerTimesCache.delete(cacheKey);
-    return null;
-  }
-
-  return cached.value;
-}
-
-function setCachedPrayerTimes(cacheKey, value) {
-  prayerTimesCache.set(cacheKey, {
-    value,
-    expiresAt: Date.now() + PRAYER_TIMES_CACHE_TTL_MS,
-  });
-
-  if (prayerTimesCache.size > 200) {
-    const firstKey = prayerTimesCache.keys().next().value;
-    if (firstKey) {
-      prayerTimesCache.delete(firstKey);
-    }
-  }
-}
-
-function roundCoord(value) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Number(value.toFixed(6))
-    : null;
-}
-
-function buildPrayerTimesCacheKey(profile, prayers, targetDate = new Date()) {
-  const date =
-    targetDate instanceof Date
-      ? targetDate.toISOString().slice(0, 10)
-      : new Date(targetDate).toISOString().slice(0, 10);
-
-  const prayerBits = (Array.isArray(prayers) ? prayers : [])
-    .map((r) => {
-      const prayerName = String(r?.prayer_name || "");
-      const offsetMin = Number(r?.offset_min || 0);
-      const enabled = r?.enabled === false ? 0 : 1;
-      return `${prayerName}:${offsetMin}:${enabled}`;
-    })
-    .sort()
-    .join("|");
-
-  return JSON.stringify({
-    date,
-    city: normalizeQueryText(profile.city || "Chicago"),
-    country: profile.country || "US",
-    timezone: profile.timezone || "Etc/UTC",
-    sect: profile.sect || "SUNNI",
-    calculationMethod: profile.calculation_method || "isna",
-    madhhab: profile.madhhab || "hanafi",
-    latitude: roundCoord(profile.latitude),
-    longitude: roundCoord(profile.longitude),
-    mosqueLat: roundCoord(profile.mosque_lat),
-    mosqueLng: roundCoord(profile.mosque_lng),
-    useMosqueLocation: !!profile.use_mosque_location,
-    offsetFajr: profile.offset_fajr || 0,
-    offsetDhuhr: profile.offset_dhuhr || 0,
-    offsetAsr: profile.offset_asr || 0,
-    offsetMaghrib: profile.offset_maghrib || 0,
-    offsetIsha: profile.offset_isha || 0,
-    prayerBits,
-  });
-}
-
-function getCachedPrayerTimes(cacheKey) {
-  const cached = prayerTimesCache.get(cacheKey);
-  if (!cached) return null;
-
-  if (cached.expiresAt <= Date.now()) {
-    prayerTimesCache.delete(cacheKey);
-    return null;
-  }
-
-  return cached.value;
-}
-
-function setCachedPrayerTimes(cacheKey, value) {
-  prayerTimesCache.set(cacheKey, {
-    value,
-    expiresAt: Date.now() + PRAYER_TIMES_CACHE_TTL_MS,
-  });
-
-  if (prayerTimesCache.size > 200) {
-    const firstKey = prayerTimesCache.keys().next().value;
-    if (firstKey) {
-      prayerTimesCache.delete(firstKey);
-    }
-  }
-}
-
 async function computePrayerTimesForProfile(profile, prayers, targetDate = new Date()) {
-  const cacheKey = buildPrayerTimesCacheKey(profile, prayers, targetDate);
-  const cached = getCachedPrayerTimes(cacheKey);
-  if (cached) {
-    return cached;
-  }
   const perPrayerOffset = {};
   const enabledMap = {};
   for (const r of prayers || []) {
@@ -1854,44 +1809,41 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     isha: to12h(adjusted24.isha),
   };
 
-const result = {
-  location: buildLocationPayload(profile, timing),
-  mosque: {
-    id: profile.mosque_id || null,
-    name: profile.mosque_name || null,
-    address: profile.mosque_address || null,
-    latitude:
-      typeof profile.mosque_lat === "number" && Number.isFinite(profile.mosque_lat)
-        ? profile.mosque_lat
-        : null,
-    longitude:
-      typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
-        ? profile.mosque_lng
-        : null,
-  },
-  method: buildMethodPayload(profile),
-  source: timing.source,
-  sourceDetail: {
-    preferred: profile.use_mosque_location ? "mosque" : "personal",
-    actual: timing.source,
-    useMosqueLocation: !!profile.use_mosque_location,
-    label:
-      timing.source === "mosque"
-        ? profile.mosque_name || profile.mosque_address || "Mosque coordinates"
-        : timing.source === "personal"
-          ? "Personal coordinates"
-          : "City fallback",
-    fallbackReason: timing.fallbackReason || null,
-  },
-  enabled: enabledMap,
-  prayers24: adjusted24,
-  prayers12: adjusted12,
-  date: selected?.date || null,
-  meta: selected?.meta || json?.data?.meta || null,
-};
-
-setCachedPrayerTimes(cacheKey, result);
-return result;
+  return {
+    location: buildLocationPayload(profile, timing),
+    mosque: {
+      id: profile.mosque_id || null,
+      name: profile.mosque_name || null,
+      address: profile.mosque_address || null,
+      latitude:
+        typeof profile.mosque_lat === "number" && Number.isFinite(profile.mosque_lat)
+          ? profile.mosque_lat
+          : null,
+      longitude:
+        typeof profile.mosque_lng === "number" && Number.isFinite(profile.mosque_lng)
+          ? profile.mosque_lng
+          : null,
+    },
+    method: buildMethodPayload(profile),
+    source: timing.source,
+    sourceDetail: {
+      preferred: profile.use_mosque_location ? "mosque" : "personal",
+      actual: timing.source,
+      useMosqueLocation: !!profile.use_mosque_location,
+      label:
+        timing.source === "mosque"
+          ? profile.mosque_name || profile.mosque_address || "Mosque coordinates"
+          : timing.source === "personal"
+            ? "Personal coordinates"
+            : "City fallback",
+      fallbackReason: timing.fallbackReason || null,
+    },
+    enabled: enabledMap,
+    prayers24: adjusted24,
+    prayers12: adjusted12,
+    date: selected?.date || null,
+    meta: selected?.meta || json?.data?.meta || null,
+  };
 }
 
 
@@ -2089,11 +2041,11 @@ function normalizePlace(place, requestedSect = "ALL") {
     address,
     location:
       typeof place?.location?.latitude === "number" &&
-        typeof place?.location?.longitude === "number"
+      typeof place?.location?.longitude === "number"
         ? {
-          lat: place.location.latitude,
-          lng: place.location.longitude,
-        }
+            lat: place.location.latitude,
+            lng: place.location.longitude,
+          }
         : null,
     sect: inferredSect,
     sectConfidence: getSectConfidence(requestedSect, inferredSect),
@@ -2336,9 +2288,18 @@ app.post(
         WHERE user_id = @user_id
       `);
 
+    const session = createAppSessionToken({
+      userId,
+      amazonUserId: profile.user_id,
+      displayName: profile.name || null,
+      email: profile.email || null,
+    });
+
     res.json({
       ok: true,
       userKey: profile.user_id,
+      sessionToken: session.token,
+      sessionExpiresAt: session.expiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),
@@ -2857,68 +2818,28 @@ app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
-    const startedAt = Date.now();
     const pool = await getPool();
-    const requestId = req.headers["x-amzn-requestid"] || null;
+    const { profile, prayers } = await getUserProfileAndPrayersByUserId(
+      pool,
+      req.skillAuth.userId
+    );
 
-    try {
-      const profile = await loadUserProfile(pool, req.skillAuth.userId);
-      const prayers = await loadPrayerRows(pool, req.skillAuth.userId);
-      const result = await computePrayerTimesForProfile(profile, prayers);
+    const result = await computePrayerTimesForProfile(profile, prayers, new Date());
 
-      await logAlexaDispatch(pool, {
+    res.json({
+      ...result,
+      userContext: {
         userId: req.skillAuth.userId,
-        requestId,
-        prayerName: null,
-        deviceId: null,
-        triggerSource: "skill",
-        status: "resolved",
-        message: "Resolved prayer times for Alexa skill",
-        payload: {
-          durationMs: Date.now() - startedAt,
-          source: result?.source || null,
-          sourceDetail: result?.sourceDetail || null,
-          timezone: result?.location?.timezone || null,
-        },
-      });
-
-      res.json({
-        prayers12: result?.prayers12 || {},
-        prayers24: result?.prayers24 || {},
-        location: result?.location || null,
-        source: result?.source || null,
-        sourceDetail: result?.sourceDetail || null,
-        method: result?.method || null,
-        date: result?.date || null,
-        meta: result?.meta || null,
-      });
-    } catch (err) {
-      const status = Number(err?.statusCode || err?.status || 500);
-      const code =
-        typeof err?.code === "string" ? err.code : "PRAYER_TIMES_FAILED";
-      const message =
-        String(err?.message || "Could not resolve prayer times.");
-
-      await logAlexaDispatch(pool, {
-        userId: req.skillAuth.userId,
-        requestId,
-        prayerName: null,
-        deviceId: null,
-        triggerSource: "skill",
-        status: "failed",
-        message,
-        payload: {
-          code,
-          durationMs: Date.now() - startedAt,
-        },
-      });
-
-      res.status(status).json({
-        error: message,
-        code,
-        status,
-      });
-    }
+        sect: profile.sect || "SUNNI",
+        calculationMethod: profile.calculation_method || "isna",
+        madhhab: profile.madhhab || "hanafi",
+        timezone: profile.timezone || "Etc/UTC",
+        city: profile.city || "Chicago",
+        country: profile.country || "US",
+        useMosqueLocation: !!profile.use_mosque_location,
+        mosqueName: profile.mosque_name || null,
+      },
+    });
   })
 );
 
@@ -2926,16 +2847,11 @@ app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
-    const startedAt = Date.now();
     const pool = await getPool();
-    const prayerName = String(req.body?.prayerName || req.body?.prayer || "")
-      .trim()
-      .toLowerCase();
+    const prayerName = String(req.body?.prayerName || req.body?.prayer || "").trim().toLowerCase();
     const requestId = req.body?.requestId ? String(req.body.requestId) : null;
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
-    const alexaUserId = req.body?.alexaUserId
-      ? String(req.body.alexaUserId)
-      : null;
+    const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
 
     if (alexaUserId) {
       await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
@@ -2946,8 +2862,6 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
-        deviceId,
-        locale: req.body?.locale ? String(req.body.locale) : null,
       });
 
       await logAlexaDispatch(pool, {
@@ -2959,22 +2873,14 @@ app.post(
         status: "resolved",
         message: `Resolved ${prayerName} playback`,
         payload: {
-          durationMs: Date.now() - startedAt,
-          reciterId: plan?.reciterId || null,
-          reciterName: plan?.reciterName || null,
-          prayerLabel: plan?.prayerLabel || null,
-          hasAfterAdhan: !!plan?.afterAdhan,
+          reciterId: plan.reciterId,
+          afterAdhan: plan.afterAdhan,
+          userContext: plan.userContext,
         },
       });
 
       res.json(plan);
     } catch (err) {
-      const status = Number(err?.statusCode || err?.status || 500);
-      const code =
-        typeof err?.code === "string" ? err.code : "PLAYBACK_PLAN_FAILED";
-      const message =
-        String(err?.message || "Could not resolve playback plan.");
-
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
         requestId,
@@ -2982,19 +2888,13 @@ app.post(
         deviceId,
         triggerSource: "skill",
         status: "failed",
-        message,
+        message: String(err?.message || err),
         payload: {
-          code,
           alexaUserId,
-          durationMs: Date.now() - startedAt,
         },
       });
 
-      res.status(status).json({
-        error: message,
-        code,
-        status,
-      });
+      throw err;
     }
   })
 );
@@ -3625,6 +3525,7 @@ async function handleSaveUserSettings(req, res) {
 }
 
 app.put("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
+app.patch("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 app.post("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 
 // Prayer times
