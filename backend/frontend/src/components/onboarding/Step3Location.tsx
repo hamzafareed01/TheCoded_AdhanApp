@@ -6,15 +6,8 @@ import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
 import { apiFetch } from "../../lib/api";
-import { LocateFixed, MapPin } from "lucide-react";
+import { LocateFixed, MapPin, Clock3, Globe2 } from "lucide-react";
 
 type LocationSettings = {
   country: string;
@@ -35,46 +28,12 @@ type Step3LocationProps = {
   setOnboardingData: (data: OnboardingData) => void;
 };
 
-type CountryOption = {
-  code: string;
-  label: string;
-};
-
-const DEVICE_LOCATION_MAX_ACCURACY_METERS = 250;
-
-const COUNTRIES: CountryOption[] = [
-  { code: "US", label: "United States" },
-  { code: "CA", label: "Canada" },
-  { code: "GB", label: "United Kingdom" },
-  { code: "IN", label: "India" },
-  { code: "PK", label: "Pakistan" },
-  { code: "BD", label: "Bangladesh" },
-  { code: "AE", label: "United Arab Emirates" },
-  { code: "SA", label: "Saudi Arabia" },
-  { code: "QA", label: "Qatar" },
-  { code: "KW", label: "Kuwait" },
-  { code: "OM", label: "Oman" },
-  { code: "BH", label: "Bahrain" },
-  { code: "TR", label: "Turkey" },
-  { code: "EG", label: "Egypt" },
-  { code: "MY", label: "Malaysia" },
-  { code: "SG", label: "Singapore" },
-  { code: "AU", label: "Australia" },
-  { code: "NZ", label: "New Zealand" },
-  { code: "DE", label: "Germany" },
-  { code: "FR", label: "France" },
-];
-
 function normalizeCity(value: string) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function normalizeCountry(value: string) {
-  const raw = String(value || "").trim().replace(/\s+/g, " ");
-  if (/^[A-Za-z]{2}$/.test(raw)) {
-    return raw.toUpperCase();
-  }
-  return raw;
+  return String(value || "").trim().replace(/\s+/g, " ");
 }
 
 function normalizeTimezone(value: string) {
@@ -93,17 +52,53 @@ function getBrowserTimezone() {
   }
 }
 
+function getGlobalTimezones() {
+  try {
+    const values = (Intl as typeof Intl & {
+      supportedValuesOf?: (key: string) => string[];
+    }).supportedValuesOf?.("timeZone");
+
+    if (Array.isArray(values) && values.length > 0) {
+      return values;
+    }
+  } catch {
+    // ignore and use fallback
+  }
+
+  return [
+    "UTC",
+    "Africa/Cairo",
+    "Africa/Johannesburg",
+    "America/Chicago",
+    "America/Los_Angeles",
+    "America/New_York",
+    "America/Toronto",
+    "Asia/Dhaka",
+    "Asia/Dubai",
+    "Asia/Karachi",
+    "Asia/Kolkata",
+    "Asia/Kuala_Lumpur",
+    "Asia/Riyadh",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+    "Europe/Berlin",
+    "Europe/Istanbul",
+    "Europe/London",
+    "Europe/Paris",
+    "Pacific/Auckland",
+  ];
+}
+
 export default function Step3Location({
   onboardingData,
   setOnboardingData,
 }: Step3LocationProps) {
   const navigate = useNavigate();
 
-  const initialCountry = normalizeCountry(onboardingData?.location?.country || "US");
-  const initialCity = normalizeCity(onboardingData?.location?.city || "Chicago");
-  const initialTimezone = normalizeTimezone(
-    onboardingData?.location?.timezone || getBrowserTimezone()
-  );
+  const initialCountry = normalizeCountry(onboardingData?.location?.country || "");
+  const initialCity = normalizeCity(onboardingData?.location?.city || "");
+  const initialTimezone = normalizeTimezone(onboardingData?.location?.timezone || "");
   const initialLatitude =
     typeof onboardingData?.location?.latitude === "number"
       ? onboardingData.location.latitude
@@ -122,7 +117,7 @@ export default function Step3Location({
     longitude: initialLongitude,
   });
 
-  const [timezoneManuallyEdited, setTimezoneManuallyEdited] = useState(false);
+  const [timezoneManuallyEdited, setTimezoneManuallyEdited] = useState(Boolean(initialTimezone));
   const [geocoding, setGeocoding] = useState(false);
   const [usingDeviceLocation, setUsingDeviceLocation] = useState(false);
   const [geocodeError, setGeocodeError] = useState<string | null>(null);
@@ -136,6 +131,8 @@ export default function Step3Location({
       ? `Coordinates loaded: ${initialLatitude.toFixed(5)}, ${initialLongitude.toFixed(5)}`
       : null
   );
+
+  const timezoneOptions = useMemo(() => getGlobalTimezones(), []);
 
   const currentCityNormalized = useMemo(
     () => normalizeCity(location.city),
@@ -163,12 +160,24 @@ export default function Step3Location({
   };
 
   const handleCountryChange = (value: string) => {
+    const nextCountry = normalizeCountry(value);
+
     setLocation((prev) => ({
       ...prev,
-      country: value,
+      country: nextCountry,
+      timezone: nextCountry ? prev.timezone : "",
     }));
-    setTimezoneManuallyEdited(false);
+
+    if (!nextCountry) {
+      setLocation((prev) => ({
+        ...prev,
+        country: "",
+        timezone: "",
+      }));
+    }
+
     if (resolvedKey) clearResolvedCoordinates();
+    setTimezoneManuallyEdited(false);
     setGeocodeError(null);
   };
 
@@ -201,7 +210,7 @@ export default function Step3Location({
     }
 
     if (!countryTrimmed) {
-      setGeocodeError("Please choose a country.");
+      setGeocodeError("Please enter a country.");
       return null;
     }
 
@@ -280,18 +289,6 @@ export default function Step3Location({
 
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
-      const accuracyMeters =
-        typeof position.coords.accuracy === "number" &&
-        Number.isFinite(position.coords.accuracy)
-          ? Math.round(position.coords.accuracy)
-          : null;
-
-      if (accuracyMeters != null && accuracyMeters > DEVICE_LOCATION_MAX_ACCURACY_METERS) {
-        setGeocodeError(
-          `Your device location is currently too approximate (±${accuracyMeters}m). Turn on precise location or enter your city manually before saving coordinates.`
-        );
-        return;
-      }
 
       const params = new URLSearchParams({
         lat: String(lat),
@@ -313,10 +310,10 @@ export default function Step3Location({
         String(data?.city || data?.query || location.city || "")
       );
       const reverseCountry = normalizeCountry(
-        String(data?.countryCode || data?.country || location.country || "US")
+        String(data?.countryCode || data?.country || location.country || "")
       );
       const reverseTimezone = normalizeTimezone(
-        String(data?.timezone || location.timezone || getBrowserTimezone())
+        String(data?.timezone || getBrowserTimezone())
       );
 
       setLocation((prev) => ({
@@ -327,13 +324,12 @@ export default function Step3Location({
         latitude: lat,
         longitude: lng,
       }));
+      setTimezoneManuallyEdited(true);
       setResolvedKey(makeResolvedKey(reverseCountry, reverseCity || location.city));
       setResolvedMessage(
-        `Using device location${
-          data?.formatted ? ` · ${data.formatted}` : ""
-        } · ${lat.toFixed(5)}, ${lng.toFixed(5)}${
-          accuracyMeters != null ? ` · Accuracy ±${accuracyMeters}m` : ""
-        }`
+        `Using device location${data?.formatted ? ` · ${data.formatted}` : ""} · ${lat.toFixed(
+          5
+        )}, ${lng.toFixed(5)}`
       );
     } catch (err) {
       console.error(err);
@@ -352,13 +348,18 @@ export default function Step3Location({
     const countryTrimmed = normalizeCountry(location.country);
     const timezoneTrimmed = normalizeTimezone(location.timezone);
 
+    if (!countryTrimmed) {
+      setGeocodeError("Please enter a country.");
+      return;
+    }
+
     if (!cityTrimmed) {
       setGeocodeError("Please enter a city.");
       return;
     }
 
-    if (!countryTrimmed) {
-      setGeocodeError("Please choose a country.");
+    if (!timezoneTrimmed) {
+      setGeocodeError("Please select a timezone.");
       return;
     }
 
@@ -384,15 +385,12 @@ export default function Step3Location({
 
       setResolvedKey(currentLookupKey);
       setResolvedMessage(
-        `Coordinates confirmed for ${result.formatted}: ${result.lat.toFixed(5)}, ${result.lng.toFixed(5)}${
+        `Coordinates confirmed for ${result.formatted}: ${result.lat.toFixed(
+          5
+        )}, ${result.lng.toFixed(5)}${
           result.geocodedTimezone ? ` · Timezone: ${result.geocodedTimezone}` : ""
         }`
       );
-    }
-
-    if (!finalTimezone) {
-      setGeocodeError("Please enter a timezone.");
-      return;
     }
 
     const updatedLocation: LocationSettings = {
@@ -415,7 +413,6 @@ export default function Step3Location({
 
   return (
     <div className="min-h-screen bg-slate-950">
-      {/* Sticky Header */}
       <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
         <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -426,112 +423,210 @@ export default function Step3Location({
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
-        {/* Hero Section */}
-        <div className="mb-8">
+        <div className="mb-8 md:mb-10">
           <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
             Set your location
           </h1>
           <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
-            Choose your country and city, or use your device location for accurate prayer times.
+            Your location helps us calculate precise prayer times based on the
+            position of the sun in your area.
           </p>
         </div>
 
-        {/* Main Content Card */}
         <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
-          {/* Quick Location Button */}
-          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5 mb-6">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="rounded-xl bg-emerald-500/10 p-2.5">
-                  <LocateFixed className="w-5 h-5 text-emerald-400" />
-                </div>
-                <div>
-                  <div className="text-white font-medium mb-1">
-                    Quick location setup
-                  </div>
-                  <p className="text-slate-400 text-sm">
-                    Use your current device location to auto-fill city, country, timezone, and coordinates.
-                  </p>
-                </div>
+          <div className="mb-7 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
+                <svg
+                  className="w-4 h-4 text-emerald-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                  />
+                </svg>
               </div>
-              <Button
-                type="button"
-                onClick={handleUseDeviceLocation}
-                disabled={usingDeviceLocation || geocoding}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0"
-              >
-                <MapPin className="w-4 h-4 mr-2" />
-                {usingDeviceLocation ? "Locating…" : "Use my location"}
-              </Button>
+              <div className="flex-1">
+                <div className="text-white text-sm font-medium mb-1">
+                  Your location stays private
+                </div>
+                <p className="text-slate-400 text-sm leading-relaxed">
+                  Location is only used to calculate accurate prayer times. We
+                  don&apos;t share or sell your data.
+                </p>
+              </div>
             </div>
           </div>
 
-          {/* Form Fields */}
-          <div className="space-y-5 mb-6">
-            <div>
-              <Label htmlFor="country" className="text-white mb-2 block text-sm font-medium">
-                Country or region
-              </Label>
-              <Select value={location.country} onValueChange={handleCountryChange}>
-                <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
-                  <SelectValue placeholder="Select country" />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-900 border-slate-700 text-slate-100 max-h-72">
-                  {!COUNTRIES.some((country) => country.code === location.country) && (
-                    <SelectItem value={location.country}>{location.country}</SelectItem>
-                  )}
-                  {COUNTRIES.map((country) => (
-                    <SelectItem key={country.code} value={country.code}>
-                      {country.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="mb-8">
+            <h2 className="text-white text-base font-semibold mb-3">Quick setup</h2>
+            <div className="rounded-xl border-2 border-emerald-500/20 bg-emerald-500/5 p-5">
+              <div className="flex flex-col gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
+                    <MapPin className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-white font-medium mb-1">
+                      Use your current location
+                    </div>
+                    <p className="text-slate-400 text-sm leading-relaxed">
+                      Automatically fill in your city, country, timezone, and
+                      coordinates for the most accurate results.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  onClick={handleUseDeviceLocation}
+                  disabled={usingDeviceLocation || geocoding}
+                  className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11"
+                >
+                  <LocateFixed className="w-4 h-4 mr-2" />
+                  {usingDeviceLocation ? "Getting location…" : "Use my location"}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-px flex-1 bg-slate-700/50" />
+              <span className="text-slate-500 text-sm">Or enter manually</span>
+              <div className="h-px flex-1 bg-slate-700/50" />
             </div>
 
-            <div>
-              <Label htmlFor="city" className="text-white mb-2 block text-sm font-medium">
-                City
-              </Label>
-              <Input
-                id="city"
-                value={location.city}
-                onChange={(e) => handleCityChange(e.target.value)}
-                className="bg-slate-800/60 border-slate-700/60 text-white h-11"
-                placeholder="Example: Chicago, Karachi, London, Dubai"
-              />
-              {geocodeError && <p className="mt-2 text-xs text-red-400">{geocodeError}</p>}
-              {geocoding && !geocodeError && (
-                <p className="mt-2 text-xs text-slate-400">
-                  Looking up coordinates for this location…
-                </p>
-              )}
-              {!geocoding && !geocodeError && resolvedMessage && (
-                <p className="mt-2 text-xs text-emerald-400">{resolvedMessage}</p>
-              )}
-            </div>
-
-            <div>
-              <Label htmlFor="timezone" className="text-white mb-2 block text-sm font-medium">
-                Timezone
-              </Label>
-              <Input
-                id="timezone"
-                value={location.timezone}
-                onChange={(e) => handleTimezoneChange(e.target.value)}
-                className="bg-slate-800/60 border-slate-700/60 text-white h-11"
-                placeholder="Example: America/Chicago, Asia/Karachi, Europe/London"
-              />
-              <p className="mt-2 text-xs text-slate-500">
-                Auto-filled from city lookup or device location, but you can override it manually.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between gap-4 p-5 bg-slate-800/30 rounded-2xl border border-slate-700/60">
+            <div className="space-y-5">
               <div>
-                <p className="text-white font-medium mb-1">Use mosque location later</p>
-                <p className="text-slate-400 text-sm">
-                  If you choose a mosque later, its coordinates can be used to fine-tune prayer times.
+                <Label
+                  htmlFor="country"
+                  className="text-white mb-2 block text-sm font-medium"
+                >
+                  Country or region
+                </Label>
+                <div className="relative">
+                  <Globe2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                  <Input
+                    id="country"
+                    value={location.country}
+                    onChange={(e) => handleCountryChange(e.target.value)}
+                    className="pl-10 bg-slate-800/60 border-slate-700/60 text-white h-11"
+                    placeholder="Type any country, e.g. United States, India, Saudi Arabia"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  You can enter any country globally. Timezone becomes available after this field is filled.
+                </p>
+              </div>
+
+              <div>
+                <Label
+                  htmlFor="city"
+                  className="text-white mb-2 block text-sm font-medium"
+                >
+                  City
+                </Label>
+                <Input
+                  id="city"
+                  value={location.city}
+                  onChange={(e) => handleCityChange(e.target.value)}
+                  className="bg-slate-800/60 border-slate-700/60 text-white h-11"
+                  placeholder="e.g., Chicago, Karachi, London"
+                />
+                {geocodeError && (
+                  <p className="mt-2 text-xs text-red-400 flex items-center gap-1.5">
+                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                      <path
+                        fillRule="evenodd"
+                        d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    {geocodeError}
+                  </p>
+                )}
+                {geocoding && !geocodeError && (
+                  <p className="mt-2 text-xs text-slate-400 flex items-center gap-1.5">
+                    <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      />
+                    </svg>
+                    Verifying coordinates…
+                  </p>
+                )}
+                {!geocoding && !geocodeError && resolvedMessage && (
+                  <p className="mt-2 text-xs text-emerald-400 flex items-center gap-1.5">
+                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                      <path
+                        fillRule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                    {resolvedMessage}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <Label
+                  htmlFor="timezone"
+                  className="text-white mb-2 block text-sm font-medium"
+                >
+                  Timezone
+                </Label>
+                <Input
+                  id="timezone"
+                  list="timezone-options"
+                  value={location.timezone}
+                  onChange={(e) => handleTimezoneChange(e.target.value)}
+                  disabled={!location.country}
+                  className="bg-slate-800/60 border-slate-700/60 text-white h-11 disabled:opacity-50"
+                  placeholder={location.country ? "Select or search timezone" : "Enter country first"}
+                />
+                <datalist id="timezone-options">
+                  {timezoneOptions.map((timezone) => (
+                    <option key={timezone} value={timezone} />
+                  ))}
+                </datalist>
+
+                <div className="mt-2 flex items-start gap-2 text-xs text-slate-500">
+                  <Clock3 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                  <p>
+                    {location.country
+                      ? `Timezone selection is now enabled for ${location.country}. We will also verify it when we geocode ${location.city || "your city"}.`
+                      : "Choose a country first, then select the correct timezone for your city."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-8 p-5 bg-slate-800/30 rounded-2xl border border-slate-700/60">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <div className="text-white font-medium mb-1">
+                  Fine-tune with mosque location
+                </div>
+                <p className="text-slate-400 text-sm leading-relaxed">
+                  After setup, you can select a nearby mosque to use its exact
+                  coordinates for even more precise prayer times.
                 </p>
               </div>
               <Switch
@@ -546,7 +641,6 @@ export default function Step3Location({
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3">
             <Button
               onClick={() => navigate("/onboarding/step2")}
@@ -558,10 +652,10 @@ export default function Step3Location({
             </Button>
             <Button
               onClick={handleNext}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11"
+              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium"
               disabled={geocoding || usingDeviceLocation}
             >
-              {geocoding ? "Checking location…" : "Continue"}
+              {geocoding ? "Verifying…" : "Continue to prayer settings"}
             </Button>
           </div>
         </div>

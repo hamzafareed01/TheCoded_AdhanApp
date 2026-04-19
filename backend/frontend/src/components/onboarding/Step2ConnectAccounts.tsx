@@ -7,12 +7,12 @@ import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { AlexaIcon, GoogleIcon } from "../shared/BrandIcons";
 import {
+  apiFetch,
   apiFetchWithAmazonRepair,
   clearStoredAmazonToken,
   getStoredAmazonToken,
   restoreAmazonTokenFromUrl,
   setStoredAmazonToken,
-  subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 import {
   ensureAmazonSdk,
@@ -43,8 +43,6 @@ type Props = {
 
 type IntegrationStatus = {
   userKey?: string;
-  sessionToken?: string | null;
-  sessionExpiresAt?: string | null;
   alexa?: {
     connected: boolean;
     linkedAt: string | null;
@@ -201,12 +199,11 @@ export default function Step2ConnectAccounts({
 
     try {
       const resp = await apiFetchWithAmazonRepair("/api/integrations");
+
       if (!resp.ok) {
         if (resp.status === 401) {
-          clearStoredAmazonToken();
-          clearPendingAlexaLink();
-          markDisconnected("alexa");
           setServerStatus(null);
+          setError("Your Amazon session expired. Please reconnect Amazon.");
         }
         return;
       }
@@ -221,7 +218,6 @@ export default function Step2ConnectAccounts({
       setServerStatus(null);
     }
   }
-
   async function refreshAlexaLinkStatus() {
     const token = getStoredAmazonToken();
     if (!token) {
@@ -231,7 +227,14 @@ export default function Step2ConnectAccounts({
 
     try {
       const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/status");
-      if (!resp.ok) return;
+
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          setAlexaStatus(null);
+        }
+        return;
+      }
+
       const data = (await resp.json()) as AlexaLinkStatus;
       setAlexaStatus(data);
     } catch {
@@ -240,7 +243,8 @@ export default function Step2ConnectAccounts({
   }
 
   async function completeAlexaLogin(accessToken: string) {
-    const linkRes = await apiFetchWithAmazonRepair("/api/integrations/alexa/login", {
+    setStoredAmazonToken(accessToken);
+    const linkRes = await apiFetch("/api/integrations/alexa/login", {
       method: "POST",
       body: JSON.stringify({ accessToken }),
     });
@@ -250,16 +254,8 @@ export default function Step2ConnectAccounts({
       throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
     }
 
-    const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus;
-    const durableToken =
-      typeof data?.sessionToken === "string" && data.sessionToken.trim()
-        ? data.sessionToken.trim()
-        : accessToken;
-
-    setStoredAmazonToken(durableToken);
-    setTokens((prev) => ({ ...prev, alexa: durableToken }));
+    setTokens((prev) => ({ ...prev, alexa: accessToken }));
     markConnected("alexa");
-    setServerStatus(data);
     setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
 
     void refreshServerStatus();
@@ -276,7 +272,7 @@ export default function Step2ConnectAccounts({
 
     cleanCurrentUrl();
 
-    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/complete", {
+    const resp = await apiFetch("/api/alexa/account-linking/complete", {
       method: "POST",
       body: JSON.stringify({
         code,
@@ -304,26 +300,6 @@ export default function Step2ConnectAccounts({
   }
 
   useEffect(() => {
-    return subscribeToAmazonAuthChanges(() => {
-      void refreshServerStatus();
-      void refreshAlexaLinkStatus();
-    });
-  }, []);
-
-  useEffect(() => {
-    const token = getStoredAmazonToken();
-    if (!token) return;
-
-    const interval = window.setInterval(() => {
-      void refreshServerStatus();
-      void refreshAlexaLinkStatus();
-    }, 30000);
-
-    return () => window.clearInterval(interval);
-  }, [serverStatus?.alexa?.connected, alexaStatus?.accountLinkStatus]);
-
-
-  useEffect(() => {
     const boot = async () => {
       const restoredToken = restoreAmazonTokenFromUrl();
       const params = new URLSearchParams(window.location.search || "");
@@ -340,7 +316,6 @@ export default function Step2ConnectAccounts({
           await completeAlexaLogin(restoredToken);
         } else if (getStoredAmazonToken()) {
           markConnected("alexa");
-          await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
         }
 
         if (returnedError) {
@@ -395,58 +370,84 @@ export default function Step2ConnectAccounts({
     try {
       await ensureAmazonSdk();
 
-      window.amazon?.Login?.authorize?.({
-        client_id: clientId,
-        scope: "profile",
-        response_type: "token",
-        redirect_uri: redirectUri,
-        popup: false,
-        state: `adhan_${Date.now()}`,
+      const tokenResp = await new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
+        window.amazon?.Login?.authorize?.(
+          {
+            client_id: clientId,
+            scope: "profile",
+            response_type: "token",
+            redirect_uri: redirectUri,
+            popup: true,
+            state: `adhan_${Date.now()}`,
+          },
+          (res: AmazonAuthorizeResponse | null) => {
+            if (!res) {
+              reject(new Error("No response from Amazon login."));
+              return;
+            }
+
+            if (typeof res.error === "string") {
+              reject(new Error(String(res.error_description || res.error)));
+              return;
+            }
+
+            resolve(res);
+          }
+        );
       });
+
+      const accessToken: string | undefined = tokenResp?.access_token;
+      if (!accessToken) {
+        throw new Error("Amazon did not return an access token.");
+      }
+
+      await completeAlexaLogin(accessToken);
+      setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
     } catch (e: unknown) {
-      setLoadingKey(null);
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
+    } finally {
+      setLoadingKey(null);
     }
   }
 
   async function startAlexaSkillLinking() {
-  setError(null);
-  setInfo(null);
-  setLoadingKey("alexa");
+    setError(null);
+    setInfo(null);
+    setLoadingKey("alexa");
 
-  if (!getStoredAmazonToken()) {
-    setLoadingKey(null);
-    setError("Connect your Amazon account first.");
-    return;
-  }
-
-  try {
-    const redirectUri = currentAlexaLinkUrl();
-
-    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/start", {
-      method: "POST",
-      body: JSON.stringify({ redirectUri }),
-    });
-
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => "");
-      throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+    if (!getStoredAmazonToken()) {
+      setLoadingKey(null);
+      setError("Connect your Amazon account first.");
+      return;
     }
 
-    const data = (await resp.json()) as AlexaLinkStartResponse;
+    try {
+      const redirectUri = currentAlexaLinkUrl();
 
-    storePendingAlexaLink({
-      state: data.state,
-      codeVerifier: data.codeVerifier,
-      redirectUri: data.redirectUri,
-      startedAt: Date.now(),
-    });
+      const resp = await apiFetch("/api/alexa/account-linking/start", {
+        method: "POST",
+        body: JSON.stringify({ redirectUri }),
+      });
 
-    window.location.assign(data.authorizationUrl);
-  } catch (e: unknown) {
-    setLoadingKey(null);
-    setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
-  }
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => "");
+        throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+      }
+
+      const data = (await resp.json()) as AlexaLinkStartResponse;
+
+      storePendingAlexaLink({
+        state: data.state,
+        codeVerifier: data.codeVerifier,
+        redirectUri: data.redirectUri,
+        startedAt: Date.now(),
+      });
+
+      window.location.assign(data.authorizationUrl);
+    } catch (e: unknown) {
+      setLoadingKey(null);
+      setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
+    }
   }
 
   async function disconnectAlexa() {
@@ -455,7 +456,7 @@ export default function Step2ConnectAccounts({
     setLoadingKey("alexa");
 
     try {
-      await apiFetchWithAmazonRepair("/api/integrations/alexa/disconnect", {
+      await apiFetch("/api/integrations/alexa/disconnect", {
         method: "POST",
       }).catch(() => undefined);
 
@@ -558,12 +559,12 @@ export default function Step2ConnectAccounts({
               <div
                 key={platform.key}
                 className={`rounded-2xl border p-5 shadow-sm transition ${disabled
-                    ? "border-border/50 bg-card/60 opacity-70"
-                    : linked
-                      ? "border-emerald-500/40 bg-emerald-500/5"
-                      : serverConnected
-                        ? "border-sky-500/40 bg-sky-500/5"
-                        : "border-border bg-card"
+                  ? "border-border/50 bg-card/60 opacity-70"
+                  : linked
+                    ? "border-emerald-500/40 bg-emerald-500/5"
+                    : serverConnected
+                      ? "border-sky-500/40 bg-sky-500/5"
+                      : "border-border bg-card"
                   }`}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
