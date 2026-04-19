@@ -214,8 +214,8 @@ const tokenCache = new Map(); // token -> { profile, exp }
 const APP_SESSION_PREFIX = "adhapp";
 const APP_SESSION_TTL_MS = Math.max(
   60 * 60 * 1000,
-  Number(process.env.APP_SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000) ||
-    7 * 24 * 60 * 60 * 1000
+  Number(process.env.APP_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000) ||
+    30 * 24 * 60 * 60 * 1000
 );
 
 function getAppSessionSecret() {

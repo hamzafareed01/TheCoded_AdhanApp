@@ -15,7 +15,11 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { apiFetch, getStoredAmazonToken } from "../../lib/api";
+import {
+  apiFetch,
+  apiFetchWithAmazonRepair,
+  getStoredAmazonToken,
+} from "../../lib/api";
 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
@@ -252,13 +256,13 @@ function normalizeSurahs(payload: unknown): SurahOption[] {
 }
 
 async function saveSettings(payload: JsonRecord) {
-  const put = await apiFetch("/api/user/settings", {
+  const put = await apiFetchWithAmazonRepair("/api/user/settings", {
     method: "PUT",
     body: JSON.stringify(payload),
   });
   if (put.ok) return put;
 
-  return apiFetch("/api/user/settings", {
+  return apiFetchWithAmazonRepair("/api/user/settings", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -345,8 +349,8 @@ export default function Step5DevicesAdhan({
     try {
       const [settingsRes, devicesRes, recitersRes, duasRes, surahsRes] =
         await Promise.all([
-          apiFetch("/api/user/settings"),
-          apiFetch("/api/alexa/devices"),
+          apiFetchWithAmazonRepair("/api/user/settings"),
+          apiFetchWithAmazonRepair("/api/alexa/devices"),
           apiFetch("/api/library/reciters?type=adhan"),
           apiFetch("/api/duas"),
           apiFetch("/api/quran/surahs"),

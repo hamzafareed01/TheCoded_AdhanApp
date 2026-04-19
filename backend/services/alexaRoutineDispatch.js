@@ -11,11 +11,11 @@ let parsedAudioMap = null;
 function createAlexaSkillError(statusCode, code, message, extra = {}) {
   const err = new Error(message);
   err.statusCode = statusCode;
-  err.status = statusCode;
   err.code = code;
   Object.assign(err, extra);
   return err;
 }
+
 
 function readJson(relativePath) {
   const full = path.join(__dirname, '..', relativePath);
@@ -286,17 +286,29 @@ async function resolvePrayerPlaybackPlan(pool, params) {
 
   const profile = profileResult.recordset[0] || {};
   if (!profile.account_enabled) {
-    throw createAlexaSkillError(403, 'AUTOMATION_DISABLED', 'Account playback is disabled for this user.');
+    throw createAlexaSkillError(
+      403,
+      'AUTOMATION_DISABLED',
+      'Account playback is disabled for this user.'
+    );
   }
   const selectedDeviceIds = parseStringArray(profile.selected_alexa_device_ids_json);
   const normalizedDeviceId = String(deviceId || '').trim();
   if (selectedDeviceIds.length > 0) {
     if (!normalizedDeviceId) {
-      throw createAlexaSkillError(403, 'DEVICE_NOT_ENABLED', 'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.');
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.'
+      );
     }
 
     if (!selectedDeviceIds.includes(normalizedDeviceId)) {
-      throw createAlexaSkillError(403, 'DEVICE_NOT_ENABLED', 'This Alexa device is not enabled in your AdhanCast settings.');
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa device is not enabled in your AdhanCast settings.'
+      );
     }
   }
 
@@ -312,7 +324,11 @@ async function resolvePrayerPlaybackPlan(pool, params) {
 
   const prayerRow = prayerResult.recordset[0] || null;
   if (!prayerRow || prayerRow.enabled === false) {
-    throw createAlexaSkillError(409, 'PRAYER_DISABLED', 'This prayer is disabled for playback.');
+    throw createAlexaSkillError(
+      409,
+      'PRAYER_DISABLED',
+      'This prayer is disabled for playback.'
+    );
   }
 
   const reciterId = prayerRow.adhan_reciter_id || 'abdul_rahman_al_sudais';
@@ -320,15 +336,19 @@ async function resolvePrayerPlaybackPlan(pool, params) {
   const afterPayload = enrichAfterPayload(req, prayerRow.after_type || 'none', normalizeAfterPayload(prayerRow.after_payload_json));
   const afterLabel = buildAfterAdhanLabel(prayerRow.after_type, afterPayload);
   const prayerLabel = `${normalizedPrayer.charAt(0).toUpperCase()}${normalizedPrayer.slice(1)}`;
-  const audioUrl = resolveAudioUrl(req, reciterId);
-
-  if (!audioUrl) {
-    throw createAlexaSkillError(409, 'AUDIO_NOT_AVAILABLE', 'The Adhan audio is not available right now.');
-  }
 
   const speechText = afterLabel
     ? `Playing ${prayerLabel} Adhan, followed by ${afterLabel}.`
     : `Playing ${prayerLabel} Adhan now.`;
+
+  const audioUrl = resolveAudioUrl(req, reciterId);
+  if (!audioUrl) {
+    throw createAlexaSkillError(
+      409,
+      'AUDIO_NOT_AVAILABLE',
+      'No audio URL could be resolved for the selected reciter.'
+    );
+  }
 
   return {
     prayerName: normalizedPrayer,
