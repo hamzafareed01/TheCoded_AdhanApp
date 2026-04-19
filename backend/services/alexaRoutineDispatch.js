@@ -253,6 +253,25 @@ function buildAfterAdhanLabel(afterType, afterPayload) {
   return null;
 }
 
+function normalizeQuietDownStrategy(value) {
+  return String(value || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower';
+}
+
+function clampQuietVolumePercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 20;
+  return Math.min(80, Math.max(5, Math.trunc(n)));
+}
+
+function inferAlexaDeviceFamily(deviceName, platform) {
+  const haystack = `${String(deviceName || '')} ${String(platform || '')}`.toLowerCase();
+  if (/fire\s*tv|firetv/.test(haystack)) return 'fire_tv';
+  if (/echo\s*show/.test(haystack)) return 'echo_show';
+  if (/echo|dot|studio|spot|pop|tap|input|auto/.test(haystack)) return 'echo';
+  if (/tv/.test(haystack)) return 'tv';
+  return 'unknown';
+}
+
 function buildRoutineTemplates() {
   const invocationName = getSkillInvocationName();
   return PRAYERS.map((prayerName) => {
@@ -279,7 +298,8 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     .input('user_id', sql.UniqueIdentifier, userId)
     .query(`
       SELECT TOP 1 account_enabled, city, country, timezone, mosque_name, calculation_method, madhhab, sect,
-        selected_alexa_device_ids_json
+        selected_alexa_device_ids_json,
+        quiet_down_enabled, quiet_down_strategy, quiet_down_target_volume_pct, quiet_down_restore, quiet_down_include_fire_tv
       FROM dbo.user_profiles
       WHERE user_id = @user_id
     `);
@@ -312,6 +332,38 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     }
   }
 
+  const deviceRowsResult = await pool
+    .request()
+    .input('user_id', sql.UniqueIdentifier, userId)
+    .query(`
+      SELECT device_id AS id, device_name AS name, platform
+      FROM dbo.devices
+      WHERE user_id = @user_id AND platform = 'alexa'
+    `);
+
+  const knownDevices = Array.isArray(deviceRowsResult.recordset) ? deviceRowsResult.recordset : [];
+  const selectedDevices = knownDevices
+    .filter((row) => selectedDeviceIds.length === 0 || selectedDeviceIds.includes(String(row.id || '').trim()))
+    .map((row) => ({
+      id: String(row.id || '').trim(),
+      name: String(row.name || '').trim(),
+      platform: String(row.platform || 'alexa').trim(),
+      family: inferAlexaDeviceFamily(row.name, row.platform),
+    }))
+    .filter((row) => row.id);
+
+  const currentDevice =
+    selectedDevices.find((row) => row.id === normalizedDeviceId) ||
+    knownDevices
+      .map((row) => ({
+        id: String(row.id || '').trim(),
+        name: String(row.name || '').trim(),
+        platform: String(row.platform || 'alexa').trim(),
+        family: inferAlexaDeviceFamily(row.name, row.platform),
+      }))
+      .find((row) => row.id === normalizedDeviceId) ||
+    null;
+
   const prayerResult = await pool
     .request()
     .input('user_id', sql.UniqueIdentifier, userId)
@@ -337,9 +389,41 @@ async function resolvePrayerPlaybackPlan(pool, params) {
   const afterLabel = buildAfterAdhanLabel(prayerRow.after_type, afterPayload);
   const prayerLabel = `${normalizedPrayer.charAt(0).toUpperCase()}${normalizedPrayer.slice(1)}`;
 
+  const quietDownEnabled = !!profile.quiet_down_enabled;
+  const quietDownStrategy = normalizeQuietDownStrategy(profile.quiet_down_strategy);
+  const quietDownTargetVolumePct = clampQuietVolumePercent(profile.quiet_down_target_volume_pct);
+  const quietDownRestore = profile.quiet_down_restore !== false;
+  const quietDownIncludeFireTv = !!profile.quiet_down_include_fire_tv;
+  const quietDown = {
+    enabled: quietDownEnabled,
+    strategy: quietDownStrategy,
+    targetVolumePct: quietDownTargetVolumePct,
+    restoreAfter: quietDownRestore,
+    includeFireTv: quietDownIncludeFireTv,
+    currentDeviceFamily: currentDevice?.family || null,
+    currentDeviceName: currentDevice?.name || null,
+    selectedDevices: selectedDevices.map((device) => ({
+      id: device.id,
+      name: device.name,
+      family: device.family,
+    })),
+    canExecute: false,
+    mode: 'policy_only',
+    reason:
+      quietDownEnabled
+        ? 'AdhanCast can store and enforce the quiet-down policy in your account, but device-wide mute or volume changes require separate Alexa smart-home or video device integration.'
+        : null,
+  };
+
+  const quietDownSpeech = quietDown.enabled
+    ? quietDown.strategy === 'mute'
+      ? ' Your quiet-down policy is saved for mute mode.'
+      : ` Your quiet-down policy is saved to lower volume to about ${quietDown.targetVolumePct} percent.`
+    : '';
+
   const speechText = afterLabel
-    ? `Playing ${prayerLabel} Adhan, followed by ${afterLabel}.`
-    : `Playing ${prayerLabel} Adhan now.`;
+    ? `Playing ${prayerLabel} Adhan, followed by ${afterLabel}.${quietDownSpeech}`
+    : `Playing ${prayerLabel} Adhan now.${quietDownSpeech}`;
 
   const audioUrl = resolveAudioUrl(req, reciterId);
   if (!audioUrl) {
@@ -377,7 +461,10 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       sect: profile.sect || 'SUNNI',
       selectedDeviceIds,
       requestedDeviceId: normalizedDeviceId || null,
+      currentDeviceFamily: currentDevice?.family || null,
+      currentDeviceName: currentDevice?.name || null,
     },
+    quietDown,
   };
 }
 
