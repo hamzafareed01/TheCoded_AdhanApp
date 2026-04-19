@@ -28,6 +28,12 @@ const {
   resolvePrayerPlaybackPlan,
   logAlexaDispatch,
 } = require("./services/alexaRoutineDispatch");
+const {
+  buildDiscoveryEndpoints,
+  buildStateForEndpoint,
+  handleSmartHomeDirective,
+  loadSmartHomeContext,
+} = require("./services/alexaSmartHome");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -212,97 +218,6 @@ async function getHadithOfDay(sectValue, date = new Date()) {
 }
 
 const tokenCache = new Map(); // token -> { profile, exp }
-const APP_SESSION_PREFIX = "adhapp";
-const APP_SESSION_TTL_MS = Math.max(
-  60 * 60 * 1000,
-  Number(process.env.APP_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000) ||
-    30 * 24 * 60 * 60 * 1000
-);
-
-function getAppSessionSecret() {
-  return String(
-    process.env.APP_SESSION_SECRET ||
-      process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
-      process.env.ALEXA_APP_LINK_STATE_SECRET ||
-      "adhancast-app-session-secret"
-  );
-}
-
-function createAppSessionToken(params) {
-  const payload = {
-    userId: String(params.userId || "").trim(),
-    amazonUserId: String(params.amazonUserId || "").trim(),
-    displayName: params.displayName ? String(params.displayName).trim() : null,
-    email: params.email ? String(params.email).trim() : null,
-    ts: Date.now(),
-    exp: Date.now() + APP_SESSION_TTL_MS,
-    nonce: crypto.randomBytes(12).toString("hex"),
-  };
-
-  const encoded = base64UrlEncode(JSON.stringify(payload));
-  const signature = crypto
-    .createHmac("sha256", getAppSessionSecret())
-    .update(encoded)
-    .digest("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-
-  return {
-    token: `${APP_SESSION_PREFIX}_${encoded}.${signature}`,
-    expiresAt: new Date(payload.exp).toISOString(),
-  };
-}
-
-function verifyAppSessionToken(token) {
-  const raw = String(token || "").trim();
-  const prefix = `${APP_SESSION_PREFIX}_`;
-
-  if (!raw.startsWith(prefix)) {
-    return null;
-  }
-
-  const body = raw.slice(prefix.length);
-  const splitAt = body.lastIndexOf(".");
-  if (splitAt <= 0) {
-    const err = new Error("App session token is invalid.");
-    err.status = 401;
-    throw err;
-  }
-
-  const encoded = body.slice(0, splitAt);
-  const signature = body.slice(splitAt + 1);
-
-  const expected = crypto
-    .createHmac("sha256", getAppSessionSecret())
-    .update(encoded)
-    .digest("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-
-  if (signature !== expected) {
-    const err = new Error("App session token could not be verified.");
-    err.status = 401;
-    throw err;
-  }
-
-  const payload = JSON.parse(base64UrlDecode(encoded));
-
-  if (!payload?.userId || !payload?.amazonUserId || !payload?.exp) {
-    const err = new Error("App session token payload is incomplete.");
-    err.status = 401;
-    throw err;
-  }
-
-  if (Number(payload.exp) <= Date.now()) {
-    const err = new Error("App session token has expired.");
-    err.status = 401;
-    throw err;
-  }
-
-  return payload;
-}
 
 const regionDisplay =
   typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function"
@@ -1295,18 +1210,6 @@ async function requireAmazonAuth(req, res, next) {
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
 
-    const appSession = verifyAppSessionToken(token);
-    if (appSession) {
-      req.amazonProfile = {
-        user_id: appSession.amazonUserId,
-        name: appSession.displayName || null,
-        email: appSession.email || null,
-      };
-      req.amazonToken = token;
-      req.appSession = appSession;
-      return next();
-    }
-
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
@@ -1649,33 +1552,6 @@ function parseStringArray(value) {
   return [];
 }
 
-function clampQuietVolumePercent(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 20;
-  return Math.min(80, Math.max(5, Math.trunc(n)));
-}
-
-function normalizeQuietDownStrategy(value) {
-  return String(value || "").trim().toLowerCase() === "mute" ? "mute" : "lower";
-}
-
-function inferAlexaDeviceFamily(deviceName, platform) {
-  const haystack = `${String(deviceName || "")} ${String(platform || "")}`.toLowerCase();
-  if (/fire\s*tv|firetv/.test(haystack)) return "fire_tv";
-  if (/echo\s*show/.test(haystack)) return "echo_show";
-  if (/echo|dot|studio|spot|pop|tap|input|auto/.test(haystack)) return "echo";
-  if (/tv/.test(haystack)) return "tv";
-  return "unknown";
-}
-
-function formatAlexaDeviceFamilyLabel(value) {
-  if (value === "fire_tv") return "Fire TV";
-  if (value === "echo_show") return "Echo Show";
-  if (value === "echo") return "Echo";
-  if (value === "tv") return "TV";
-  return "Alexa";
-}
-
 function resolveTimingSource(profile) {
   const hasUserCoords =
     typeof profile.latitude === "number" &&
@@ -1992,16 +1868,6 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
     accountEnabled: !!profile.account_enabled,
     selectedAlexaDeviceIds: parseStringArray(profile.selected_alexa_device_ids_json),
     quietHours,
-    quietDown: {
-      enabled: !!profile.quiet_down_enabled,
-      strategy: normalizeQuietDownStrategy(profile.quiet_down_strategy),
-      targetVolumePct: clampQuietVolumePercent(profile.quiet_down_target_volume_pct),
-      restoreAfter: profile.quiet_down_restore !== false,
-      includeFireTv: !!profile.quiet_down_include_fire_tv,
-      mode: "policy_only",
-      note:
-        "Current AdhanCast custom-skill playback can save and enforce your quiet-down policy, but actual device-wide volume changes require separate Alexa smart-home or video device integration.",
-    },
     globalOffsets: {
       fajr: profile.offset_fajr || 0,
       dhuhr: profile.offset_dhuhr || 0,
@@ -2273,17 +2139,8 @@ app.get(
       }
     }
 
-    const session = createAppSessionToken({
-      userId,
-      amazonUserId: p.user_id,
-      displayName: p.name || null,
-      email: p.email || null,
-    });
-
     res.json({
       userKey: p.user_id,
-      sessionToken: session.token,
-      sessionExpiresAt: session.expiresAt,
       amazon: {
         connected: true,
         email: p.email || null,
@@ -2335,18 +2192,9 @@ app.post(
         WHERE user_id = @user_id
       `);
 
-    const session = createAppSessionToken({
-      userId,
-      amazonUserId: profile.user_id,
-      displayName: profile.name || null,
-      email: profile.email || null,
-    });
-
     res.json({
       ok: true,
       userKey: profile.user_id,
-      sessionToken: session.token,
-      sessionExpiresAt: session.expiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),
@@ -2861,6 +2709,47 @@ app.get(
   })
 );
 
+
+app.get(
+  "/api/alexa/smart-home/discovery",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ endpoints: buildDiscoveryEndpoints(profile, devices) });
+  })
+);
+
+app.get(
+  "/api/alexa/smart-home/state",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const endpointId = String(req.query.endpointId || "").trim();
+    if (!endpointId) {
+      return res.status(400).json({ error: "endpointId is required." });
+    }
+
+    const pool = await getPool();
+    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ properties: buildStateForEndpoint(profile, devices, endpointId) });
+  })
+);
+
+app.post(
+  "/api/alexa/smart-home/directive",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const directive = req.body?.directive;
+    if (!directive || typeof directive !== "object") {
+      return res.status(400).json({ error: "directive payload is required." });
+    }
+
+    const pool = await getPool();
+    const result = await handleSmartHomeDirective(pool, req.skillAuth.userId, directive);
+    res.json(result);
+  })
+);
+
 app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
@@ -3279,29 +3168,6 @@ async function handleSaveUserSettings(req, res) {
     ? parseStringArray(body.selectedAlexaDeviceIds ?? body.selectedDeviceIds)
     : undefined;
 
-  const quietDownSource = isObject(body.quietDown)
-    ? body.quietDown
-    : isObject(body.quietDownPolicy)
-      ? body.quietDownPolicy
-      : null;
-
-  const hasQuietDown = !!quietDownSource;
-  const quietDownEnabled = hasQuietDown
-    ? (quietDownSource.enabled === true ? 1 : 0)
-    : null;
-  const quietDownStrategy = hasQuietDown
-    ? normalizeQuietDownStrategy(quietDownSource.strategy)
-    : null;
-  const quietDownTargetVolumePct = hasQuietDown
-    ? clampQuietVolumePercent(quietDownSource.targetVolumePct)
-    : null;
-  const quietDownRestore = hasQuietDown
-    ? (quietDownSource.restoreAfter === false ? 0 : 1)
-    : null;
-  const quietDownIncludeFireTv = hasQuietDown
-    ? (quietDownSource.includeFireTv === true ? 1 : 0)
-    : null;
-
   const offsets = parseOffsetsFromBody(body, {
     fajr: currentProfile.offset_fajr || 0,
     dhuhr: currentProfile.offset_dhuhr || 0,
@@ -3401,12 +3267,6 @@ async function handleSaveUserSettings(req, res) {
     sql.Bit,
     hasSelectedAlexaDeviceIds ? 1 : 0
   );
-  profileReq.input("set_quiet_down", sql.Bit, hasQuietDown ? 1 : 0);
-  profileReq.input("quiet_down_enabled", sql.Bit, quietDownEnabled);
-  profileReq.input("quiet_down_strategy", sql.NVarChar(16), quietDownStrategy);
-  profileReq.input("quiet_down_target_volume_pct", sql.Int, quietDownTargetVolumePct);
-  profileReq.input("quiet_down_restore", sql.Bit, quietDownRestore);
-  profileReq.input("quiet_down_include_fire_tv", sql.Bit, quietDownIncludeFireTv);
   profileReq.input(
     "mosque_lng",
     sql.Float,
@@ -3433,11 +3293,6 @@ async function handleSaveUserSettings(req, res) {
       mosque_lat = CASE WHEN @set_mosque_lat = 1 THEN @mosque_lat ELSE mosque_lat END,
       mosque_lng = CASE WHEN @set_mosque_lng = 1 THEN @mosque_lng ELSE mosque_lng END,
       selected_alexa_device_ids_json = CASE WHEN @set_selected_alexa_device_ids_json = 1 THEN @selected_alexa_device_ids_json ELSE selected_alexa_device_ids_json END,
-      quiet_down_enabled = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_enabled, quiet_down_enabled) ELSE quiet_down_enabled END,
-      quiet_down_strategy = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_strategy, quiet_down_strategy) ELSE quiet_down_strategy END,
-      quiet_down_target_volume_pct = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_target_volume_pct, quiet_down_target_volume_pct) ELSE quiet_down_target_volume_pct END,
-      quiet_down_restore = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_restore, quiet_down_restore) ELSE quiet_down_restore END,
-      quiet_down_include_fire_tv = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_include_fire_tv, quiet_down_include_fire_tv) ELSE quiet_down_include_fire_tv END,
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -3760,16 +3615,7 @@ app.get(
         ORDER BY device_name
       `);
 
-    res.json({
-      devices: result.recordset.map((row) => {
-        const family = inferAlexaDeviceFamily(row.id || row.device_id, row.platform || row.device_name || row.name);
-        return {
-          ...row,
-          family,
-          familyLabel: formatAlexaDeviceFamilyLabel(family),
-        };
-      }),
-    });
+    res.json({ devices: result.recordset });
   })
 );
 
