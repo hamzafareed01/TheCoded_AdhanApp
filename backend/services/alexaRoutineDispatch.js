@@ -17,19 +17,6 @@ function createAlexaSkillError(statusCode, code, message, extra = {}) {
   return err;
 }
 
-function normalizePrayerLabel(prayerName) {
-  const raw = String(prayerName || '').trim().toLowerCase();
-
-  if (raw === 'fajr') return 'Fajr';
-  if (raw === 'dhuhr') return 'Dhuhr';
-  if (raw === 'asr') return 'Asr';
-  if (raw === 'maghrib') return 'Maghrib';
-  if (raw === 'isha') return 'Isha';
-  if (raw === 'sunrise') return 'Sunrise';
-
-  return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Prayer';
-}
-
 function readJson(relativePath) {
   const full = path.join(__dirname, '..', relativePath);
   return JSON.parse(fs.readFileSync(full, 'utf8'));
@@ -269,95 +256,47 @@ function buildAfterAdhanLabel(afterType, afterPayload) {
 function buildRoutineTemplates() {
   const invocationName = getSkillInvocationName();
   return PRAYERS.map((prayerName) => {
-    const title = `${normalizePrayerLabel(prayerName)} Adhan`;
+    const title = `${prayerName.charAt(0).toUpperCase()}${prayerName.slice(1)} Adhan`;
     return {
       id: prayerName,
       prayerName,
       title,
-      routineName: `AdhanCast – ${title}`,
+      routineName: `Adhan Cast – ${title}`,
       phrase: `open ${invocationName} and play ${prayerName} adhan`,
     };
   });
 }
 
-
 async function resolvePrayerPlaybackPlan(pool, params) {
   const { userId, prayerName, req, deviceId } = params;
-
   const normalizedPrayer = String(prayerName || '').trim().toLowerCase();
-  const normalizedDeviceId = String(deviceId || '').trim();
-
   if (!PRAYERS.includes(normalizedPrayer)) {
-    throw createAlexaSkillError(
-      400,
-      'UNSUPPORTED_PRAYER',
-      'Unsupported prayer name.',
-      {
-        prayerName: normalizedPrayer,
-        deviceId: normalizedDeviceId || null,
-      }
-    );
+    throw createAlexaSkillError(400, 'UNSUPPORTED_PRAYER', 'Unsupported prayer name.');
   }
 
   const profileResult = await pool
     .request()
     .input('user_id', sql.UniqueIdentifier, userId)
     .query(`
-      SELECT TOP 1
-        account_enabled,
-        city,
-        country,
-        timezone,
-        mosque_name,
-        calculation_method,
-        madhhab,
-        sect,
+      SELECT TOP 1 account_enabled, city, country, timezone, mosque_name, calculation_method, madhhab, sect,
         selected_alexa_device_ids_json
       FROM dbo.user_profiles
       WHERE user_id = @user_id
     `);
 
   const profile = profileResult.recordset[0] || {};
-
   if (!profile.account_enabled) {
-    throw createAlexaSkillError(
-      403,
-      'AUTOMATION_DISABLED',
-      'Adhan automation is disabled for this account.',
-      {
-        prayerName: normalizedPrayer,
-        deviceId: normalizedDeviceId || null,
-      }
-    );
+    throw createAlexaSkillError(403, 'AUTOMATION_DISABLED', 'Account playback is disabled for this user.');
   }
-
   const selectedDeviceIds = parseStringArray(profile.selected_alexa_device_ids_json);
-
+  const normalizedDeviceId = String(deviceId || '').trim();
   if (selectedDeviceIds.length > 0) {
     if (!normalizedDeviceId) {
-      throw createAlexaSkillError(
-        403,
-        'DEVICE_NOT_ENABLED',
-        'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.',
-        {
-          prayerName: normalizedPrayer,
-          deviceId: null,
-          selectedDeviceIds,
-        }
-      );
+      throw createAlexaSkillError(403, 'DEVICE_NOT_ENABLED', 'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.');
     }
 
     if (!selectedDeviceIds.includes(normalizedDeviceId)) {
-      throw createAlexaSkillError(
-        403,
-        'DEVICE_NOT_ENABLED',
-        'This Alexa device is not enabled in AdhanCast settings.',
-        {
-          prayerName: normalizedPrayer,
-          deviceId: normalizedDeviceId,
-          selectedDeviceIds,
-        }
-      );
+      throw createAlexaSkillError(403, 'DEVICE_NOT_ENABLED', 'This Alexa device is not enabled in your AdhanCast settings.');
     }
   }
 
@@ -366,90 +305,49 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     .input('user_id', sql.UniqueIdentifier, userId)
     .input('prayer_name', sql.NVarChar(10), normalizedPrayer)
     .query(`
-      SELECT TOP 1
-        prayer_name,
-        enabled,
-        adhan_reciter_id,
-        after_type,
-        after_payload_json
+      SELECT TOP 1 prayer_name, enabled, adhan_reciter_id, after_type, after_payload_json
       FROM dbo.prayer_configs
       WHERE user_id = @user_id AND prayer_name = @prayer_name
     `);
 
   const prayerRow = prayerResult.recordset[0] || null;
-
   if (!prayerRow || prayerRow.enabled === false) {
-    throw createAlexaSkillError(
-      403,
-      'PRAYER_DISABLED',
-      `${normalizePrayerLabel(normalizedPrayer)} is disabled in AdhanCast settings.`,
-      {
-        prayerName: normalizedPrayer,
-        deviceId: normalizedDeviceId || null,
-      }
-    );
+    throw createAlexaSkillError(409, 'PRAYER_DISABLED', 'This prayer is disabled for playback.');
   }
 
-  const reciterId =
-    typeof prayerRow.adhan_reciter_id === 'string' && prayerRow.adhan_reciter_id.trim()
-      ? prayerRow.adhan_reciter_id.trim()
-      : null;
-
-  if (!reciterId) {
-    throw createAlexaSkillError(
-      409,
-      'RECITER_NOT_CONFIGURED',
-      `No Adhan reciter is configured for ${normalizePrayerLabel(normalizedPrayer)}.`,
-      {
-        prayerName: normalizedPrayer,
-        deviceId: normalizedDeviceId || null,
-      }
-    );
-  }
-
+  const reciterId = prayerRow.adhan_reciter_id || 'abdul_rahman_al_sudais';
   const reciter = findReciter(reciterId);
+  const afterPayload = enrichAfterPayload(req, prayerRow.after_type || 'none', normalizeAfterPayload(prayerRow.after_payload_json));
+  const afterLabel = buildAfterAdhanLabel(prayerRow.after_type, afterPayload);
+  const prayerLabel = `${normalizedPrayer.charAt(0).toUpperCase()}${normalizedPrayer.slice(1)}`;
   const audioUrl = resolveAudioUrl(req, reciterId);
 
   if (!audioUrl) {
-    throw createAlexaSkillError(
-      502,
-      'AUDIO_NOT_AVAILABLE',
-      `Audio is not available for ${normalizePrayerLabel(normalizedPrayer)}.`,
-      {
-        prayerName: normalizedPrayer,
-        deviceId: normalizedDeviceId || null,
-        reciterId,
-      }
-    );
+    throw createAlexaSkillError(409, 'AUDIO_NOT_AVAILABLE', 'The Adhan audio is not available right now.');
   }
 
-  const afterType = prayerRow.after_type || 'none';
-  const afterPayload = enrichAfterPayload(
-    req,
-    afterType,
-    normalizeAfterPayload(prayerRow.after_payload_json)
-  );
-  const afterLabel = buildAfterAdhanLabel(afterType, afterPayload);
+  const speechText = afterLabel
+    ? `Playing ${prayerLabel} Adhan, followed by ${afterLabel}.`
+    : `Playing ${prayerLabel} Adhan now.`;
 
   return {
     prayerName: normalizedPrayer,
-    prayerLabel: normalizePrayerLabel(normalizedPrayer),
-    audioUrl,
+    prayerLabel,
     reciterId,
-    reciterName: reciter?.name || null,
-    speechText: `Playing ${normalizePrayerLabel(normalizedPrayer)} adhan.`,
-    cardTitle: 'AdhanCast',
-    cardText: `Playing ${normalizePrayerLabel(normalizedPrayer)} adhan.`,
-    afterAdhan: afterType === 'none'
-      ? null
-      : {
-          type: afterType,
-          label: afterLabel,
-          payload: afterPayload,
-          audioUrl: afterPayload?.audioUrl || null,
-        },
+    reciterName: reciter?.name || reciterId,
+    audioUrl,
+    speechText,
+    cardTitle: `${prayerLabel} Adhan`,
+    cardText: afterLabel
+      ? `${prayerLabel} Adhan • ${reciter?.name || reciterId} • Then ${afterLabel}`
+      : `${prayerLabel} Adhan • ${reciter?.name || reciterId}`,
+    afterAdhan: {
+      type: prayerRow.after_type || 'none',
+      label: afterLabel,
+      payload: afterPayload,
+      audioUrl: afterPayload?.audioUrl || null,
+    },
     userContext: {
-      accountEnabled: true,
       city: profile.city || 'Chicago',
       country: profile.country || 'US',
       timezone: profile.timezone || 'Etc/UTC',
@@ -459,7 +357,6 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       sect: profile.sect || 'SUNNI',
       selectedDeviceIds,
       requestedDeviceId: normalizedDeviceId || null,
-      deviceId: normalizedDeviceId || null,
     },
   };
 }
@@ -471,7 +368,6 @@ async function logAlexaDispatch(pool, params) {
   const triggerSource = String(params.triggerSource || 'skill').slice(0, 40);
   const status = String(params.status || 'queued').slice(0, 30);
   const message = params.message ? String(params.message).slice(0, 1000) : null;
-
   let payloadJson = null;
   try {
     payloadJson = params.payload ? JSON.stringify(params.payload) : null;
