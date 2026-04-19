@@ -15,11 +15,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import {
-  apiFetch,
-  apiFetchWithAmazonRepair,
-  getStoredAmazonToken,
-} from "../../lib/api";
+import { apiFetch, getStoredAmazonToken } from "../../lib/api";
 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
@@ -30,8 +26,6 @@ type Device = {
   id: string;
   name: string;
   platform?: string;
-  family?: string;
-  familyLabel?: string;
 };
 
 type Reciter = {
@@ -65,16 +59,6 @@ type PrayerConfig = {
   afterAdhan: AfterAdhan;
 };
 
-type QuietDownPolicy = {
-  enabled: boolean;
-  strategy: "lower" | "mute";
-  targetVolumePct: number;
-  restoreAfter: boolean;
-  includeFireTv: boolean;
-  mode?: string;
-  note?: string | null;
-};
-
 type UserSettingsPayload = {
   settings?: JsonRecord;
   prayerConfigs?: unknown;
@@ -82,8 +66,6 @@ type UserSettingsPayload = {
   account_enabled?: unknown;
   selectedAlexaDeviceIds?: unknown;
   selectedDeviceIds?: unknown;
-  quietDown?: unknown;
-  quietDownPolicy?: unknown;
 };
 
 type OnboardingData = {
@@ -91,7 +73,6 @@ type OnboardingData = {
   accountEnabled?: boolean;
   prayerConfigs?: unknown;
   prayerSettings?: { sect?: string };
-  quietDown?: QuietDownPolicy;
   [key: string]: unknown;
 };
 
@@ -117,19 +98,6 @@ function asBoolean(value: unknown): boolean | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function normalizeQuietDown(source: unknown): QuietDownPolicy {
-  const src = isRecord(source) ? source : {};
-  return {
-    enabled: src.enabled === true,
-    strategy: src.strategy === "mute" ? "mute" : "lower",
-    targetVolumePct: Math.min(80, Math.max(5, asNumber(src.targetVolumePct) ?? 20)),
-    restoreAfter: src.restoreAfter !== false,
-    includeFireTv: src.includeFireTv === true,
-    mode: asString(src.mode) ?? undefined,
-    note: asString(src.note),
-  };
 }
 
 function safeParseJson(value: unknown): JsonRecord | null {
@@ -216,8 +184,6 @@ function normalizeDevices(payload: unknown): Device[] {
       id: asString(item.id) ?? "",
       name: asString(item.name) ?? "",
       platform: asString(item.platform) ?? undefined,
-      family: asString(item.family) ?? undefined,
-      familyLabel: asString(item.familyLabel) ?? undefined,
     }))
     .filter((item: Device) => item.id.length > 0 && item.name.length > 0);
 }
@@ -286,13 +252,13 @@ function normalizeSurahs(payload: unknown): SurahOption[] {
 }
 
 async function saveSettings(payload: JsonRecord) {
-  const put = await apiFetchWithAmazonRepair("/api/user/settings", {
+  const put = await apiFetch("/api/user/settings", {
     method: "PUT",
     body: JSON.stringify(payload),
   });
   if (put.ok) return put;
 
-  return apiFetchWithAmazonRepair("/api/user/settings", {
+  return apiFetch("/api/user/settings", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -317,9 +283,6 @@ export default function Step5DevicesAdhan({
 
   const [accountEnabled, setAccountEnabled] = useState<boolean>(
     onboardingData.accountEnabled === true
-  );
-  const [quietDown, setQuietDown] = useState<QuietDownPolicy>(
-    normalizeQuietDown(onboardingData.quietDown)
   );
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
@@ -382,8 +345,8 @@ export default function Step5DevicesAdhan({
     try {
       const [settingsRes, devicesRes, recitersRes, duasRes, surahsRes] =
         await Promise.all([
-          apiFetchWithAmazonRepair("/api/user/settings"),
-          apiFetchWithAmazonRepair("/api/alexa/devices"),
+          apiFetch("/api/user/settings"),
+          apiFetch("/api/alexa/devices"),
           apiFetch("/api/library/reciters?type=adhan"),
           apiFetch("/api/duas"),
           apiFetch("/api/quran/surahs"),
@@ -431,17 +394,6 @@ export default function Step5DevicesAdhan({
 
         if (Array.isArray(configsSource)) {
           setPrayerConfigs(normalizePrayerConfigs(configsSource));
-        }
-
-        const quietDownSource =
-          (isRecord(settings.quietDown) && settings.quietDown) ||
-          (isRecord(settings.quietDownPolicy) && settings.quietDownPolicy) ||
-          (isRecord(payload.quietDown) && payload.quietDown) ||
-          (isRecord(payload.quietDownPolicy) && payload.quietDownPolicy) ||
-          null;
-
-        if (quietDownSource) {
-          setQuietDown(normalizeQuietDown(quietDownSource));
         }
       }
 
@@ -530,8 +482,6 @@ export default function Step5DevicesAdhan({
       const payload: JsonRecord = {
         accountEnabled,
         selectedAlexaDeviceIds: selectedDeviceIds,
-        quietDown,
-        quietDownPolicy: quietDown,
         prayerConfigs: prayerConfigs.map((p) => ({
           prayerName: p.prayerName,
           adhanReciterId: p.adhanReciterId,
@@ -551,7 +501,6 @@ export default function Step5DevicesAdhan({
         devices: selectedDeviceIds,
         accountEnabled,
         prayerConfigs,
-        quietDown,
       });
 
       navigate("/onboarding/step6");
@@ -634,107 +583,6 @@ export default function Step5DevicesAdhan({
             </div>
           </div>
 
-          <div className="mb-8 p-6 bg-slate-800/50 rounded-xl border border-slate-700 space-y-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <Label className="text-white">Quiet down during Adhan</Label>
-                <p className="text-slate-400 text-sm mt-1">
-                  Save how AdhanCast should quiet selected household devices during the Adhan window.
-                </p>
-              </div>
-              <Switch
-                checked={quietDown.enabled}
-                onCheckedChange={(v: boolean) =>
-                  setQuietDown((prev) => ({ ...prev, enabled: v }))
-                }
-              />
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-slate-200">Quiet-down action</Label>
-                <Select
-                  value={quietDown.strategy}
-                  onValueChange={(value: string) =>
-                    setQuietDown((prev) => ({
-                      ...prev,
-                      strategy: value === "mute" ? "mute" : "lower",
-                    }))
-                  }
-                >
-                  <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-slate-900 border-slate-700">
-                    <SelectItem value="lower">Lower volume</SelectItem>
-                    <SelectItem value="mute">Mute</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label className="text-slate-200">Target volume</Label>
-                <Select
-                  value={String(quietDown.targetVolumePct)}
-                  onValueChange={(value: string) =>
-                    setQuietDown((prev) => ({
-                      ...prev,
-                      targetVolumePct: Math.min(80, Math.max(5, Number(value) || 20)),
-                    }))
-                  }
-                >
-                  <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-slate-900 border-slate-700">
-                    <SelectItem value="10">10%</SelectItem>
-                    <SelectItem value="20">20%</SelectItem>
-                    <SelectItem value="30">30%</SelectItem>
-                    <SelectItem value="40">40%</SelectItem>
-                    <SelectItem value="50">50%</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-4">
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3">
-                <div>
-                  <div className="text-white text-sm">Restore after Adhan</div>
-                  <div className="text-slate-400 text-xs mt-1">
-                    Return supported devices to their previous state after playback.
-                  </div>
-                </div>
-                <Switch
-                  checked={quietDown.restoreAfter}
-                  onCheckedChange={(v: boolean) =>
-                    setQuietDown((prev) => ({ ...prev, restoreAfter: v }))
-                  }
-                />
-              </label>
-
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3">
-                <div>
-                  <div className="text-white text-sm">Include Fire TV devices</div>
-                  <div className="text-slate-400 text-xs mt-1">
-                    Keep Fire TV devices inside the saved quiet-down policy.
-                  </div>
-                </div>
-                <Switch
-                  checked={quietDown.includeFireTv}
-                  onCheckedChange={(v: boolean) =>
-                    setQuietDown((prev) => ({ ...prev, includeFireTv: v }))
-                  }
-                />
-              </label>
-            </div>
-
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
-              {quietDown.note ||
-                "AdhanCast will save this quiet-down policy now. Actual device-wide volume control still depends on separate Alexa smart-home or video device integration for the selected hardware."}
-            </div>
-          </div>
-
           <Tabs defaultValue={tabs[0]} className="w-full">
             <TabsList className="bg-slate-800 border-slate-700 w-full justify-start overflow-x-auto flex-nowrap">
               {tabs.map((tab) => (
@@ -780,7 +628,6 @@ export default function Step5DevicesAdhan({
                           <div className="text-white">{device.name}</div>
                           <div className="text-slate-400 text-sm">
                             {device.platform ? device.platform.toUpperCase() : "ALEXA"}
-                            {device.family ? ` · ${device.family}` : ""}
                           </div>
                         </div>
                         <Badge variant="secondary">

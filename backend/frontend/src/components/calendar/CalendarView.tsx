@@ -9,14 +9,7 @@ import {
   ChevronRight,
   MapPin,
   Clock3,
-  Download,
-  Sun,
-  Sunrise,
-  Sunset,
-  MoonStar,
-  AlertCircle,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { apiFetch } from "../../lib/api";
 
 type PrayerTimes = {
@@ -30,26 +23,14 @@ type PrayerTimes = {
 
 type DayEntry = {
   date: string;
-  source: "mosque" | "personal" | "city" | string;
+  source: "calculation" | "mosque" | "personal" | "city" | string;
   prayers: PrayerTimes;
 };
 
 type CalendarResponse = {
-  location?: {
-    city?: string;
-    country?: string;
-    timezone?: string;
-    label?: string;
-  };
-  mosque?: {
-    name?: string | null;
-    address?: string | null;
-  };
-  method?: {
-    sect?: string;
-    calculationMethod?: string;
-    madhhab?: string;
-  };
+  location?: { city?: string; country?: string; timezone?: string; label?: string };
+  mosque?: { name?: string | null; address?: string | null };
+  method?: { sect?: string; calculationMethod?: string; madhhab?: string };
   sourceDetail?: {
     preferred?: string;
     actual?: string;
@@ -79,15 +60,6 @@ const PRAYER_LABELS: Record<keyof PrayerTimes, string> = {
   isha: "Isha",
 };
 
-const PRAYER_ICONS: Record<keyof PrayerTimes, LucideIcon> = {
-  fajr: Sun,
-  sunrise: Sunrise,
-  dhuhr: Sun,
-  asr: Sun,
-  maghrib: Sunset,
-  isha: MoonStar,
-};
-
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
@@ -109,52 +81,30 @@ function titleCase(value?: string | null) {
 
 function getSourceBadgeClass(source?: string) {
   if (source === "mosque") {
-    return "bg-emerald-500/10 text-emerald-400 border-emerald-500/30";
+    return "bg-emerald-600/20 text-emerald-300 border border-emerald-600/30";
   }
   if (source === "personal") {
-    return "bg-cyan-500/10 text-cyan-300 border-cyan-500/20";
+    return "bg-cyan-500/15 text-cyan-300 border border-cyan-500/20";
   }
-  return "bg-slate-800/50 text-slate-300 border-slate-700/50";
+  return "bg-slate-800 text-slate-300 border border-slate-700";
 }
 
 function formatDisplayDate(isoDate: string) {
   const d = new Date(`${isoDate}T12:00:00`);
   if (Number.isNaN(d.getTime())) {
-    return {
-      day: isoDate,
-      weekday: "",
-      month: "",
-      year: "",
-      fullDate: isoDate,
-    };
+    return { title: isoDate, subtitle: "" };
   }
 
   return {
-    day: d.toLocaleDateString(undefined, { day: "2-digit" }),
-    weekday: d.toLocaleDateString(undefined, { weekday: "short" }),
-    month: d.toLocaleDateString(undefined, { month: "long" }),
-    year: d.toLocaleDateString(undefined, { year: "numeric" }),
-    fullDate: d.toLocaleDateString(undefined, {
+    title: d.toLocaleDateString(undefined, {
       day: "2-digit",
       month: "long",
       year: "numeric",
     }),
+    subtitle: d.toLocaleDateString(undefined, {
+      weekday: "short",
+    }),
   };
-}
-
-function getTodayIsoLocal() {
-  const now = new Date();
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(
-    now.getDate()
-  )}`;
-}
-
-function describeTimingSource(data: CalendarResponse | null) {
-  if (data?.sourceDetail?.label) return data.sourceDetail.label;
-  if (data?.sourceDetail?.actual === "mosque") return "Mosque coordinates";
-  if (data?.sourceDetail?.actual === "personal") return "Personal coordinates";
-  if (data?.sourceDetail?.actual === "city") return "City fallback";
-  return "Saved timing source";
 }
 
 export default function CalendarView() {
@@ -162,29 +112,23 @@ export default function CalendarView() {
   const [data, setData] = useState<CalendarResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"month" | "day">("month");
-  const [selectedDay, setSelectedDay] = useState<DayEntry | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
         setLoading(true);
         setError(null);
-
         const res = await apiFetch(
           `/api/prayer-times/month?month=${encodeURIComponent(month)}`
         );
-
         if (!res.ok) {
           throw new Error(`Failed to load calendar (${res.status})`);
         }
-
         const json = (await res.json()) as CalendarResponse;
         setData(json);
       } catch (err) {
         console.error(err);
         setError(err instanceof Error ? err.message : "Unable to load calendar.");
-        setData(null);
       } finally {
         setLoading(false);
       }
@@ -192,21 +136,6 @@ export default function CalendarView() {
 
     void load();
   }, [month]);
-
-  useEffect(() => {
-    if (!data?.days?.length) {
-      setSelectedDay(null);
-      if (viewMode === "day") {
-        setViewMode("month");
-      }
-      return;
-    }
-
-    setSelectedDay((prev) => {
-      if (!prev) return null;
-      return data.days.find((day) => day.date === prev.date) ?? null;
-    });
-  }, [data, viewMode]);
 
   const currentDate = useMemo(() => {
     const [year, mon] = month.split("-").map(Number);
@@ -229,431 +158,149 @@ export default function CalendarView() {
         [data?.location?.city, data?.location?.country].filter(Boolean).join(", ") ||
         "Saved location";
 
-  const timingSourceLabel = describeTimingSource(data);
-
   const goMonth = (delta: number) => {
     const next = new Date(currentDate);
     next.setMonth(next.getMonth() + delta);
     setMonth(monthKeyFromDate(next));
-    setViewMode("month");
-    setSelectedDay(null);
   };
-
-  const handleDayClick = (day: DayEntry) => {
-    setSelectedDay(day);
-    setViewMode("day");
-  };
-
-  const handleBackToMonth = () => {
-    setViewMode("month");
-    setSelectedDay(null);
-  };
-
-  const todayIso = getTodayIsoLocal();
 
   return (
-    <div className="min-h-screen bg-slate-950">
-      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
-        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <Logo />
-            <Navigation />
-          </div>
+    <div className="min-h-screen bg-slate-950 py-8 px-4">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
+          <Logo />
+          <Navigation />
         </div>
-      </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 md:px-6">
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900 border border-emerald-500/20 p-6 md:p-8">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.08),transparent_60%)]" />
-
-          <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-6">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-2.5">
-                  <CalendarIcon className="w-6 h-6 text-emerald-400" />
-                </div>
-                <div>
-                  <h1 className="text-white text-2xl md:text-3xl font-semibold">
-                    Prayer Calendar
-                  </h1>
-                </div>
+        <header className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <CalendarIcon className="w-5 h-5 text-emerald-400" />
+                <h1 className="text-white text-2xl md:text-3xl font-semibold">
+                  Prayer Calendar
+                </h1>
               </div>
-
-              <p className="text-slate-400 text-sm md:text-base max-w-2xl leading-relaxed">
-                Complete monthly prayer timetable based on your saved location,
-                mosque settings, and juristic method. View the full month or
-                focus on a single day.
+              <p className="text-slate-300 text-sm md:text-base max-w-3xl">
+                Clean monthly timetable view for your active timing source. This is now a prayer chart, not a stacked day-card layout.
               </p>
             </div>
+            <Badge className={getSourceBadgeClass(data?.sourceDetail?.actual)}>
+              {titleCase(data?.sourceDetail?.actual || "personal")}
+            </Badge>
+          </div>
 
-            <div className="flex flex-col gap-3 items-start md:items-end">
-              <Badge
-                variant="outline"
-                className={`${getSourceBadgeClass(
-                  data?.sourceDetail?.actual
-                )} text-sm px-3 py-1.5`}
-              >
-                {titleCase(data?.sourceDetail?.actual || "personal")}
-              </Badge>
-
-              <div className="text-right">
-                <div className="text-slate-500 text-xs mb-0.5">Month</div>
-                <div className="text-emerald-300 text-sm font-medium">
-                  {monthLabel}
-                </div>
+          <div className="grid md:grid-cols-4 gap-3 mt-5">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Location</div>
+              <div className="text-slate-100 font-medium flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-emerald-400" />
+                {locationLabel}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Sect</div>
+              <div className="text-slate-100 font-medium">
+                {titleCase(data?.method?.sect || "SUNNI")}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Calculation</div>
+              <div className="text-slate-100 font-medium">
+                {titleCase(data?.method?.calculationMethod || "isna")}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3">
+              <div className="text-slate-500 text-xs mb-1">Timezone</div>
+              <div className="text-slate-100 font-medium flex items-center gap-2">
+                <Clock3 className="w-4 h-4 text-cyan-400" />
+                {data?.location?.timezone || "Etc/UTC"}
               </div>
             </div>
           </div>
+
+          {data?.sourceDetail?.fallbackReason && (
+            <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              {data.sourceDetail.fallbackReason}
+            </div>
+          )}
+        </header>
+
+        <div className="flex items-center gap-3 mb-5 flex-wrap">
+          <Button
+            variant="outline"
+            className="border-slate-700 text-slate-200 hover:bg-slate-800"
+            onClick={() => goMonth(-1)}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+          <div className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-3 text-lg font-semibold text-white">
+            {monthLabel}
+          </div>
+          <Button
+            variant="outline"
+            className="border-slate-700 text-slate-200 hover:bg-slate-800"
+            onClick={() => goMonth(1)}
+          >
+            <ChevronRight className="w-4 h-4" />
+          </Button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-4 py-4">
-            <div className="flex items-center gap-2 mb-2">
-              <MapPin className="w-4 h-4 text-emerald-400" />
-              <div className="text-slate-500 text-xs">Location</div>
-            </div>
-            <div className="text-slate-100 font-medium text-sm leading-snug">
-              {locationLabel}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-4 py-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Clock3 className="w-4 h-4 text-cyan-400" />
-              <div className="text-slate-500 text-xs">Timezone</div>
-            </div>
-            <div className="text-slate-100 font-medium text-sm leading-snug">
-              {data?.location?.timezone || "Etc/UTC"}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-4 py-4">
-            <div className="text-slate-500 text-xs mb-2">Sect</div>
-            <div className="text-slate-100 font-medium text-sm">
-              {titleCase(data?.method?.sect || "SUNNI")}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-4 py-4">
-            <div className="text-slate-500 text-xs mb-2">Calculation Method</div>
-            <div className="text-slate-100 font-medium text-sm">
-              {titleCase(data?.method?.calculationMethod || "isna")}
-            </div>
-          </div>
-        </div>
-
-        {data?.sourceDetail?.fallbackReason && (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3.5 flex items-start gap-3">
-            <div className="rounded-lg bg-amber-500/20 p-1.5 mt-0.5">
-              <AlertCircle className="w-4 h-4 text-amber-300" />
-            </div>
-            <div className="flex-1">
-              <p className="text-sm text-amber-200 leading-relaxed">
-                {data.sourceDetail.fallbackReason}
-              </p>
-            </div>
-          </div>
-        )}
-
-        <div className="rounded-2xl border border-slate-800/60 bg-slate-900/30 backdrop-blur-sm px-4 py-4">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <Button
-                variant="outline"
-                size="icon"
-                className="border-slate-700 bg-slate-900/50 text-slate-300 hover:bg-slate-800 hover:text-white h-10 w-10"
-                onClick={() => goMonth(-1)}
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </Button>
-
-              <div className="rounded-xl border border-slate-700 bg-slate-900/70 backdrop-blur-sm px-5 py-2.5">
-                <div className="text-white font-semibold text-base md:text-lg">
-                  {monthLabel}
-                </div>
-                <div className="text-slate-500 text-xs">{timingSourceLabel}</div>
-              </div>
-
-              <Button
-                variant="outline"
-                size="icon"
-                className="border-slate-700 bg-slate-900/50 text-slate-300 hover:bg-slate-800 hover:text-white h-10 w-10"
-                onClick={() => goMonth(1)}
-              >
-                <ChevronRight className="w-5 h-5" />
-              </Button>
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              {viewMode === "day" && (
-                <Button
-                  variant="outline"
-                  className="border-slate-700 bg-slate-900/50 text-slate-300 hover:bg-slate-800 hover:text-white text-sm"
-                  onClick={handleBackToMonth}
-                >
-                  ← Back to Month
-                </Button>
-              )}
-
-              <Button
-                variant="outline"
-                size="icon"
-                disabled
-                className="border-slate-700 bg-slate-900/50 text-slate-500 cursor-not-allowed h-10 w-10"
-                title="Export calendar coming soon"
-              >
-                <Download className="w-4 h-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-12">
-            <div className="flex flex-col items-center justify-center gap-4">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-400" />
-              <p className="text-slate-400 text-sm">Loading prayer times…</p>
-            </div>
-          </div>
-        ) : error ? (
-          <div className="rounded-3xl border border-red-500/30 bg-red-500/10 p-8">
-            <div className="flex flex-col items-center justify-center gap-3">
-              <div className="rounded-xl bg-red-500/20 p-3">
-                <CalendarIcon className="w-6 h-6 text-red-400" />
-              </div>
-              <p className="text-red-300 text-sm font-medium">{error}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-red-500/30 text-red-300 hover:bg-red-500/20 mt-2"
-                onClick={() => window.location.reload()}
-              >
-                Try Again
-              </Button>
-            </div>
-          </div>
-        ) : !data || data.days.length === 0 ? (
-          <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-12">
-            <div className="flex flex-col items-center justify-center gap-3">
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <CalendarIcon className="w-6 h-6 text-slate-500" />
-              </div>
-              <p className="text-slate-400 text-sm">
-                No prayer times available for this month.
-              </p>
-            </div>
-          </div>
-        ) : viewMode === "month" ? (
-          <>
-            <div className="hidden lg:block rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead className="bg-slate-900/80 sticky top-0 z-10">
-                    <tr className="border-b border-slate-800">
-                      <th className="text-left px-5 py-4 text-slate-300 font-semibold text-sm">
-                        Date
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 overflow-hidden">
+          {loading ? (
+            <div className="px-6 py-10 text-slate-400">Loading calendar…</div>
+          ) : error ? (
+            <div className="px-6 py-10 text-amber-300">{error}</div>
+          ) : !data || data.days.length === 0 ? (
+            <div className="px-6 py-10 text-slate-400">No prayer times available for this month.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-[980px] w-full border-collapse text-sm">
+                <thead className="bg-slate-900 sticky top-0 z-10">
+                  <tr className="border-b border-slate-800">
+                    <th className="text-left px-5 py-4 text-slate-200 font-semibold">Date</th>
+                    {PRAYER_COLUMNS.map((column) => (
+                      <th
+                        key={column}
+                        className="text-left px-4 py-4 text-slate-200 font-semibold whitespace-nowrap"
+                      >
+                        {PRAYER_LABELS[column]}
                       </th>
-                      {PRAYER_COLUMNS.map((column) => (
-                        <th
-                          key={column}
-                          className="text-left px-4 py-4 text-slate-300 font-semibold text-sm whitespace-nowrap"
-                        >
-                          {PRAYER_LABELS[column]}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.days.map((day) => {
-                      const display = formatDisplayDate(day.date);
-                      const isToday = day.date === todayIso;
-
-                      return (
-                        <tr
-                          key={day.date}
-                          className={`border-b border-slate-800/50 cursor-pointer transition-colors ${
-                            isToday
-                              ? "bg-emerald-500/5 hover:bg-emerald-500/10"
-                              : "hover:bg-slate-800/30"
-                          }`}
-                          onClick={() => handleDayClick(day)}
-                        >
-                          <td className="px-5 py-4">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className={`flex items-center justify-center w-10 h-10 rounded-lg ${
-                                  isToday
-                                    ? "bg-emerald-500/20 border border-emerald-500/30"
-                                    : "bg-slate-800/40"
-                                }`}
-                              >
-                                <span
-                                  className={`text-base font-semibold ${
-                                    isToday ? "text-emerald-300" : "text-slate-200"
-                                  }`}
-                                >
-                                  {display.day}
-                                </span>
-                              </div>
-
-                              <div>
-                                <div className="text-slate-200 font-medium text-sm">
-                                  {display.weekday}
-                                </div>
-                                <div className="text-slate-500 text-xs">
-                                  {isToday ? "Today" : display.month}
-                                </div>
-                              </div>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.days.map((day) => {
+                    const display = formatDisplayDate(day.date);
+                    const isToday = day.date === new Date().toISOString().slice(0, 10);
+                    return (
+                      <tr
+                        key={day.date}
+                        className={`border-b border-slate-800/80 ${
+                          isToday ? "bg-emerald-500/5" : "bg-transparent"
+                        } hover:bg-slate-800/40 transition-colors`}
+                      >
+                        <td className="px-5 py-4 align-top">
+                          <div className="text-white font-medium">{display.title}</div>
+                          <div className="text-slate-500 text-xs mt-1">{display.subtitle}</div>
+                        </td>
+                        {PRAYER_COLUMNS.map((column) => (
+                          <td key={column} className="px-4 py-4 align-top">
+                            <div className="text-slate-100 font-medium whitespace-nowrap">
+                              {day.prayers[column] || "--:--"}
+                            </div>
+                            <div className="text-slate-500 text-xs mt-1">
+                              {data.location?.timezone || "local"}
                             </div>
                           </td>
-
-                          {PRAYER_COLUMNS.map((column) => (
-                            <td key={column} className="px-4 py-4">
-                              <div className="text-slate-100 font-medium text-sm tabular-nums">
-                                {day.prayers[column] || "--:--"}
-                              </div>
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-
-            <div className="lg:hidden space-y-3">
-              {data.days.map((day) => {
-                const display = formatDisplayDate(day.date);
-                const isToday = day.date === todayIso;
-
-                return (
-                  <div
-                    key={day.date}
-                    className={`rounded-2xl border backdrop-blur-sm p-4 cursor-pointer transition-all ${
-                      isToday
-                        ? "border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 to-slate-900/40"
-                        : "border-slate-800/60 bg-slate-900/40 hover:border-slate-700"
-                    }`}
-                    onClick={() => handleDayClick(day)}
-                  >
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`flex items-center justify-center w-12 h-12 rounded-xl ${
-                            isToday
-                              ? "bg-emerald-500/20 border border-emerald-500/30"
-                              : "bg-slate-800/60"
-                          }`}
-                        >
-                          <span
-                            className={`text-lg font-semibold ${
-                              isToday ? "text-emerald-300" : "text-slate-200"
-                            }`}
-                          >
-                            {display.day}
-                          </span>
-                        </div>
-
-                        <div>
-                          <div className="text-white font-semibold text-base">
-                            {display.weekday}
-                          </div>
-                          <div className="text-slate-400 text-sm">
-                            {isToday ? "Today" : display.month}
-                          </div>
-                        </div>
-                      </div>
-
-                      {isToday && (
-                        <Badge className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs">
-                          Today
-                        </Badge>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-3">
-                      {PRAYER_COLUMNS.map((column) => (
-                        <div key={column} className="text-center">
-                          <div className="text-slate-400 text-xs mb-1">
-                            {PRAYER_LABELS[column]}
-                          </div>
-                          <div className="text-slate-100 font-semibold text-sm tabular-nums">
-                            {day.prayers[column] || "--:--"}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        ) : selectedDay ? (
-          <div className="space-y-4">
-            <div className="rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900/40 backdrop-blur-sm p-6 md:p-8">
-              <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
-                <div>
-                  <div className="text-emerald-300 text-sm font-medium mb-1">
-                    {formatDisplayDate(selectedDay.date).weekday}
-                  </div>
-                  <h2 className="text-white text-2xl md:text-3xl font-semibold mb-2">
-                    {formatDisplayDate(selectedDay.date).fullDate}
-                  </h2>
-                  <div className="text-slate-400 text-sm">
-                    {locationLabel} · {data?.location?.timezone || "Etc/UTC"}
-                  </div>
-                </div>
-
-                <Badge
-                  variant="outline"
-                  className={`${getSourceBadgeClass(
-                    selectedDay.source
-                  )} text-xs px-3 py-1.5`}
-                >
-                  {titleCase(selectedDay.source)}
-                </Badge>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {PRAYER_COLUMNS.map((column) => {
-                const Icon = PRAYER_ICONS[column];
-
-                return (
-                  <div
-                    key={column}
-                    className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-5 hover:border-slate-700 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="rounded-lg bg-slate-800/60 p-2">
-                        <Icon className="w-5 h-5 text-emerald-400" />
-                      </div>
-                      <div className="text-slate-300 font-medium">
-                        {PRAYER_LABELS[column]}
-                      </div>
-                    </div>
-
-                    <div className="text-white text-3xl font-semibold tabular-nums mb-2">
-                      {selectedDay.prayers[column] || "--:--"}
-                    </div>
-
-                    <div className="text-slate-500 text-xs">
-                      {data?.location?.timezone || "local time"}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="rounded-2xl border border-slate-800/40 bg-slate-900/20 backdrop-blur-sm px-5 py-4">
-          <p className="text-slate-400 text-xs md:text-sm leading-relaxed text-center">
-            Prayer times are calculated from your saved location, mosque
-            preference, and selected calculation method. Always verify with your
-            local mosque for exact congregation times.
-          </p>
+          )}
         </div>
       </div>
     </div>

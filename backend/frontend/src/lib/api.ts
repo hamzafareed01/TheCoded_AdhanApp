@@ -21,7 +21,6 @@ const isAzureStaticApps = host.endsWith("azurestaticapps.net");
 
 const TOKEN_KEY = "amazon_access_token";
 const AUTH_EVENT = "amazon-auth-changed";
-const APP_SESSION_PREFIX = "adhapp_";
 
 export const API_BASE =
   normalizeBase(envBase) || (!isLocal && isAzureStaticApps ? FALLBACK_PROD_API : "");
@@ -54,10 +53,6 @@ function writeTokenToStorage(token: string) {
   if (!isBrowser) return;
   sessionStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(TOKEN_KEY, token);
-}
-
-function isAppSessionToken(token: string | null): boolean {
-  return typeof token === "string" && token.startsWith(APP_SESSION_PREFIX);
 }
 
 export function getStoredAmazonToken(): string | null {
@@ -155,34 +150,4 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
     credentials,
     mode: "cors",
   });
-}
-
-export async function apiFetchWithAmazonRepair(
-  path: string,
-  init: RequestInit = {}
-) {
-  const response = await apiFetch(path, init);
-  if (response.status !== 401) {
-    return response;
-  }
-
-  const storedToken = getStoredAmazonToken();
-  if (!storedToken) {
-    return response;
-  }
-
-  // If the app is already using a durable backend session token, do not
-  // aggressively clear it here. Let the caller decide how to message 401s.
-  if (isAppSessionToken(storedToken)) {
-    return response;
-  }
-
-  // For legacy raw Amazon tokens, try to recover a fresher token from the URL
-  // once before giving up.
-  const repairedToken = restoreAmazonTokenFromUrl();
-  if (repairedToken && repairedToken !== storedToken) {
-    return apiFetch(path, init);
-  }
-
-  return response;
 }

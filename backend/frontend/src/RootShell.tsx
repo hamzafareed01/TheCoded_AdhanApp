@@ -102,7 +102,11 @@ function readStoredOnboardingState(): OnboardingState {
       connectedPlatforms: Array.isArray(parsed.connectedPlatforms)
         ? parsed.connectedPlatforms.filter((x): x is string => typeof x === "string")
         : base.connectedPlatforms,
-      tokens: base.tokens,
+      tokens: isRecord(parsed.tokens)
+        ? (Object.fromEntries(
+            Object.entries(parsed.tokens).filter(([, v]) => typeof v === "string")
+          ) as Record<string, string>)
+        : base.tokens,
       location: {
         country: asString(location.country) ?? base.location.country,
         city: asString(location.city) ?? base.location.city,
@@ -152,8 +156,7 @@ export default function RootShell({ user }: RootShellProps) {
   }, []);
 
   useEffect(() => {
-    const { tokens: _tokens, ...persisted } = onboardingData;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(onboardingData));
   }, [onboardingData]);
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
 import {
   Select,
@@ -74,22 +75,11 @@ function sanitizeNonNegativeOffset(value: unknown) {
   return Math.max(0, Math.trunc(n));
 }
 
-function sanitizeOffsets(value: Partial<Offsets> | Record<string, unknown> | undefined | null): Offsets {
-  const base = defaultOffsets();
-
-  return {
-    fajr: sanitizeNonNegativeOffset(value?.fajr ?? base.fajr),
-    dhuhr: sanitizeNonNegativeOffset(value?.dhuhr ?? base.dhuhr),
-    asr: sanitizeNonNegativeOffset(value?.asr ?? base.asr),
-    maghrib: sanitizeNonNegativeOffset(value?.maghrib ?? base.maghrib),
-    isha: sanitizeNonNegativeOffset(value?.isha ?? base.isha),
-  };
-}
-
 function normalizeCountry(value: unknown): string {
   const raw = String(value ?? "").trim().toUpperCase();
   return raw || "US";
 }
+
 
 function getDefaultMethodForCountry(country: string, sect: Sect): PrayerMethod {
   if (sect === "SHIA") {
@@ -102,6 +92,8 @@ function getDefaultMethodForCountry(country: string, sect: Sect): PrayerMethod {
   if (country === "US" || country === "CA") return "isna";
   return "mwl";
 }
+
+
 
 function normalizeMethod(
   value: unknown,
@@ -120,6 +112,7 @@ function normalizeMethod(
 
   return getDefaultMethodForCountry(country, sect);
 }
+
 
 function normalizeHighLatitudeMode(value: unknown): HighLatitudeMode {
   const raw = String(value ?? "").trim();
@@ -168,8 +161,9 @@ export default function Step4PrayerSettings({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const initialSect: Sect =
-    existing?.shia === true || existing?.sect === "SHIA" ? "SHIA" : "SUNNI";
+  const initialSect: Sect = existing?.shia === true || existing?.sect === "SHIA"
+    ? "SHIA"
+    : "SUNNI";
 
   const [sect, setSect] = useState<Sect>(initialSect);
   const [calculationMethod, setCalculationMethod] = useState<PrayerMethod>(
@@ -183,9 +177,10 @@ export default function Step4PrayerSettings({
       existing?.highLatitudeMode || existing?.highLatitudeMethod
     )
   );
-  const [offsets, setOffsets] = useState<Offsets>(
-    sanitizeOffsets(existing?.offsets)
-  );
+  const [offsets, setOffsets] = useState<Offsets>({
+    ...defaultOffsets(),
+    ...(existing?.offsets || {}),
+  });
 
   useEffect(() => {
     async function hydrate() {
@@ -203,7 +198,10 @@ export default function Step4PrayerSettings({
             existing?.highLatitudeMode || existing?.highLatitudeMethod
           )
         );
-        setOffsets(sanitizeOffsets(existing?.offsets));
+
+        if (existing?.offsets && typeof existing.offsets === "object") {
+          setOffsets({ ...defaultOffsets(), ...existing.offsets });
+        }
         return;
       }
 
@@ -229,7 +227,10 @@ export default function Step4PrayerSettings({
         setHighLatitudeMode(
           normalizeHighLatitudeMode(s?.highLatitudeMethod)
         );
-        setOffsets(sanitizeOffsets(s?.globalOffsets));
+
+        if (s?.globalOffsets && typeof s.globalOffsets === "object") {
+          setOffsets({ ...defaultOffsets(), ...s.globalOffsets });
+        }
       } catch {
         // keep local defaults
       } finally {
@@ -240,34 +241,31 @@ export default function Step4PrayerSettings({
     void hydrate();
   }, [country]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    setCalculationMethod((prev) => normalizeMethod(prev, country, sect));
-  }, [sect, country]);
+  
+useEffect(() => {
+  setCalculationMethod((prev) => normalizeMethod(prev, country, sect));
+}, [sect, country]);
 
-  const calcMethodChoices = useMemo(() => {
-    if (sect === "SHIA") {
-      return [
-        { value: "jafari", label: "Jafari" },
-        { value: "tehran", label: "Tehran" },
-      ] as const;
-    }
 
+  
+const calcMethodChoices = useMemo(() => {
+  if (sect === "SHIA") {
     return [
-      { value: "isna", label: "ISNA (North America)" },
-      { value: "mwl", label: "Muslim World League" },
-      { value: "karachi", label: "Karachi" },
-      { value: "ummAlQura", label: "Umm Al-Qura" },
-      { value: "makkah", label: "Makkah" },
-      { value: "egypt", label: "Egyptian Survey" },
+      { value: "jafari", label: "Jafari" },
+      { value: "tehran", label: "Tehran" },
     ] as const;
-  }, [sect]);
+  }
 
-  const updateOffset = (prayer: PrayerName, rawValue: string) => {
-    setOffsets((prev) => ({
-      ...prev,
-      [prayer]: sanitizeNonNegativeOffset(rawValue),
-    }));
-  };
+  return [
+    { value: "isna", label: "ISNA (North America)" },
+    { value: "mwl", label: "Muslim World League" },
+    { value: "karachi", label: "Karachi" },
+    { value: "ummAlQura", label: "Umm Al-Qura" },
+    { value: "makkah", label: "Makkah" },
+    { value: "egypt", label: "Egyptian Survey" },
+  ] as const;
+}, [sect]);
+
 
   const handleContinue = async () => {
     setError(null);
@@ -278,7 +276,13 @@ export default function Step4PrayerSettings({
       return;
     }
 
-    const sanitizedOffsets = sanitizeOffsets(offsets);
+    const sanitizedOffsets: Offsets = {
+      fajr: sanitizeNonNegativeOffset(offsets.fajr),
+      dhuhr: sanitizeNonNegativeOffset(offsets.dhuhr),
+      asr: sanitizeNonNegativeOffset(offsets.asr),
+      maghrib: sanitizeNonNegativeOffset(offsets.maghrib),
+      isha: sanitizeNonNegativeOffset(offsets.isha),
+    };
 
     const nextPrayerSettings: PrayerSettingsData = {
       sect,
@@ -314,147 +318,79 @@ export default function Step4PrayerSettings({
       }
 
       navigate("/onboarding/step5");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Could not save prayer settings.");
+    } catch (e: any) {
+      setError(e?.message || "Could not save prayer settings.");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
-      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
-        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <Logo />
-            <ProgressIndicator currentStep={4} totalSteps={6} />
-          </div>
-        </div>
-      </div>
+    <div className="min-h-screen bg-slate-950 py-8 px-4">
+      <div className="max-w-5xl mx-auto">
+        <Logo className="mb-8" />
+        <ProgressIndicator currentStep={4} totalSteps={6} />
 
-      <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
-        <div className="mb-8 md:mb-10">
-          <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
-            Configure prayer times
-          </h1>
-          <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
-            Choose your calculation method and fine-tune settings to match your local mosque or community.
-          </p>
-        </div>
-
-        <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
-          {error && (
-            <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
-              <p className="text-red-300 text-sm leading-relaxed">{error}</p>
-            </div>
-          )}
-
-          {loading && (
-            <div className="mb-6 rounded-xl border border-slate-700/50 bg-slate-800/30 px-5 py-4">
-              <div className="flex items-center gap-3">
-                <svg className="w-4 h-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <p className="text-slate-300 text-sm">Loading your saved prayer settings...</p>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 md:p-12">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <Settings2 className="h-7 w-7 text-emerald-400" />
+                <h1 className="text-white">Prayer Settings</h1>
               </div>
+              <p className="text-slate-300">
+                Choose sect, calculation method, and offsets for accurate prayer times.
+              </p>
+            </div>
+            <Badge
+              variant="outline"
+              className="border-emerald-500/30 text-emerald-400"
+            >
+              Step 4 of 6
+            </Badge>
+          </div>
+
+          {(error || loading) && (
+            <div className="mb-6 text-sm rounded-md px-3 py-2 border border-slate-700 bg-slate-800/60 text-slate-200">
+              {error || "Loading your saved prayer settings..."}
             </div>
           )}
 
-          <div className="mb-8">
-            <h2 className="text-white text-base font-semibold mb-4">Basic settings</h2>
-
-            <div className="mb-6">
-              <Label className="text-white mb-3 block text-sm font-medium">Tradition</Label>
+          <div className="space-y-8">
+            <div className="space-y-4">
+              <Label className="text-white">Sect</Label>
               <RadioGroup
                 value={sect}
                 onValueChange={(value: string) => setSect(value as Sect)}
-                className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+                className="flex gap-6"
               >
-                <div className="relative">
-                  <RadioGroupItem value="SUNNI" id="sect-sunni" className="peer sr-only" />
-                  <Label
-                    htmlFor="sect-sunni"
-                    className={`flex items-center justify-between p-5 rounded-xl border-2 cursor-pointer transition-all ${
-                      sect === "SUNNI"
-                        ? "border-emerald-500/50 bg-emerald-500/10"
-                        : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`h-5 w-5 rounded-full border-2 flex items-center justify-center ${
-                          sect === "SUNNI" ? "border-emerald-500 bg-emerald-500" : "border-slate-600"
-                        }`}
-                      >
-                        {sect === "SUNNI" && (
-                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                            <path
-                              fillRule="evenodd"
-                              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-white font-medium">Sunni</div>
-                        <div className="text-slate-400 text-xs mt-0.5">Standard calculation methods</div>
-                      </div>
-                    </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="SUNNI" id="sect-sunni" />
+                  <Label htmlFor="sect-sunni" className="text-white cursor-pointer">
+                    Sunni
                   </Label>
                 </div>
-
-                <div className="relative">
-                  <RadioGroupItem value="SHIA" id="sect-shia" className="peer sr-only" />
-                  <Label
-                    htmlFor="sect-shia"
-                    className={`flex items-center justify-between p-5 rounded-xl border-2 cursor-pointer transition-all ${
-                      sect === "SHIA"
-                        ? "border-emerald-500/50 bg-emerald-500/10"
-                        : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`h-5 w-5 rounded-full border-2 flex items-center justify-center ${
-                          sect === "SHIA" ? "border-emerald-500 bg-emerald-500" : "border-slate-600"
-                        }`}
-                      >
-                        {sect === "SHIA" && (
-                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                            <path
-                              fillRule="evenodd"
-                              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-white font-medium">Shia</div>
-                        <div className="text-slate-400 text-xs mt-0.5">Jafari calculation methods</div>
-                      </div>
-                    </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="SHIA" id="sect-shia" />
+                  <Label htmlFor="sect-shia" className="text-white cursor-pointer">
+                    Shia
                   </Label>
                 </div>
               </RadioGroup>
             </div>
 
-            <div className="mb-6">
-              <Label className="text-white mb-2 block text-sm font-medium">
-                Calculation method
-              </Label>
+            <div className="space-y-3">
+              <Label className="text-white">Calculation Method</Label>
               <Select
                 value={calculationMethod}
                 onValueChange={(value: string) =>
                   setCalculationMethod(value as PrayerMethod)
                 }
               >
-                <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                   <SelectValue placeholder="Select calculation method" />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                <SelectContent>
                   {calcMethodChoices.map((m) => (
                     <SelectItem key={m.value} value={m.value}>
                       {m.label}
@@ -462,167 +398,99 @@ export default function Step4PrayerSettings({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="mt-2 text-xs text-slate-500">
-                {sect === "SUNNI"
-                  ? "Different regions use different angle calculations for Fajr and Isha."
-                  : "Choose between Jafari or Tehran calculation methods."}
-              </p>
             </div>
 
-            {sect === "SUNNI" && (
-              <div>
-                <Label className="text-white mb-2 block text-sm font-medium">
-                  Madhhab (Asr calculation)
-                </Label>
+            <div className="space-y-3">
+              <Label className="text-white">Madhhab (Asr method)</Label>
+              {sect === "SHIA" ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-sm text-slate-300">
+                  Shia mode uses Shia timing rules. The Sunni Asr madhhab selector is hidden here so the sect options stay clean.
+                </div>
+              ) : (
                 <Select
                   value={madhhab}
                   onValueChange={(value: string) =>
                     setMadhhab(value as "hanafi" | "shafi")
                   }
                 >
-                  <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                  <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                     <SelectValue placeholder="Select madhhab" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                  <SelectContent>
                     <SelectItem value="hanafi">Hanafi (later Asr)</SelectItem>
                     <SelectItem value="shafi">Shafi / Standard</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="mt-2 text-xs text-slate-500">
-                  Hanafi calculates Asr when shadow length equals object height + noon shadow.
-                </p>
-              </div>
-            )}
+              )}
+            </div>
 
-            {sect === "SHIA" && (
-              <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-                <p className="text-sm text-slate-300 leading-relaxed">
-                  Shia prayer times use Jafari jurisprudence. The Asr madhhab option only applies to Sunni calculations.
-                </p>
-              </div>
-            )}
-          </div>
-
-          <details className="group mb-8">
-            <summary className="flex items-center justify-between cursor-pointer p-4 rounded-xl border border-slate-700/60 bg-slate-800/30 hover:bg-slate-800/50 transition-colors">
-              <div className="flex items-center gap-3">
-                <Settings2 className="w-5 h-5 text-emerald-400" />
-                <div>
-                  <div className="text-white font-semibold">Advanced settings</div>
-                  <div className="text-slate-400 text-sm">High latitude rules and time offsets</div>
-                </div>
-              </div>
-              <svg
-                className="w-5 h-5 text-slate-400 transition-transform group-open:rotate-180"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
+            <div className="space-y-3">
+              <Label className="text-white">High Latitude Rule</Label>
+              <Select
+                value={highLatitudeMode}
+                onValueChange={(value: string) =>
+                  setHighLatitudeMode(value as HighLatitudeMode)
+                }
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </summary>
-
-            <div className="mt-4 space-y-6 p-5 rounded-xl border border-slate-700/50 bg-slate-800/20">
-              <div>
-                <Label className="text-white mb-2 block text-sm font-medium">
-                  High latitude rule
-                </Label>
-                <Select
-                  value={highLatitudeMode}
-                  onValueChange={(value: string) =>
-                    setHighLatitudeMode(value as HighLatitudeMode)
-                  }
-                >
-                  <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
-                    <SelectValue placeholder="Select high latitude rule" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
-                    <SelectItem value="automatic">Automatic</SelectItem>
-                    <SelectItem value="middle_of_the_night">
-                      Middle of the Night
-                    </SelectItem>
-                    <SelectItem value="one_seventh">One Seventh</SelectItem>
-                    <SelectItem value="angle_based">Angle Based</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-xs text-slate-500">
-                  Only relevant for locations above 48° latitude where twilight doesn&apos;t occur.
-                </p>
-              </div>
-
-              <div>
-                <div className="mb-4">
-                  <div className="text-white font-medium mb-1">Prayer time adjustments</div>
-                  <p className="text-slate-400 text-sm leading-relaxed">
-                    Add minutes to each prayer time to match your local mosque or community.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {PRAYERS.map((p) => (
-                    <div
-                      key={p}
-                      className="flex items-center justify-between gap-3 p-3 rounded-lg bg-slate-800/40 border border-slate-700/40"
-                    >
-                      <Label className="text-slate-200 capitalize font-medium text-sm">
-                        {p}
-                      </Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          min={0}
-                          step={1}
-                          inputMode="numeric"
-                          className="w-20 bg-slate-900/60 border-slate-700/60 text-white h-9 text-center"
-                          value={offsets[p]}
-                          onChange={(e) => updateOffset(p, e.target.value)}
-                          onBlur={(e) => updateOffset(p, e.target.value)}
-                        />
-                        <span className="text-slate-500 text-xs">min</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-3 text-xs text-slate-500">
-                  Offsets cannot be negative. These values are saved and used consistently across your app.
-                </p>
-              </div>
+                <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
+                  <SelectValue placeholder="Select high latitude rule" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="automatic">Automatic</SelectItem>
+                  <SelectItem value="middle_of_the_night">
+                    Middle of the Night
+                  </SelectItem>
+                  <SelectItem value="one_seventh">One Seventh</SelectItem>
+                  <SelectItem value="angle_based">Angle Based</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </details>
 
-          <div className="mb-8 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-            <div className="flex items-start gap-3">
-              <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
-                <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <div className="text-white text-sm font-medium mb-1">
-                  These settings are saved to your account
-                </div>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  You can adjust these anytime from the Settings page after completing onboarding.
-                </p>
+            <div className="border-t border-slate-800 pt-6">
+              <h2 className="text-white text-lg mb-2">Timing offsets (minutes)</h2>
+              <p className="text-slate-400 text-sm mb-4">
+                These offsets stay attached to your saved sect and calculation setup.
+              </p>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                {PRAYERS.map((p) => (
+                  <div key={p} className="flex items-center justify-between gap-3">
+                    <Label className="text-slate-200 capitalize">{p}</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={1}
+                      className="w-28 bg-slate-800 border-slate-700 text-white"
+                      value={offsets[p]}
+                      onChange={(e) => {
+                        const nextValue = Math.max(0, Number(e.target.value || 0));
+                        setOffsets((prev) => ({
+                          ...prev,
+                          [p]: nextValue,
+                        }));
+                      }}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex justify-between mt-12">
             <Button
               variant="outline"
               onClick={() => navigate("/onboarding/step3")}
-              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11"
+              className="border-slate-700 text-white hover:bg-slate-800"
               disabled={saving}
             >
               Back
             </Button>
             <Button
               onClick={handleContinue}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium"
+              className="bg-emerald-600 hover:bg-emerald-700"
               disabled={saving}
             >
-              {saving ? "Saving settings…" : "Continue to devices"}
+              {saving ? "Saving…" : "Save & Continue"}
             </Button>
           </div>
         </div>
