@@ -71,6 +71,7 @@ type UserSettings = {
   mosqueLat?: number | null;
   mosqueLng?: number | null;
   selectedAlexaDeviceIds?: string[];
+  quietDown: QuietDownPolicy;
   accountEnabled: boolean;
   globalOffsets: Offsets;
   prayerConfigs: PrayerConfig[];
@@ -1127,7 +1128,7 @@ export default function Settings({
                               </div>
                               <Checkbox
                                 checked={checked}
-                                onCheckedChange={(value) =>
+                                onCheckedChange={(value: boolean | "indeterminate") =>
                                   toggleSelectedDevice(device.id, value === true)
                                 }
                               />
