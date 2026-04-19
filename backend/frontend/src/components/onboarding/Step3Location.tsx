@@ -40,6 +40,8 @@ type CountryOption = {
   label: string;
 };
 
+const DEVICE_LOCATION_MAX_ACCURACY_METERS = 250;
+
 const COUNTRIES: CountryOption[] = [
   { code: "US", label: "United States" },
   { code: "CA", label: "Canada" },
@@ -284,9 +286,9 @@ export default function Step3Location({
           ? Math.round(position.coords.accuracy)
           : null;
 
-      if (accuracyMeters != null && accuracyMeters > 1000) {
+      if (accuracyMeters != null && accuracyMeters > DEVICE_LOCATION_MAX_ACCURACY_METERS) {
         setGeocodeError(
-          `Your device location is currently too approximate (±${accuracyMeters}m). Turn on precise location or enter your city manually.`
+          `Your device location is currently too approximate (±${accuracyMeters}m). Turn on precise location or enter your city manually before saving coordinates.`
         );
         return;
       }
@@ -329,7 +331,9 @@ export default function Step3Location({
       setResolvedMessage(
         `Using device location${
           data?.formatted ? ` · ${data.formatted}` : ""
-        } · ${lat.toFixed(5)}, ${lng.toFixed(5)}`
+        } · ${lat.toFixed(5)}, ${lng.toFixed(5)}${
+          accuracyMeters != null ? ` · Accuracy ±${accuracyMeters}m` : ""
+        }`
       );
     } catch (err) {
       console.error(err);
