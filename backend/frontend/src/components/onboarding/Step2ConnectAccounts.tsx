@@ -7,7 +7,7 @@ import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { AlexaIcon, GoogleIcon } from "../shared/BrandIcons";
 import {
-  apiFetch,
+  apiFetchWithAmazonRepair,
   clearStoredAmazonToken,
   getStoredAmazonToken,
   restoreAmazonTokenFromUrl,
@@ -200,7 +200,7 @@ export default function Step2ConnectAccounts({
     }
 
     try {
-      const resp = await apiFetch("/api/integrations");
+      const resp = await apiFetchWithAmazonRepair("/api/integrations");
       if (!resp.ok) {
         if (resp.status === 401) {
           clearStoredAmazonToken();
@@ -230,7 +230,7 @@ export default function Step2ConnectAccounts({
     }
 
     try {
-      const resp = await apiFetch("/api/alexa/account-linking/status");
+      const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/status");
       if (!resp.ok) return;
       const data = (await resp.json()) as AlexaLinkStatus;
       setAlexaStatus(data);
@@ -240,7 +240,7 @@ export default function Step2ConnectAccounts({
   }
 
   async function completeAlexaLogin(accessToken: string) {
-    const linkRes = await apiFetch("/api/integrations/alexa/login", {
+    const linkRes = await apiFetchWithAmazonRepair("/api/integrations/alexa/login", {
       method: "POST",
       body: JSON.stringify({ accessToken }),
     });
@@ -276,7 +276,7 @@ export default function Step2ConnectAccounts({
 
     cleanCurrentUrl();
 
-    const resp = await apiFetch("/api/alexa/account-linking/complete", {
+    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/complete", {
       method: "POST",
       body: JSON.stringify({
         code,
@@ -423,7 +423,7 @@ export default function Step2ConnectAccounts({
   try {
     const redirectUri = currentAlexaLinkUrl();
 
-    const resp = await apiFetch("/api/alexa/account-linking/start", {
+    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/start", {
       method: "POST",
       body: JSON.stringify({ redirectUri }),
     });
@@ -455,7 +455,7 @@ export default function Step2ConnectAccounts({
     setLoadingKey("alexa");
 
     try {
-      await apiFetch("/api/integrations/alexa/disconnect", {
+      await apiFetchWithAmazonRepair("/api/integrations/alexa/disconnect", {
         method: "POST",
       }).catch(() => undefined);
 
