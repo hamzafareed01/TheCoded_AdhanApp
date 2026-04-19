@@ -40,6 +40,7 @@ app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }
 // -----------------------------
 // Constants
 // -----------------------------
+// re-trigger deploy for update....delete later
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
@@ -340,7 +341,7 @@ const corsOptions = {
 
     return cb(new Error("CORS blocked for origin: " + origin), false);
   },
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204,
 };
@@ -383,8 +384,8 @@ function getBearerToken(req) {
 
 function getAmazonTokenFromRequest(req) {
   return (
-    String(req.body?.accessToken || req.body?.access_token || "").trim() ||
-    getBearerToken(req)
+    getBearerToken(req) ||
+    String(req.body?.accessToken || req.body?.access_token || "").trim()
   );
 }
 
@@ -1648,6 +1649,33 @@ function parseStringArray(value) {
   return [];
 }
 
+function clampQuietVolumePercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 20;
+  return Math.min(80, Math.max(5, Math.trunc(n)));
+}
+
+function normalizeQuietDownStrategy(value) {
+  return String(value || "").trim().toLowerCase() === "mute" ? "mute" : "lower";
+}
+
+function inferAlexaDeviceFamily(deviceName, platform) {
+  const haystack = `${String(deviceName || "")} ${String(platform || "")}`.toLowerCase();
+  if (/fire\s*tv|firetv/.test(haystack)) return "fire_tv";
+  if (/echo\s*show/.test(haystack)) return "echo_show";
+  if (/echo|dot|studio|spot|pop|tap|input|auto/.test(haystack)) return "echo";
+  if (/tv/.test(haystack)) return "tv";
+  return "unknown";
+}
+
+function formatAlexaDeviceFamilyLabel(value) {
+  if (value === "fire_tv") return "Fire TV";
+  if (value === "echo_show") return "Echo Show";
+  if (value === "echo") return "Echo";
+  if (value === "tv") return "TV";
+  return "Alexa";
+}
+
 function resolveTimingSource(profile) {
   const hasUserCoords =
     typeof profile.latitude === "number" &&
@@ -1964,6 +1992,16 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
     accountEnabled: !!profile.account_enabled,
     selectedAlexaDeviceIds: parseStringArray(profile.selected_alexa_device_ids_json),
     quietHours,
+    quietDown: {
+      enabled: !!profile.quiet_down_enabled,
+      strategy: normalizeQuietDownStrategy(profile.quiet_down_strategy),
+      targetVolumePct: clampQuietVolumePercent(profile.quiet_down_target_volume_pct),
+      restoreAfter: profile.quiet_down_restore !== false,
+      includeFireTv: !!profile.quiet_down_include_fire_tv,
+      mode: "policy_only",
+      note:
+        "Current AdhanCast custom-skill playback can save and enforce your quiet-down policy, but actual device-wide volume changes require separate Alexa smart-home or video device integration.",
+    },
     globalOffsets: {
       fajr: profile.offset_fajr || 0,
       dhuhr: profile.offset_dhuhr || 0,
@@ -2235,8 +2273,17 @@ app.get(
       }
     }
 
+    const session = createAppSessionToken({
+      userId,
+      amazonUserId: p.user_id,
+      displayName: p.name || null,
+      email: p.email || null,
+    });
+
     res.json({
       userKey: p.user_id,
+      sessionToken: session.token,
+      sessionExpiresAt: session.expiresAt,
       amazon: {
         connected: true,
         email: p.email || null,
@@ -2862,7 +2909,6 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
-        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -3233,6 +3279,29 @@ async function handleSaveUserSettings(req, res) {
     ? parseStringArray(body.selectedAlexaDeviceIds ?? body.selectedDeviceIds)
     : undefined;
 
+  const quietDownSource = isObject(body.quietDown)
+    ? body.quietDown
+    : isObject(body.quietDownPolicy)
+      ? body.quietDownPolicy
+      : null;
+
+  const hasQuietDown = !!quietDownSource;
+  const quietDownEnabled = hasQuietDown
+    ? (quietDownSource.enabled === true ? 1 : 0)
+    : null;
+  const quietDownStrategy = hasQuietDown
+    ? normalizeQuietDownStrategy(quietDownSource.strategy)
+    : null;
+  const quietDownTargetVolumePct = hasQuietDown
+    ? clampQuietVolumePercent(quietDownSource.targetVolumePct)
+    : null;
+  const quietDownRestore = hasQuietDown
+    ? (quietDownSource.restoreAfter === false ? 0 : 1)
+    : null;
+  const quietDownIncludeFireTv = hasQuietDown
+    ? (quietDownSource.includeFireTv === true ? 1 : 0)
+    : null;
+
   const offsets = parseOffsetsFromBody(body, {
     fajr: currentProfile.offset_fajr || 0,
     dhuhr: currentProfile.offset_dhuhr || 0,
@@ -3332,6 +3401,12 @@ async function handleSaveUserSettings(req, res) {
     sql.Bit,
     hasSelectedAlexaDeviceIds ? 1 : 0
   );
+  profileReq.input("set_quiet_down", sql.Bit, hasQuietDown ? 1 : 0);
+  profileReq.input("quiet_down_enabled", sql.Bit, quietDownEnabled);
+  profileReq.input("quiet_down_strategy", sql.NVarChar(16), quietDownStrategy);
+  profileReq.input("quiet_down_target_volume_pct", sql.Int, quietDownTargetVolumePct);
+  profileReq.input("quiet_down_restore", sql.Bit, quietDownRestore);
+  profileReq.input("quiet_down_include_fire_tv", sql.Bit, quietDownIncludeFireTv);
   profileReq.input(
     "mosque_lng",
     sql.Float,
@@ -3358,6 +3433,11 @@ async function handleSaveUserSettings(req, res) {
       mosque_lat = CASE WHEN @set_mosque_lat = 1 THEN @mosque_lat ELSE mosque_lat END,
       mosque_lng = CASE WHEN @set_mosque_lng = 1 THEN @mosque_lng ELSE mosque_lng END,
       selected_alexa_device_ids_json = CASE WHEN @set_selected_alexa_device_ids_json = 1 THEN @selected_alexa_device_ids_json ELSE selected_alexa_device_ids_json END,
+      quiet_down_enabled = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_enabled, quiet_down_enabled) ELSE quiet_down_enabled END,
+      quiet_down_strategy = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_strategy, quiet_down_strategy) ELSE quiet_down_strategy END,
+      quiet_down_target_volume_pct = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_target_volume_pct, quiet_down_target_volume_pct) ELSE quiet_down_target_volume_pct END,
+      quiet_down_restore = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_restore, quiet_down_restore) ELSE quiet_down_restore END,
+      quiet_down_include_fire_tv = CASE WHEN @set_quiet_down = 1 THEN COALESCE(@quiet_down_include_fire_tv, quiet_down_include_fire_tv) ELSE quiet_down_include_fire_tv END,
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -3526,7 +3606,6 @@ async function handleSaveUserSettings(req, res) {
 }
 
 app.put("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
-app.patch("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 app.post("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 
 // Prayer times
@@ -3681,7 +3760,16 @@ app.get(
         ORDER BY device_name
       `);
 
-    res.json({ devices: result.recordset });
+    res.json({
+      devices: result.recordset.map((row) => {
+        const family = inferAlexaDeviceFamily(row.id || row.device_id, row.platform || row.device_name || row.name);
+        return {
+          ...row,
+          family,
+          familyLabel: formatAlexaDeviceFamilyLabel(family),
+        };
+      }),
+    });
   })
 );
 
@@ -3854,14 +3942,13 @@ app.use((err, req, res, next) => {
   console.error(err);
   if (res.headersSent) return next(err);
 
-  const status = Number(err?.status || err?.statusCode || 500);
+  const status = Number(err?.status || 500);
   res.status(status).json({
     error: String(err?.message || err || "Internal server error"),
-    code: typeof err?.code === "string" ? err.code : undefined,
   });
 });
 
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
-  console.log(`AdhanCast API listening on ${port}`);
+  console.log(`AdhanHome API listening on ${port}`);
 });
