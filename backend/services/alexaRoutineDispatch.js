@@ -8,6 +8,15 @@ let recitersCache = null;
 let duasCache = null;
 let parsedAudioMap = null;
 
+function createAlexaSkillError(statusCode, code, message, extra = {}) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  err.code = code;
+  Object.assign(err, extra);
+  return err;
+}
+
+
 function readJson(relativePath) {
   const full = path.join(__dirname, '..', relativePath);
   return JSON.parse(fs.readFileSync(full, 'utf8'));
@@ -40,7 +49,7 @@ function readDuas() {
 }
 
 function getSkillInvocationName() {
-  return String(process.env.ALEXA_SKILL_INVOCATION_NAME || 'adhan home').trim();
+  return String(process.env.ALEXA_SKILL_INVOCATION_NAME || 'adhan cast').trim();
 }
 
 function getPublicApiBase(req) {
@@ -123,6 +132,26 @@ function resolveAudioUrl(req, reciterId) {
   return makeAbsoluteUrl(req, '/audio/adhan_makkah_sudais.mp3');
 }
 
+function getSurahAudioEdition() {
+  const value = String(process.env.ADHAN_QURAN_SURAH_AUDIO_EDITION || 'ar.alafasy').trim();
+  return value || 'ar.alafasy';
+}
+
+function getSurahAudioBitrate() {
+  const value = String(process.env.ADHAN_QURAN_SURAH_AUDIO_BITRATE || '128').trim();
+  return ['192', '128', '64', '48', '40', '32'].includes(value) ? value : '128';
+}
+
+function resolveSurahAudioUrl(surahNumber) {
+  const n = Number(surahNumber);
+  if (!Number.isInteger(n) || n < 1 || n > 114) return '';
+
+  const edition = getSurahAudioEdition();
+  const bitrate = getSurahAudioBitrate();
+
+  return `https://cdn.islamic.network/quran/audio-surah/${bitrate}/${edition}/${n}.mp3`;
+}
+
 function findDua(duaId) {
   const wanted = normalizeId(duaId);
   if (!wanted) return null;
@@ -138,6 +167,25 @@ function findDua(duaId) {
   );
 }
 
+function parseStringArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeAfterPayload(value) {
   if (!value) return null;
   if (typeof value === 'object') return value;
@@ -151,22 +199,44 @@ function normalizeAfterPayload(value) {
 }
 
 function enrichAfterPayload(req, afterType, afterPayload) {
-  if (afterType !== 'dua' || !afterPayload || typeof afterPayload !== 'object') {
+  if (!afterPayload || typeof afterPayload !== 'object') {
     return afterPayload;
   }
 
-  const duaId = afterPayload.duaId || afterPayload.id;
-  const dua = findDua(duaId);
-  if (!dua) return afterPayload;
+  if (afterType === 'dua') {
+    const duaId = afterPayload.duaId || afterPayload.id;
+    const dua = findDua(duaId);
+    if (!dua) return afterPayload;
 
-  return {
-    ...afterPayload,
-    duaId: afterPayload.duaId || dua.id,
-    id: afterPayload.id || dua.id,
-    title: afterPayload.title || dua.title,
-    translation: afterPayload.translation || dua.translation || null,
-    audioUrl: afterPayload.audioUrl || makeAbsoluteUrl(req, dua.audioUrl || dua.audioPath || dua.audio),
-  };
+    return {
+      ...afterPayload,
+      duaId: afterPayload.duaId || dua.id,
+      id: afterPayload.id || dua.id,
+      title: afterPayload.title || dua.title,
+      translation: afterPayload.translation || dua.translation || null,
+      audioUrl:
+        afterPayload.audioUrl ||
+        makeAbsoluteUrl(req, dua.audioUrl || dua.audioPath || dua.audio),
+    };
+  }
+
+  if (afterType === 'surah') {
+    const surahNumber = Number(afterPayload.surahNumber || afterPayload.number);
+    if (!Number.isInteger(surahNumber) || surahNumber < 1 || surahNumber > 114) {
+      return afterPayload;
+    }
+
+    return {
+      ...afterPayload,
+      surahNumber,
+      number: afterPayload.number || surahNumber,
+      title: afterPayload.title || `Surah ${surahNumber}`,
+      nameEnglish: afterPayload.nameEnglish || afterPayload.title || `Surah ${surahNumber}`,
+      audioUrl: afterPayload.audioUrl || resolveSurahAudioUrl(surahNumber),
+    };
+  }
+
+  return afterPayload;
 }
 
 function buildAfterAdhanLabel(afterType, afterPayload) {
@@ -191,35 +261,55 @@ function buildRoutineTemplates() {
       id: prayerName,
       prayerName,
       title,
-      routineName: `Adhan Home – ${title}`,
+      routineName: `Adhan Cast – ${title}`,
       phrase: `open ${invocationName} and play ${prayerName} adhan`,
     };
   });
 }
 
 async function resolvePrayerPlaybackPlan(pool, params) {
-  const { userId, prayerName, req } = params;
+  const { userId, prayerName, req, deviceId } = params;
   const normalizedPrayer = String(prayerName || '').trim().toLowerCase();
   if (!PRAYERS.includes(normalizedPrayer)) {
-    const err = new Error('Unsupported prayer name.');
-    err.status = 400;
-    throw err;
+    throw createAlexaSkillError(400, 'UNSUPPORTED_PRAYER', 'Unsupported prayer name.');
   }
 
   const profileResult = await pool
     .request()
     .input('user_id', sql.UniqueIdentifier, userId)
     .query(`
-      SELECT TOP 1 account_enabled, city, country, timezone, mosque_name, calculation_method, madhhab, sect
+      SELECT TOP 1 account_enabled, city, country, timezone, mosque_name, calculation_method, madhhab, sect,
+        selected_alexa_device_ids_json
       FROM dbo.user_profiles
       WHERE user_id = @user_id
     `);
 
   const profile = profileResult.recordset[0] || {};
   if (!profile.account_enabled) {
-    const err = new Error('Account playback is disabled for this user.');
-    err.status = 403;
-    throw err;
+    throw createAlexaSkillError(
+      403,
+      'AUTOMATION_DISABLED',
+      'Account playback is disabled for this user.'
+    );
+  }
+  const selectedDeviceIds = parseStringArray(profile.selected_alexa_device_ids_json);
+  const normalizedDeviceId = String(deviceId || '').trim();
+  if (selectedDeviceIds.length > 0) {
+    if (!normalizedDeviceId) {
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.'
+      );
+    }
+
+    if (!selectedDeviceIds.includes(normalizedDeviceId)) {
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa device is not enabled in your AdhanCast settings.'
+      );
+    }
   }
 
   const prayerResult = await pool
@@ -234,9 +324,11 @@ async function resolvePrayerPlaybackPlan(pool, params) {
 
   const prayerRow = prayerResult.recordset[0] || null;
   if (!prayerRow || prayerRow.enabled === false) {
-    const err = new Error('This prayer is disabled for playback.');
-    err.status = 409;
-    throw err;
+    throw createAlexaSkillError(
+      409,
+      'PRAYER_DISABLED',
+      'This prayer is disabled for playback.'
+    );
   }
 
   const reciterId = prayerRow.adhan_reciter_id || 'abdul_rahman_al_sudais';
@@ -249,12 +341,21 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     ? `Playing ${prayerLabel} Adhan, followed by ${afterLabel}.`
     : `Playing ${prayerLabel} Adhan now.`;
 
+  const audioUrl = resolveAudioUrl(req, reciterId);
+  if (!audioUrl) {
+    throw createAlexaSkillError(
+      409,
+      'AUDIO_NOT_AVAILABLE',
+      'No audio URL could be resolved for the selected reciter.'
+    );
+  }
+
   return {
     prayerName: normalizedPrayer,
     prayerLabel,
     reciterId,
     reciterName: reciter?.name || reciterId,
-    audioUrl: resolveAudioUrl(req, reciterId),
+    audioUrl,
     speechText,
     cardTitle: `${prayerLabel} Adhan`,
     cardText: afterLabel
@@ -274,6 +375,8 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       calculationMethod: profile.calculation_method || 'isna',
       madhhab: profile.madhhab || 'hanafi',
       sect: profile.sect || 'SUNNI',
+      selectedDeviceIds,
+      requestedDeviceId: normalizedDeviceId || null,
     },
   };
 }

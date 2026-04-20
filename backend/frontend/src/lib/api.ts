@@ -1,6 +1,3 @@
-//ignore this comment line
-// src/lib/api.ts
-
 function normalizeBase(base: string): string {
   const b = (base || "").trim();
   if (!b) return "";
@@ -22,6 +19,7 @@ const isAzureStaticApps = host.endsWith("azurestaticapps.net");
 
 const TOKEN_KEY = "amazon_access_token";
 const AUTH_EVENT = "amazon-auth-changed";
+const APP_SESSION_PREFIX = "adhapp_";
 
 export const API_BASE =
   normalizeBase(envBase) || (!isLocal && isAzureStaticApps ? FALLBACK_PROD_API : "");
@@ -35,19 +33,38 @@ export function getApiUrl(path: string): string {
 
 export const apiUrl = getApiUrl;
 
-export function getStoredAmazonToken(): string | null {
+function readTokenFromStorage(): string | null {
   if (!isBrowser) return null;
-  return (
-    localStorage.getItem(TOKEN_KEY) ||
-    sessionStorage.getItem(TOKEN_KEY) ||
-    null
-  );
+
+  const sessionToken = sessionStorage.getItem(TOKEN_KEY);
+  if (sessionToken) return sessionToken;
+
+  const localToken = localStorage.getItem(TOKEN_KEY);
+  if (localToken) {
+    sessionStorage.setItem(TOKEN_KEY, localToken);
+    return localToken;
+  }
+
+  return null;
+}
+
+function writeTokenToStorage(token: string) {
+  if (!isBrowser) return;
+  sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+function isAppSessionToken(token: string | null): boolean {
+  return typeof token === "string" && token.startsWith(APP_SESSION_PREFIX);
+}
+
+export function getStoredAmazonToken(): string | null {
+  return readTokenFromStorage();
 }
 
 export function setStoredAmazonToken(token: string) {
   if (!isBrowser) return;
-  localStorage.setItem(TOKEN_KEY, token);
-  sessionStorage.setItem(TOKEN_KEY, token);
+  writeTokenToStorage(token);
   window.dispatchEvent(new Event(AUTH_EVENT));
 }
 
@@ -99,11 +116,13 @@ export function subscribeToAmazonAuthChanges(callback: () => void) {
   window.addEventListener(AUTH_EVENT, handler);
   window.addEventListener("storage", handler);
   window.addEventListener("focus", handler);
+  document.addEventListener("visibilitychange", handler);
 
   return () => {
     window.removeEventListener(AUTH_EVENT, handler);
     window.removeEventListener("storage", handler);
     window.removeEventListener("focus", handler);
+    document.removeEventListener("visibilitychange", handler);
   };
 }
 
@@ -134,4 +153,30 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
     credentials,
     mode: "cors",
   });
+}
+
+export async function apiFetchWithAmazonRepair(
+  path: string,
+  init: RequestInit = {}
+) {
+  const response = await apiFetch(path, init);
+  if (response.status !== 401) {
+    return response;
+  }
+
+  const storedToken = getStoredAmazonToken();
+  if (!storedToken) {
+    return response;
+  }
+
+  if (isAppSessionToken(storedToken)) {
+    return response;
+  }
+
+  const repairedToken = restoreAmazonTokenFromUrl();
+  if (repairedToken && repairedToken !== storedToken) {
+    return apiFetch(path, init);
+  }
+
+  return response;
 }
