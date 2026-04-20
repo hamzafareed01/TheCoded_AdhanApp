@@ -8,6 +8,7 @@ import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { AlexaIcon, GoogleIcon } from "../shared/BrandIcons";
 import {
   apiFetch,
+  apiFetchWithAmazonRepair,
   clearStoredAmazonToken,
   getStoredAmazonToken,
   restoreAmazonTokenFromUrl,
@@ -197,13 +198,12 @@ export default function Step2ConnectAccounts({
     }
 
     try {
-      const resp = await apiFetch("/api/integrations");
+      const resp = await apiFetchWithAmazonRepair("/api/integrations");
+
       if (!resp.ok) {
         if (resp.status === 401) {
-          clearStoredAmazonToken();
-          clearPendingAlexaLink();
-          markDisconnected("alexa");
           setServerStatus(null);
+          setError("Your Amazon session expired. Please reconnect Amazon.");
         }
         return;
       }
@@ -218,7 +218,6 @@ export default function Step2ConnectAccounts({
       setServerStatus(null);
     }
   }
-
   async function refreshAlexaLinkStatus() {
     const token = getStoredAmazonToken();
     if (!token) {
@@ -227,8 +226,15 @@ export default function Step2ConnectAccounts({
     }
 
     try {
-      const resp = await apiFetch("/api/alexa/account-linking/status");
-      if (!resp.ok) return;
+      const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/status");
+
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          setAlexaStatus(null);
+        }
+        return;
+      }
+
       const data = (await resp.json()) as AlexaLinkStatus;
       setAlexaStatus(data);
     } catch {
@@ -405,43 +411,43 @@ export default function Step2ConnectAccounts({
   }
 
   async function startAlexaSkillLinking() {
-  setError(null);
-  setInfo(null);
-  setLoadingKey("alexa");
+    setError(null);
+    setInfo(null);
+    setLoadingKey("alexa");
 
-  if (!getStoredAmazonToken()) {
-    setLoadingKey(null);
-    setError("Connect your Amazon account first.");
-    return;
-  }
-
-  try {
-    const redirectUri = currentAlexaLinkUrl();
-
-    const resp = await apiFetch("/api/alexa/account-linking/start", {
-      method: "POST",
-      body: JSON.stringify({ redirectUri }),
-    });
-
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => "");
-      throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+    if (!getStoredAmazonToken()) {
+      setLoadingKey(null);
+      setError("Connect your Amazon account first.");
+      return;
     }
 
-    const data = (await resp.json()) as AlexaLinkStartResponse;
+    try {
+      const redirectUri = currentAlexaLinkUrl();
 
-    storePendingAlexaLink({
-      state: data.state,
-      codeVerifier: data.codeVerifier,
-      redirectUri: data.redirectUri,
-      startedAt: Date.now(),
-    });
+      const resp = await apiFetch("/api/alexa/account-linking/start", {
+        method: "POST",
+        body: JSON.stringify({ redirectUri }),
+      });
 
-    window.location.assign(data.authorizationUrl);
-  } catch (e: unknown) {
-    setLoadingKey(null);
-    setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
-  }
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => "");
+        throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+      }
+
+      const data = (await resp.json()) as AlexaLinkStartResponse;
+
+      storePendingAlexaLink({
+        state: data.state,
+        codeVerifier: data.codeVerifier,
+        redirectUri: data.redirectUri,
+        startedAt: Date.now(),
+      });
+
+      window.location.assign(data.authorizationUrl);
+    } catch (e: unknown) {
+      setLoadingKey(null);
+      setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
+    }
   }
 
   async function disconnectAlexa() {
@@ -553,12 +559,12 @@ export default function Step2ConnectAccounts({
               <div
                 key={platform.key}
                 className={`rounded-2xl border p-5 shadow-sm transition ${disabled
-                    ? "border-border/50 bg-card/60 opacity-70"
-                    : linked
-                      ? "border-emerald-500/40 bg-emerald-500/5"
-                      : serverConnected
-                        ? "border-sky-500/40 bg-sky-500/5"
-                        : "border-border bg-card"
+                  ? "border-border/50 bg-card/60 opacity-70"
+                  : linked
+                    ? "border-emerald-500/40 bg-emerald-500/5"
+                    : serverConnected
+                      ? "border-sky-500/40 bg-sky-500/5"
+                      : "border-border bg-card"
                   }`}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">

@@ -40,7 +40,6 @@ app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }
 // -----------------------------
 // Constants
 // -----------------------------
-// re-trigger deploy for update....delete later
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
@@ -212,6 +211,97 @@ async function getHadithOfDay(sectValue, date = new Date()) {
 }
 
 const tokenCache = new Map(); // token -> { profile, exp }
+const APP_SESSION_PREFIX = "adhapp";
+const APP_SESSION_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.APP_SESSION_TTL_MS || 7 * 24 * 60 * 60 * 1000) ||
+    7 * 24 * 60 * 60 * 1000
+);
+
+function getAppSessionSecret() {
+  return String(
+    process.env.APP_SESSION_SECRET ||
+      process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
+      process.env.ALEXA_APP_LINK_STATE_SECRET ||
+      "adhancast-app-session-secret"
+  );
+}
+
+function createAppSessionToken(params) {
+  const payload = {
+    userId: String(params.userId || "").trim(),
+    amazonUserId: String(params.amazonUserId || "").trim(),
+    displayName: params.displayName ? String(params.displayName).trim() : null,
+    email: params.email ? String(params.email).trim() : null,
+    ts: Date.now(),
+    exp: Date.now() + APP_SESSION_TTL_MS,
+    nonce: crypto.randomBytes(12).toString("hex"),
+  };
+
+  const encoded = base64UrlEncode(JSON.stringify(payload));
+  const signature = crypto
+    .createHmac("sha256", getAppSessionSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  return {
+    token: `${APP_SESSION_PREFIX}_${encoded}.${signature}`,
+    expiresAt: new Date(payload.exp).toISOString(),
+  };
+}
+
+function verifyAppSessionToken(token) {
+  const raw = String(token || "").trim();
+  const prefix = `${APP_SESSION_PREFIX}_`;
+
+  if (!raw.startsWith(prefix)) {
+    return null;
+  }
+
+  const body = raw.slice(prefix.length);
+  const splitAt = body.lastIndexOf(".");
+  if (splitAt <= 0) {
+    const err = new Error("App session token is invalid.");
+    err.status = 401;
+    throw err;
+  }
+
+  const encoded = body.slice(0, splitAt);
+  const signature = body.slice(splitAt + 1);
+
+  const expected = crypto
+    .createHmac("sha256", getAppSessionSecret())
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  if (signature !== expected) {
+    const err = new Error("App session token could not be verified.");
+    err.status = 401;
+    throw err;
+  }
+
+  const payload = JSON.parse(base64UrlDecode(encoded));
+
+  if (!payload?.userId || !payload?.amazonUserId || !payload?.exp) {
+    const err = new Error("App session token payload is incomplete.");
+    err.status = 401;
+    throw err;
+  }
+
+  if (Number(payload.exp) <= Date.now()) {
+    const err = new Error("App session token has expired.");
+    err.status = 401;
+    throw err;
+  }
+
+  return payload;
+}
 
 const regionDisplay =
   typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function"
@@ -250,7 +340,7 @@ const corsOptions = {
 
     return cb(new Error("CORS blocked for origin: " + origin), false);
   },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204,
 };
@@ -293,8 +383,8 @@ function getBearerToken(req) {
 
 function getAmazonTokenFromRequest(req) {
   return (
-    getBearerToken(req) ||
-    String(req.body?.accessToken || req.body?.access_token || "").trim()
+    String(req.body?.accessToken || req.body?.access_token || "").trim() ||
+    getBearerToken(req)
   );
 }
 
@@ -1204,6 +1294,18 @@ async function requireAmazonAuth(req, res, next) {
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
 
+    const appSession = verifyAppSessionToken(token);
+    if (appSession) {
+      req.amazonProfile = {
+        user_id: appSession.amazonUserId,
+        name: appSession.displayName || null,
+        email: appSession.email || null,
+      };
+      req.amazonToken = token;
+      req.appSession = appSession;
+      return next();
+    }
+
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
@@ -1449,7 +1551,9 @@ function parseOffsetsFromBody(body, fallback) {
   for (const prayer of PRAYERS) {
     if (hasOwn(src, prayer)) {
       const n = Number(src[prayer]);
-      out[prayer] = Number.isFinite(n) ? n : fallback[prayer];
+      out[prayer] = Number.isFinite(n)
+        ? Math.max(0, Math.trunc(n))
+        : fallback[prayer];
     } else {
       out[prayer] = fallback[prayer];
     }
@@ -2184,9 +2288,18 @@ app.post(
         WHERE user_id = @user_id
       `);
 
+    const session = createAppSessionToken({
+      userId,
+      amazonUserId: profile.user_id,
+      displayName: profile.name || null,
+      email: profile.email || null,
+    });
+
     res.json({
       ok: true,
       userKey: profile.user_id,
+      sessionToken: session.token,
+      sessionExpiresAt: session.expiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),
@@ -2749,6 +2862,7 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
+        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -3327,7 +3441,9 @@ async function handleSaveUserSettings(req, res) {
         .input(
           "offset_min",
           sql.Int,
-          setOffsetMin ? Number(pc.offsetMin ?? pc.offset_min ?? 0) : null
+          setOffsetMin
+            ? Math.max(0, Math.trunc(Number(pc.offsetMin ?? pc.offset_min ?? 0) || 0))
+            : null
         )
 
         .input("set_quiet_enabled", sql.Bit, setQuietEnabled ? 1 : 0)
@@ -3410,6 +3526,7 @@ async function handleSaveUserSettings(req, res) {
 }
 
 app.put("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
+app.patch("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 app.post("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 
 // Prayer times
@@ -3737,13 +3854,14 @@ app.use((err, req, res, next) => {
   console.error(err);
   if (res.headersSent) return next(err);
 
-  const status = Number(err?.status || 500);
+  const status = Number(err?.status || err?.statusCode || 500);
   res.status(status).json({
     error: String(err?.message || err || "Internal server error"),
+    code: typeof err?.code === "string" ? err.code : undefined,
   });
 });
 
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
-  console.log(`AdhanHome API listening on ${port}`);
+  console.log(`AdhanCast API listening on ${port}`);
 });

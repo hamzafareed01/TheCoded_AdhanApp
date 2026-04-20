@@ -1,6 +1,32 @@
-node_modules
-# Keep environment variables out of version control
-.env
+# Dependencies
+**/node_modules/
 
-/generated/prisma
+# Vite / build outputs
+**/.vite/
+**/dist/
+**/build/
+
+# Env files (secrets)
 .env
+.env.*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+
+backend-deploy.zip
+*.zip
+.env
+**/.env
+
+backend/_deploy/
+deploy/
+backend_deploy.zip
