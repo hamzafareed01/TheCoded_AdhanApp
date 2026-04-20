@@ -1,4 +1,4 @@
-// backend/scripts/migrate.js
+// backend/scripts/migrate.cjs
 const fs = require("fs");
 const path = require("path");
 const { sql, getPool } = require("../db/sql");
