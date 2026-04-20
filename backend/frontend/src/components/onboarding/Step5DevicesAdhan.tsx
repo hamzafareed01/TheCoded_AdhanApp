@@ -15,7 +15,11 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { apiFetchWithAmazonRepair, getStoredAmazonToken, subscribeToAmazonAuthChanges } from "../../lib/api";
+import {
+  apiFetch,
+  apiFetchWithAmazonRepair,
+  getStoredAmazonToken,
+} from "../../lib/api";
 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
@@ -26,6 +30,17 @@ type Device = {
   id: string;
   name: string;
   platform?: string;
+  family?: string;
+  familyLabel?: string;
+};
+
+type DeviceListResponse = {
+  devices?: Device[];
+  message?: string | null;
+  description?: string | null;
+  registrationHint?: { voiceCommand?: string | null } | null;
+  source?: string | null;
+  listLabel?: string | null;
 };
 
 type Reciter = {
@@ -59,10 +74,14 @@ type PrayerConfig = {
   afterAdhan: AfterAdhan;
 };
 
-type DeviceResponsePayload = {
-  devices?: unknown;
-  message?: unknown;
-  registrationHint?: unknown;
+type QuietDownPolicy = {
+  enabled: boolean;
+  strategy: "lower" | "mute";
+  targetVolumePct: number;
+  restoreAfter: boolean;
+  includeFireTv: boolean;
+  mode?: string;
+  note?: string | null;
 };
 
 type UserSettingsPayload = {
@@ -72,6 +91,8 @@ type UserSettingsPayload = {
   account_enabled?: unknown;
   selectedAlexaDeviceIds?: unknown;
   selectedDeviceIds?: unknown;
+  quietDown?: unknown;
+  quietDownPolicy?: unknown;
 };
 
 type OnboardingData = {
@@ -79,6 +100,7 @@ type OnboardingData = {
   accountEnabled?: boolean;
   prayerConfigs?: unknown;
   prayerSettings?: { sect?: string };
+  quietDown?: QuietDownPolicy;
   [key: string]: unknown;
 };
 
@@ -104,6 +126,19 @@ function asBoolean(value: unknown): boolean | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeQuietDown(source: unknown): QuietDownPolicy {
+  const src = isRecord(source) ? source : {};
+  return {
+    enabled: src.enabled === true,
+    strategy: src.strategy === "mute" ? "mute" : "lower",
+    targetVolumePct: Math.min(80, Math.max(5, asNumber(src.targetVolumePct) ?? 20)),
+    restoreAfter: src.restoreAfter !== false,
+    includeFireTv: src.includeFireTv === true,
+    mode: asString(src.mode) ?? undefined,
+    note: asString(src.note),
+  };
 }
 
 function safeParseJson(value: unknown): JsonRecord | null {
@@ -190,6 +225,8 @@ function normalizeDevices(payload: unknown): Device[] {
       id: asString(item.id) ?? "",
       name: asString(item.name) ?? "",
       platform: asString(item.platform) ?? undefined,
+      family: asString(item.family) ?? undefined,
+      familyLabel: asString(item.familyLabel) ?? undefined,
     }))
     .filter((item: Device) => item.id.length > 0 && item.name.length > 0);
 }
@@ -286,12 +323,17 @@ export default function Step5DevicesAdhan({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [deviceMessage, setDeviceMessage] = useState<string | null>(null);
 
   const [accountEnabled, setAccountEnabled] = useState<boolean>(
     onboardingData.accountEnabled === true
   );
+  const [quietDown, setQuietDown] = useState<QuietDownPolicy>(
+    normalizeQuietDown(onboardingData.quietDown)
+  );
   const [devices, setDevices] = useState<Device[]>([]);
+  const [devicesMessage, setDevicesMessage] = useState<string | null>(null);
+  const [devicesDescription, setDevicesDescription] = useState<string | null>(null);
+  const [devicesHintVoiceCommand, setDevicesHintVoiceCommand] = useState<string | null>(null);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
     Array.isArray(onboardingData.devices)
       ? onboardingData.devices.filter((id): id is string => typeof id === "string")
@@ -354,9 +396,9 @@ export default function Step5DevicesAdhan({
         await Promise.all([
           apiFetchWithAmazonRepair("/api/user/settings"),
           apiFetchWithAmazonRepair("/api/alexa/devices"),
-          apiFetchWithAmazonRepair("/api/library/reciters?type=adhan"),
-          apiFetchWithAmazonRepair("/api/duas"),
-          apiFetchWithAmazonRepair("/api/quran/surahs"),
+          apiFetch("/api/library/reciters?type=adhan"),
+          apiFetch("/api/duas"),
+          apiFetch("/api/quran/surahs"),
         ]);
 
       if (settingsRes.ok) {
@@ -402,20 +444,34 @@ export default function Step5DevicesAdhan({
         if (Array.isArray(configsSource)) {
           setPrayerConfigs(normalizePrayerConfigs(configsSource));
         }
+
+        const quietDownSource =
+          (isRecord(settings.quietDown) && settings.quietDown) ||
+          (isRecord(settings.quietDownPolicy) && settings.quietDownPolicy) ||
+          (isRecord(payload.quietDown) && payload.quietDown) ||
+          (isRecord(payload.quietDownPolicy) && payload.quietDownPolicy) ||
+          null;
+
+        if (quietDownSource) {
+          setQuietDown(normalizeQuietDown(quietDownSource));
+        }
       }
 
       if (devicesRes.ok) {
-        const payloadUnknown = (await devicesRes.json()) as unknown;
-        const payload: DeviceResponsePayload = isRecord(payloadUnknown)
-          ? (payloadUnknown as DeviceResponsePayload)
-          : {};
-        setDevices(normalizeDevices(payloadUnknown));
+        const payload = (await devicesRes.json()) as DeviceListResponse | unknown;
+        setDevices(normalizeDevices(payload));
 
-        const rawMessage =
-          asString(payload.message) ||
-          (isRecord(payload.registrationHint) ? asString(payload.registrationHint.voiceCommand) : null);
-
-        setDeviceMessage(rawMessage);
+        if (isRecord(payload)) {
+          setDevicesMessage(asString(payload.message));
+          setDevicesDescription(asString(payload.description));
+          setDevicesHintVoiceCommand(
+            isRecord(payload.registrationHint) ? asString(payload.registrationHint.voiceCommand) : null
+          );
+        } else {
+          setDevicesMessage(null);
+          setDevicesDescription(null);
+          setDevicesHintVoiceCommand(null);
+        }
       }
 
       if (recitersRes.ok) {
@@ -459,12 +515,6 @@ export default function Step5DevicesAdhan({
   }, []);
 
   useEffect(() => {
-    return subscribeToAmazonAuthChanges(() => {
-      void loadAll();
-    });
-  }, []);
-
-  useEffect(() => {
     if (devices.length === 0) return;
 
     setSelectedDeviceIds((prev) => {
@@ -504,6 +554,8 @@ export default function Step5DevicesAdhan({
       const payload: JsonRecord = {
         accountEnabled,
         selectedAlexaDeviceIds: selectedDeviceIds,
+        quietDown,
+        quietDownPolicy: quietDown,
         prayerConfigs: prayerConfigs.map((p) => ({
           prayerName: p.prayerName,
           adhanReciterId: p.adhanReciterId,
@@ -523,6 +575,7 @@ export default function Step5DevicesAdhan({
         devices: selectedDeviceIds,
         accountEnabled,
         prayerConfigs,
+        quietDown,
       });
 
       navigate("/onboarding/step6");
@@ -537,7 +590,7 @@ export default function Step5DevicesAdhan({
     }
   };
 
-  const tabs = useMemo(() => ["Linked Devices", "Adhan per Prayer"], []);
+  const tabs = useMemo(() => ["Seen Devices", "Adhan per Prayer"], []);
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -559,8 +612,9 @@ export default function Step5DevicesAdhan({
           </div>
 
           <p className="text-slate-300 mb-6">
-            Enable your account, review linked Alexa devices, and set Adhan plus
-            after-Adhan actions for each prayer.
+            Enable your account, review devices seen by AdhanCast, and set Adhan plus
+            after-Adhan actions for each prayer. Alexa routines remain the primary
+            SmartAzan-style path for automatic cloud playback.
           </p>
 
           <div className="grid md:grid-cols-3 gap-4 mb-6">
@@ -605,6 +659,107 @@ export default function Step5DevicesAdhan({
             </div>
           </div>
 
+          <div className="mb-8 p-6 bg-slate-800/50 rounded-xl border border-slate-700 space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label className="text-white">Quiet down during Adhan</Label>
+                <p className="text-slate-400 text-sm mt-1">
+                  Save how AdhanCast should quiet selected household devices during the Adhan window.
+                </p>
+              </div>
+              <Switch
+                checked={quietDown.enabled}
+                onCheckedChange={(v: boolean) =>
+                  setQuietDown((prev) => ({ ...prev, enabled: v }))
+                }
+              />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-slate-200">Quiet-down action</Label>
+                <Select
+                  value={quietDown.strategy}
+                  onValueChange={(value: string) =>
+                    setQuietDown((prev) => ({
+                      ...prev,
+                      strategy: value === "mute" ? "mute" : "lower",
+                    }))
+                  }
+                >
+                  <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700">
+                    <SelectItem value="lower">Lower volume</SelectItem>
+                    <SelectItem value="mute">Mute</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-slate-200">Target volume</Label>
+                <Select
+                  value={String(quietDown.targetVolumePct)}
+                  onValueChange={(value: string) =>
+                    setQuietDown((prev) => ({
+                      ...prev,
+                      targetVolumePct: Math.min(80, Math.max(5, Number(value) || 20)),
+                    }))
+                  }
+                >
+                  <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-700">
+                    <SelectItem value="10">10%</SelectItem>
+                    <SelectItem value="20">20%</SelectItem>
+                    <SelectItem value="30">30%</SelectItem>
+                    <SelectItem value="40">40%</SelectItem>
+                    <SelectItem value="50">50%</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3">
+                <div>
+                  <div className="text-white text-sm">Restore after Adhan</div>
+                  <div className="text-slate-400 text-xs mt-1">
+                    Return supported devices to their previous state after playback.
+                  </div>
+                </div>
+                <Switch
+                  checked={quietDown.restoreAfter}
+                  onCheckedChange={(v: boolean) =>
+                    setQuietDown((prev) => ({ ...prev, restoreAfter: v }))
+                  }
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3">
+                <div>
+                  <div className="text-white text-sm">Include Fire TV devices</div>
+                  <div className="text-slate-400 text-xs mt-1">
+                    Keep Fire TV devices inside the saved quiet-down policy.
+                  </div>
+                </div>
+                <Switch
+                  checked={quietDown.includeFireTv}
+                  onCheckedChange={(v: boolean) =>
+                    setQuietDown((prev) => ({ ...prev, includeFireTv: v }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
+              {quietDown.note ||
+                "AdhanCast will save this quiet-down policy now. Actual device-wide volume control still depends on separate Alexa smart-home or video device integration for the selected hardware."}
+            </div>
+          </div>
+
           <Tabs defaultValue={tabs[0]} className="w-full">
             <TabsList className="bg-slate-800 border-slate-700 w-full justify-start overflow-x-auto flex-nowrap">
               {tabs.map((tab) => (
@@ -619,18 +774,31 @@ export default function Step5DevicesAdhan({
             </TabsList>
 
             <TabsContent value={tabs[0]} className="mt-4">
-              {loading ? (
-                <p className="text-slate-400 text-sm">Loading linked devices…</p>
-              ) : devices.length === 0 ? (
-                <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 px-4 py-3">
-                  <p className="text-slate-100 text-sm">
-                    No Alexa devices are registered yet.
-                  </p>
-                  <p className="text-slate-300 text-sm mt-2">
-                    {deviceMessage ||
-                      "After linking, use the skill once from each Echo you want to target. Say: Alexa, open AdhanCast. Then say play Fajr adhan."}
-                  </p>
+              {!loading && (devicesMessage || devicesDescription || devicesHintVoiceCommand) ? (
+                <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-100 space-y-2">
+                  {devicesMessage ? <p>{devicesMessage}</p> : null}
+                  {devicesDescription ? <p className="text-amber-50/90">{devicesDescription}</p> : null}
+                  {devicesHintVoiceCommand ? (
+                    <div className="font-mono text-xs rounded-md border border-amber-400/20 bg-slate-950/40 px-3 py-2 break-all">
+                      {devicesHintVoiceCommand}
+                    </div>
+                  ) : null}
+                  <div>
+                    <Button variant="secondary" className="mt-1" onClick={() => void loadAll()}>
+                      Refresh seen devices
+                    </Button>
+                  </div>
                 </div>
+              ) : null}
+
+              {loading ? (
+                <p className="text-slate-400 text-sm">Loading seen devices…</p>
+              ) : devices.length === 0 ? (
+                <p className="text-slate-300 text-sm">
+                  No devices have been seen by AdhanCast yet. Create routines in Alexa Setup,
+                  then say “Alexa, open AdhanCast” once on each Echo Dot or Fire TV device you
+                  want AdhanCast to recognize.
+                </p>
               ) : (
                 <div className="space-y-3">
                   {devices.map((device) => {
@@ -655,10 +823,11 @@ export default function Step5DevicesAdhan({
                           <div className="text-white">{device.name}</div>
                           <div className="text-slate-400 text-sm">
                             {device.platform ? device.platform.toUpperCase() : "ALEXA"}
+                            {device.family ? ` · ${device.family}` : ""}
                           </div>
                         </div>
                         <Badge variant="secondary">
-                          {checked ? "Selected" : "Linked"}
+                          {checked ? "Selected" : "Seen"}
                         </Badge>
                       </label>
                     );
@@ -667,9 +836,8 @@ export default function Step5DevicesAdhan({
               )}
 
               <p className="text-xs text-slate-400 mt-4">
-                Selected devices are saved to your backend profile so later
-                playback routing can use the same stored targets consistently.
-                New devices show up after the linked skill sees them once.
+                Selected devices are saved to your backend profile and checked by the Alexa skill at runtime.
+                Use Alexa routines as the primary way to target rooms, speaker groups, or Fire TV playback.
               </p>
             </TabsContent>
 

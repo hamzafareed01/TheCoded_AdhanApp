@@ -138,7 +138,6 @@ export default function Step2ConnectAccounts({
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [deviceHint, setDeviceHint] = useState<string | null>(null);
   const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
   const [alexaStatus, setAlexaStatus] = useState<AlexaLinkStatus | null>(null);
 
@@ -302,10 +301,27 @@ export default function Step2ConnectAccounts({
     clearPendingAlexaLink();
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
     setInfo("Alexa skill enabled and account linking completed.");
-    setDeviceHint(
-      "Devices appear in Step 5 after the linked Alexa device talks to the skill once. Say: Alexa, open AdhanCast. Then say play Fajr adhan."
-    );
   }
+
+  useEffect(() => {
+    return subscribeToAmazonAuthChanges(() => {
+      void refreshServerStatus();
+      void refreshAlexaLinkStatus();
+    });
+  }, []);
+
+  useEffect(() => {
+    const token = getStoredAmazonToken();
+    if (!token) return;
+
+    const interval = window.setInterval(() => {
+      void refreshServerStatus();
+      void refreshAlexaLinkStatus();
+    }, 30000);
+
+    return () => window.clearInterval(interval);
+  }, [serverStatus?.alexa?.connected, alexaStatus?.accountLinkStatus]);
+
 
   useEffect(() => {
     const boot = async () => {
@@ -324,6 +340,7 @@ export default function Step2ConnectAccounts({
           await completeAlexaLogin(restoredToken);
         } else if (getStoredAmazonToken()) {
           markConnected("alexa");
+          await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
         }
 
         if (returnedError) {
@@ -378,43 +395,17 @@ export default function Step2ConnectAccounts({
     try {
       await ensureAmazonSdk();
 
-      const tokenResp = await new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
-        window.amazon?.Login?.authorize?.(
-          {
-            client_id: clientId,
-            scope: "profile",
-            response_type: "token",
-            redirect_uri: redirectUri,
-            popup: true,
-            state: `adhan_${Date.now()}`,
-          },
-          (res: AmazonAuthorizeResponse | null) => {
-            if (!res) {
-              reject(new Error("No response from Amazon login."));
-              return;
-            }
-
-            if (typeof res.error === "string") {
-              reject(new Error(String(res.error_description || res.error)));
-              return;
-            }
-
-            resolve(res);
-          }
-        );
+      window.amazon?.Login?.authorize?.({
+        client_id: clientId,
+        scope: "profile",
+        response_type: "token",
+        redirect_uri: redirectUri,
+        popup: false,
+        state: `adhan_${Date.now()}`,
       });
-
-      const accessToken: string | undefined = tokenResp?.access_token;
-      if (!accessToken) {
-        throw new Error("Amazon did not return an access token.");
-      }
-
-      await completeAlexaLogin(accessToken);
-      setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Alexa connection failed.");
-    } finally {
       setLoadingKey(null);
+      setError(e instanceof Error ? e.message : "Alexa connection failed.");
     }
   }
 
@@ -657,18 +648,13 @@ export default function Step2ConnectAccounts({
         <div className="mt-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-muted-foreground">
           <div className="font-medium text-foreground">What happens here</div>
           <div className="mt-2 space-y-1">
-            <div>1. Connect Amazon so the app can save your settings and devices.</div>
+            <div>1. Connect Amazon so AdhanCast can save your settings, Alexa link state, and routine-ready playback profile.</div>
             <div>2. Enable and link the Alexa skill from this same screen.</div>
-            <div>3. Step 5 and Settings will stay the source of truth for reciters, devices, and after-Adhan playback.</div>
+            <div>3. After linking, say “Alexa, open AdhanCast” once on each Echo Dot or Fire TV device you want AdhanCast to recognize.</div>
+            <div>4. Alexa routines are the primary SmartAzan-style path for automatic cloud playback across rooms and speaker groups.</div>
+            <div>5. Step 5 and Settings stay the source of truth for reciters, seen devices, and after-Adhan playback behavior.</div>
           </div>
         </div>
-
-        {(deviceHint || skillLinked) && (
-          <div className="mt-4 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-100">
-            {deviceHint ||
-              "After linking, use the skill once from each Alexa device you want to appear in Step 5. Saying ‘Alexa, open AdhanCast’ and then ‘play Fajr adhan’ is enough."}
-          </div>
-        )}
 
         <div className="mt-10 flex items-center justify-between">
           <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>
