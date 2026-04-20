@@ -1104,10 +1104,10 @@ export default function Settings({
                   </div>
 
                   <div className="border-t border-slate-800 pt-6">
-                    <h3 className="text-white text-lg mb-3">Alexa devices</h3>
+                    <h3 className="text-white text-lg mb-3">Alexa devices seen by AdhanCast</h3>
                     {devices.length === 0 ? (
                       <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm text-slate-400">
-                        No Alexa devices seen by AdhanCast were returned yet. Reconnect Amazon in onboarding if needed.
+                        No Alexa devices seen by AdhanCast have been seen by AdhanCast yet. Open AdhanCast on each Echo Dot or Fire TV device you want to use, then return here to refresh the list.
                       </div>
                     ) : (
                       <div className="space-y-3">
@@ -1124,7 +1124,7 @@ export default function Settings({
                             >
                               <div>
                                 <div className="text-slate-100">{device.name}</div>
-                                <div className="text-xs text-slate-400">Selected devices can use your Adhan Home Alexa playback flow.</div>
+                                <div className="text-xs text-slate-400">Selected devices can be used for playback targeting now and quiet-mode automation later.</div>
                               </div>
                               <Checkbox
                                 checked={checked}
@@ -1147,7 +1147,7 @@ export default function Settings({
                       <div>
                         <div className="text-white text-sm font-medium">Quiet down during Adhan</div>
                         <div className="text-slate-400 text-xs mt-1">
-                          Save your preferred quiet-down policy for selected Alexa devices.
+                          Save your preferred quiet-down policy for selected Alexa devices seen by AdhanCast.
                         </div>
                       </div>
                       <Switch
@@ -1274,7 +1274,7 @@ export default function Settings({
 
                     <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
                       {settings.quietDown.note ||
-                        "This saves the quiet-down policy in your AdhanCast account now. Actual device-wide mute or volume changes still depend on separate Alexa smart-home or video device integration."}
+                        "This saves the quiet-mode policy in your AdhanCast account now. The separate Alexa Smart Home skill reads this policy for future supported household mute, lower-volume, and Fire TV handling."}
                     </div>
                   </div>
                 </div>

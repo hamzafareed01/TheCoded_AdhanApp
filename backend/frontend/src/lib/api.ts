@@ -18,7 +18,6 @@ const isLocal = host === "localhost" || host === "127.0.0.1";
 const isAzureStaticApps = host.endsWith("azurestaticapps.net");
 
 const TOKEN_KEY = "amazon_access_token";
-const AUTH_CACHE_BYPASS_PATHS = ["/api/alexa", "/api/integrations", "/api/user/settings"];
 const AUTH_EVENT = "amazon-auth-changed";
 const APP_SESSION_PREFIX = "adhapp_";
 
@@ -33,10 +32,6 @@ export function getApiUrl(path: string): string {
 }
 
 export const apiUrl = getApiUrl;
-
-function shouldBypassHttpCache(path: string): boolean {
-  return AUTH_CACHE_BYPASS_PATHS.some((prefix) => path.startsWith(prefix));
-}
 
 function readTokenFromStorage(): string | null {
   if (!isBrowser) return null;
@@ -150,19 +145,12 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
-  if (shouldBypassHttpCache(path)) {
-    headers.set("Cache-Control", "no-cache, no-store, max-age=0");
-    headers.set("Pragma", "no-cache");
-  }
-
   const credentials = init.credentials ?? "omit";
-  const cache = init.cache ?? (shouldBypassHttpCache(path) ? "no-store" : "default");
 
   return fetch(url, {
     ...init,
     headers,
     credentials,
-    cache,
     mode: "cors",
   });
 }

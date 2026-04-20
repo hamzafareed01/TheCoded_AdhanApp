@@ -588,7 +588,7 @@ export default function Step5DevicesAdhan({
           </div>
 
           <p className="text-slate-300 mb-6">
-            Enable your account, review Alexa devices seen by AdhanCast, and set Adhan plus
+            Enable your account, review linked Alexa devices seen by AdhanCast, and set Adhan plus
             after-Adhan actions for each prayer.
           </p>
 
@@ -731,7 +731,7 @@ export default function Step5DevicesAdhan({
 
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
               {quietDown.note ||
-                "AdhanCast will save this quiet-down policy now. Actual device-wide volume control still depends on separate Alexa smart-home or video device integration for the selected hardware."}
+                "AdhanCast will save this quiet-mode policy now. The separate Alexa Smart Home skill reads this policy for future supported household volume control and Fire TV handling."}
             </div>
           </div>
 
@@ -753,7 +753,7 @@ export default function Step5DevicesAdhan({
                 <p className="text-slate-400 text-sm">Loading linked devices…</p>
               ) : devices.length === 0 ? (
                 <p className="text-slate-300 text-sm">
-                  No Alexa devices seen by AdhanCast were returned yet. You can continue and
+                  No linked Alexa devices seen by AdhanCast were returned yet. You can continue and
                   link or review device usage later.
                 </p>
               ) : (
