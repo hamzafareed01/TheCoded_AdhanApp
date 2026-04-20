@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { apiFetch, getStoredAmazonToken } from "../../lib/api";
+import { apiFetchWithAmazonRepair, getStoredAmazonToken, subscribeToAmazonAuthChanges } from "../../lib/api";
 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
@@ -57,6 +57,12 @@ type PrayerConfig = {
   prayerName: PrayerName;
   adhanReciterId: string | null;
   afterAdhan: AfterAdhan;
+};
+
+type DeviceResponsePayload = {
+  devices?: unknown;
+  message?: unknown;
+  registrationHint?: unknown;
 };
 
 type UserSettingsPayload = {
@@ -252,13 +258,13 @@ function normalizeSurahs(payload: unknown): SurahOption[] {
 }
 
 async function saveSettings(payload: JsonRecord) {
-  const put = await apiFetch("/api/user/settings", {
+  const put = await apiFetchWithAmazonRepair("/api/user/settings", {
     method: "PUT",
     body: JSON.stringify(payload),
   });
   if (put.ok) return put;
 
-  return apiFetch("/api/user/settings", {
+  return apiFetchWithAmazonRepair("/api/user/settings", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -280,6 +286,7 @@ export default function Step5DevicesAdhan({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deviceMessage, setDeviceMessage] = useState<string | null>(null);
 
   const [accountEnabled, setAccountEnabled] = useState<boolean>(
     onboardingData.accountEnabled === true
@@ -345,11 +352,11 @@ export default function Step5DevicesAdhan({
     try {
       const [settingsRes, devicesRes, recitersRes, duasRes, surahsRes] =
         await Promise.all([
-          apiFetch("/api/user/settings"),
-          apiFetch("/api/alexa/devices"),
-          apiFetch("/api/library/reciters?type=adhan"),
-          apiFetch("/api/duas"),
-          apiFetch("/api/quran/surahs"),
+          apiFetchWithAmazonRepair("/api/user/settings"),
+          apiFetchWithAmazonRepair("/api/alexa/devices"),
+          apiFetchWithAmazonRepair("/api/library/reciters?type=adhan"),
+          apiFetchWithAmazonRepair("/api/duas"),
+          apiFetchWithAmazonRepair("/api/quran/surahs"),
         ]);
 
       if (settingsRes.ok) {
@@ -398,8 +405,17 @@ export default function Step5DevicesAdhan({
       }
 
       if (devicesRes.ok) {
-        const payload = (await devicesRes.json()) as unknown;
-        setDevices(normalizeDevices(payload));
+        const payloadUnknown = (await devicesRes.json()) as unknown;
+        const payload: DeviceResponsePayload = isRecord(payloadUnknown)
+          ? (payloadUnknown as DeviceResponsePayload)
+          : {};
+        setDevices(normalizeDevices(payloadUnknown));
+
+        const rawMessage =
+          asString(payload.message) ||
+          (isRecord(payload.registrationHint) ? asString(payload.registrationHint.voiceCommand) : null);
+
+        setDeviceMessage(rawMessage);
       }
 
       if (recitersRes.ok) {
@@ -440,6 +456,12 @@ export default function Step5DevicesAdhan({
 
   useEffect(() => {
     void loadAll();
+  }, []);
+
+  useEffect(() => {
+    return subscribeToAmazonAuthChanges(() => {
+      void loadAll();
+    });
   }, []);
 
   useEffect(() => {
@@ -600,10 +622,15 @@ export default function Step5DevicesAdhan({
               {loading ? (
                 <p className="text-slate-400 text-sm">Loading linked devices…</p>
               ) : devices.length === 0 ? (
-                <p className="text-slate-300 text-sm">
-                  No linked Alexa devices were returned yet. You can continue and
-                  link or review device usage later.
-                </p>
+                <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 px-4 py-3">
+                  <p className="text-slate-100 text-sm">
+                    No Alexa devices are registered yet.
+                  </p>
+                  <p className="text-slate-300 text-sm mt-2">
+                    {deviceMessage ||
+                      "After linking, use the skill once from each Echo you want to target. Say: Alexa, open AdhanCast. Then say play Fajr adhan."}
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {devices.map((device) => {
@@ -642,6 +669,7 @@ export default function Step5DevicesAdhan({
               <p className="text-xs text-slate-400 mt-4">
                 Selected devices are saved to your backend profile so later
                 playback routing can use the same stored targets consistently.
+                New devices show up after the linked skill sees them once.
               </p>
             </TabsContent>
 
