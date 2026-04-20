@@ -41,7 +41,8 @@ type UserSettingsSummary = {
 };
 
 type DeviceListResponse = {
-  devices?: Array<{ id: string; name: string; platform?: string | null }>;
+  devices?: Array<{ id: string; name: string; platform?: string | null; family?: string | null; familyLabel?: string | null }>;
+  message?: string | null;
 };
 
 const FALLBACK_TEMPLATES: Template[] = [
@@ -93,6 +94,7 @@ export default function AlexaSetup() {
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [settings, setSettings] = useState<UserSettingsSummary | null>(null);
   const [deviceNames, setDeviceNames] = useState<string[]>([]);
+  const [deviceMessage, setDeviceMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -152,9 +154,12 @@ export default function AlexaSetup() {
       if (devicesRes.ok) {
         const payload = (await devicesRes.json()) as DeviceListResponse;
         const names = Array.isArray(payload.devices)
-          ? payload.devices.map((device) => device.name).filter(Boolean)
+          ? payload.devices
+              .map((device) => `${device.name}${device.familyLabel ? ` • ${device.familyLabel}` : ""}`)
+              .filter(Boolean)
           : [];
         setDeviceNames(names);
+        setDeviceMessage(payload.message ?? null);
       }
     } catch {
       setError("Could not load Alexa setup details right now.");
@@ -186,9 +191,9 @@ export default function AlexaSetup() {
       return "Enable and link the Alexa skill from onboarding step 2. After linking succeeds, come back here to verify status.";
     }
     if (!selectedDeviceCount) {
-      return "Pick at least one Alexa-compatible device in Step 5 or Settings. Devices appear here after AdhanCast sees them once from the live skill.";
+      return "Open AdhanCast on each Echo Dot or Fire TV device you want to use, then pick at least one seen device in Step 5 or Settings so playback targets stay predictable.";
     }
-    return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, then create routines if you want scheduled playback.";
+    return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, create routines for prayer-time automation, and then add the separate Smart Home skill for quiet mode controls.";
   }, [selectedDeviceCount, status]);
 
   return (
@@ -200,7 +205,7 @@ export default function AlexaSetup() {
             <div>
               <div className="text-slate-100 font-semibold text-lg">Alexa Setup</div>
               <div className="text-slate-400 text-sm">
-                Guided Alexa status, routine phrases, durable sign-in, and device-seen playback checks.
+                Guided Alexa status, routine phrases, Smart Home readiness, and app-controlled playback checks.
               </div>
             </div>
           </div>
@@ -303,6 +308,15 @@ export default function AlexaSetup() {
                   {deviceNames.join(", ")}
                 </div>
               ) : null}
+              {deviceMessage ? (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2 text-xs text-cyan-100">
+                  {deviceMessage}
+                </div>
+              ) : null}
+              <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-200">
+                <div className="font-medium text-slate-100 mb-1">Smart Home readiness</div>
+                Create a second Alexa Smart Home skill for household quiet mode, Fire TV inclusion, and future supported mute/lower-volume controls. The custom skill handles playback; the Smart Home skill handles control surfaces.
+              </div>
               <div>
                 Step 2 callback URL:
                 <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 font-mono text-xs text-slate-100 break-all">
@@ -322,11 +336,11 @@ export default function AlexaSetup() {
 
         <Card className="bg-slate-900/40 border-slate-800">
           <CardHeader>
-            <CardTitle className="text-slate-100">How to create a routine</CardTitle>
+            <CardTitle className="text-slate-100">How to create prayer routines</CardTitle>
           </CardHeader>
           <CardContent className="text-slate-200 space-y-2">
             <ol className="list-decimal ml-5 space-y-2">
-              <li>Finish Amazon connect + skill linking from onboarding step 2.</li>
+              <li>Finish Amazon connect + skill linking from onboarding step 2, then open AdhanCast on each target Echo Dot or Fire TV once so AdhanCast can see those devices.</li>
               <li>Open the Alexa app, then go to <b>More → Routines → +</b>.</li>
               <li>Pick the correct prayer-time trigger for the routine.</li>
               <li>Choose <b>Add action → Custom</b> and paste one of the phrases below.</li>

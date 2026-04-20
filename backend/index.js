@@ -33,6 +33,7 @@ const {
   buildStateForEndpoint,
   handleSmartHomeDirective,
   loadSmartHomeContext,
+  buildSmartHomeSummary,
 } = require("./services/alexaSmartHome");
 
 const app = express();
@@ -263,20 +264,6 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
-
-app.use((req, res, next) => {
-  if (
-    req.path.startsWith("/api/alexa") ||
-    req.path.startsWith("/api/integrations") ||
-    req.path.startsWith("/api/user/settings")
-  ) {
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.set("Pragma", "no-cache");
-    res.set("Expires", "0");
-    res.set("Surrogate-Control", "no-store");
-  }
-  next();
-});
 
 // -----------------------------
 // Generic helpers
@@ -603,12 +590,6 @@ const DEFAULT_ALEXA_API_ENDPOINTS = [
 ];
 const APP_LINK_STATE_TTL_MS = 10 * 60 * 1000;
 const ALEXA_APP_LINK_SCOPE = "alexa::skills:account_linking";
-const APP_SESSION_PREFIX = "adhapp_";
-const APP_SESSION_TTL_MS = Math.max(
-  60 * 60 * 1000,
-  Number(process.env.APP_SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 30) ||
-    1000 * 60 * 60 * 24 * 30
-);
 
 function getAlexaSkillId() {
   return String(
@@ -680,88 +661,6 @@ function base64UrlDecode(value) {
   const pad = input.length % 4;
   const normalized = pad ? input + "=".repeat(4 - pad) : input;
   return Buffer.from(normalized, "base64").toString("utf8");
-}
-
-function getAppSessionSecret() {
-  return String(
-    process.env.APP_SESSION_SECRET ||
-      process.env.ALEXA_APP_LINK_STATE_SECRET ||
-      process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
-      "adhancast-app-session"
-  ).trim();
-}
-
-function getAppSessionExpiryIso() {
-  return new Date(Date.now() + APP_SESSION_TTL_MS).toISOString();
-}
-
-function signSessionValue(encodedPayload) {
-  return crypto
-    .createHmac("sha256", getAppSessionSecret())
-    .update(String(encodedPayload || ""))
-    .digest("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function createAppSessionToken(profile) {
-  const payload = {
-    kind: "app_session",
-    sub: String(profile?.user_id || "").trim(),
-    name: profile?.name ? String(profile.name) : null,
-    email: profile?.email ? String(profile.email) : null,
-    iat: Date.now(),
-    exp: Date.now() + APP_SESSION_TTL_MS,
-  };
-
-  if (!payload.sub) {
-    const err = new Error("Could not create app session without an Amazon user id.");
-    err.status = 500;
-    throw err;
-  }
-
-  const encoded = base64UrlEncode(JSON.stringify(payload));
-  const signature = signSessionValue(encoded);
-  return `${APP_SESSION_PREFIX}${encoded}.${signature}`;
-}
-
-function verifyAppSessionToken(token) {
-  const raw = String(token || "").trim();
-  if (!raw.startsWith(APP_SESSION_PREFIX)) return null;
-
-  const compact = raw.slice(APP_SESSION_PREFIX.length);
-  const splitAt = compact.lastIndexOf(".");
-  if (splitAt <= 0) {
-    const err = new Error("Invalid AdhanCast session token.");
-    err.status = 401;
-    throw err;
-  }
-
-  const encoded = compact.slice(0, splitAt);
-  const signature = compact.slice(splitAt + 1);
-  const expected = signSessionValue(encoded);
-
-  if (signature !== expected) {
-    const err = new Error("AdhanCast session token could not be verified.");
-    err.status = 401;
-    throw err;
-  }
-
-  const payload = JSON.parse(base64UrlDecode(encoded));
-  if (!payload?.sub || payload?.kind !== "app_session") {
-    const err = new Error("AdhanCast session token payload is incomplete.");
-    err.status = 401;
-    throw err;
-  }
-
-  if (Number(payload.exp || 0) <= Date.now()) {
-    const err = new Error("AdhanCast session token has expired.");
-    err.status = 401;
-    throw err;
-  }
-
-  return payload;
 }
 
 function createPkceVerifier() {
@@ -1312,22 +1211,9 @@ async function requireAmazonAuth(req, res, next) {
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
 
-    if (token.startsWith(APP_SESSION_PREFIX)) {
-      const session = verifyAppSessionToken(token);
-      req.amazonProfile = {
-        user_id: session.sub,
-        name: session.name || null,
-        email: session.email || null,
-      };
-      req.amazonToken = null;
-      req.appSession = session;
-      return next();
-    }
-
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
-    req.appSession = null;
     next();
   } catch (e) {
     const status = e.status || 401;
@@ -1538,6 +1424,104 @@ async function getUserProfileAndPrayersByUserId(pool, userId) {
 async function getUserProfileAndPrayers(pool, amazonUserId) {
   const userId = await ensureUser(pool, amazonUserId);
   return getUserProfileAndPrayersByUserId(pool, userId);
+}
+
+function normalizeAlexaDeviceId(value) {
+  return String(value || "").trim();
+}
+
+function inferAlexaDeviceFamily(deviceName, platform) {
+  const haystack = `${String(deviceName || "")} ${String(platform || "")}`.toLowerCase();
+  if (/fire\s*tv|firetv|fire\s*stick|firestick/.test(haystack)) return "fire_tv";
+  if (/echo\s*show/.test(haystack)) return "echo_show";
+  if (/echo|dot|studio|spot|pop|tap|input|auto/.test(haystack)) return "echo";
+  if (/tv/.test(haystack)) return "tv";
+  return "unknown";
+}
+
+function getAlexaDeviceFamilyLabel(family) {
+  switch (String(family || '').toLowerCase()) {
+    case 'echo': return 'Echo speaker';
+    case 'echo_show': return 'Echo Show';
+    case 'fire_tv': return 'Fire TV';
+    case 'tv': return 'TV';
+    default: return 'Alexa device';
+  }
+}
+
+function buildAlexaDevicePlaceholderName(deviceId) {
+  const normalized = normalizeAlexaDeviceId(deviceId);
+  const suffix = normalized ? normalized.slice(-6) : "unknown";
+  return `Alexa device • ${suffix}`;
+}
+
+async function upsertAlexaDevice(pool, params) {
+  const userId = params?.userId || null;
+  const deviceId = normalizeAlexaDeviceId(params?.deviceId);
+  const deviceName = String(params?.deviceName || "").trim() || buildAlexaDevicePlaceholderName(deviceId);
+  const platform = String(params?.platform || "alexa").trim() || "alexa";
+  const deviceFamily = inferAlexaDeviceFamily(deviceName, platform);
+  const requestId = params?.requestId ? String(params.requestId) : null;
+  const seenSource = params?.seenSource ? String(params.seenSource) : 'skill';
+  if (!userId || !deviceId) return null;
+
+  await pool
+    .request()
+    .input("user_id", sql.UniqueIdentifier, userId)
+    .input("device_id", sql.NVarChar(255), deviceId)
+    .input("device_name", sql.NVarChar(255), deviceName)
+    .input("platform", sql.NVarChar(50), platform)
+    .input("device_family", sql.NVarChar(40), deviceFamily)
+    .input("last_seen_request_id", sql.NVarChar(255), requestId)
+    .input("last_seen_source", sql.NVarChar(40), seenSource)
+    .query(`
+      MERGE dbo.devices AS target
+      USING (
+        SELECT @user_id AS user_id, @platform AS platform, @device_id AS device_id
+      ) AS src
+      ON target.user_id = src.user_id
+         AND target.platform = src.platform
+         AND target.device_id = src.device_id
+      WHEN MATCHED THEN
+        UPDATE SET
+          device_name = CASE
+            WHEN target.device_name IS NULL OR target.device_name = '' OR target.device_name LIKE 'Alexa device • %'
+              THEN @device_name
+            ELSE target.device_name
+          END,
+          device_family = COALESCE(@device_family, target.device_family),
+          enabled = 1,
+          last_seen_at = SYSUTCDATETIME(),
+          last_seen_request_id = COALESCE(@last_seen_request_id, target.last_seen_request_id),
+          last_seen_source = COALESCE(@last_seen_source, target.last_seen_source)
+      WHEN NOT MATCHED THEN
+        INSERT (user_id, platform, device_id, device_name, device_family, enabled, last_seen_at, last_seen_request_id, last_seen_source)
+        VALUES (@user_id, @platform, @device_id, @device_name, @device_family, 1, SYSUTCDATETIME(), @last_seen_request_id, @last_seen_source);
+    `);
+
+  return { id: deviceId, name: deviceName, platform, family: deviceFamily, familyLabel: getAlexaDeviceFamilyLabel(deviceFamily) };
+}
+
+async function registerAlexaSkillDeviceSeen(pool, params) {
+  const userId = params?.userId || null;
+  const tokenId = params?.tokenId || null;
+  const deviceId = normalizeAlexaDeviceId(params?.deviceId);
+  const alexaUserId = String(params?.alexaUserId || "").trim() || null;
+  const deviceName = String(params?.deviceName || "").trim() || buildAlexaDevicePlaceholderName(deviceId);
+
+  if (tokenId && alexaUserId) {
+    await rememberAlexaSkillUser(pool, tokenId, alexaUserId);
+  }
+  if (!userId || !deviceId) return null;
+
+  return upsertAlexaDevice(pool, {
+    userId,
+    deviceId,
+    deviceName,
+    platform: 'alexa',
+    requestId: params?.requestId || null,
+    seenSource: params?.seenSource || 'skill',
+  });
 }
 // -----------------------------
 // Prayer helpers
@@ -1982,6 +1966,15 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
     useMosqueLocation: !!profile.use_mosque_location,
     accountEnabled: !!profile.account_enabled,
     selectedAlexaDeviceIds: parseStringArray(profile.selected_alexa_device_ids_json),
+    quietDown: {
+      enabled: !!profile.quiet_down_enabled,
+      strategy: String(profile.quiet_down_strategy || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower',
+      targetVolumePct: Math.min(80, Math.max(5, Number(profile.quiet_down_target_volume_pct || 20) || 20)),
+      restoreAfter: profile.quiet_down_restore !== false,
+      includeFireTv: !!profile.quiet_down_include_fire_tv,
+      mode: 'smart_home_ready',
+      note: 'AdhanCast now stores this policy in your account and Smart Home controls can read it. Real household-wide execution still depends on the separate Alexa Smart Home skill and supported device capabilities.',
+    },
     quietHours,
     globalOffsets: {
       fajr: profile.offset_fajr || 0,
@@ -2256,10 +2249,6 @@ app.get(
 
     res.json({
       userKey: p.user_id,
-      session: {
-        kind: req.appSession ? "app" : "amazon",
-        expiresAt: req.appSession?.exp ? new Date(req.appSession.exp).toISOString() : null,
-      },
       amazon: {
         connected: true,
         email: p.email || null,
@@ -2311,14 +2300,9 @@ app.post(
         WHERE user_id = @user_id
       `);
 
-    const sessionToken = createAppSessionToken(profile);
-    const sessionExpiresAt = getAppSessionExpiryIso();
-
     res.json({
       ok: true,
       userKey: profile.user_id,
-      sessionToken,
-      sessionExpiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),
@@ -2874,11 +2858,36 @@ app.post(
   })
 );
 
+
+app.get(
+  "/api/alexa/smart-home/summary",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
+    const { profile, devices } = await loadSmartHomeContext(pool, userId);
+    res.json({ summary: buildSmartHomeSummary(profile, devices) });
+  })
+);
+
 app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool = await getPool();
+    const requestId = req.query?.requestId ? String(req.query.requestId) : null;
+    const deviceId = req.query?.deviceId ? String(req.query.deviceId) : null;
+    const alexaUserId = req.query?.alexaUserId ? String(req.query.alexaUserId) : null;
+
+    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
+      userId: req.skillAuth.userId,
+      tokenId: req.skillAuth.tokenId,
+      deviceId,
+      alexaUserId,
+      requestId,
+      seenSource: 'skill',
+    });
+
     const { profile, prayers } = await getUserProfileAndPrayersByUserId(
       pool,
       req.skillAuth.userId
@@ -2886,8 +2895,22 @@ app.get(
 
     const result = await computePrayerTimesForProfile(profile, prayers, new Date());
 
+    if (registeredDevice) {
+      await logAlexaDispatch(pool, {
+        userId: req.skillAuth.userId,
+        requestId,
+        prayerName: null,
+        deviceId,
+        triggerSource: "skill",
+        status: "device_seen",
+        message: `Registered Alexa device ${registeredDevice.id}`,
+        payload: { alexaUserId, deviceName: registeredDevice.name },
+      });
+    }
+
     res.json({
       ...result,
+      registeredDevice,
       userContext: {
         userId: req.skillAuth.userId,
         sect: profile.sect || "SUNNI",
@@ -2904,6 +2927,43 @@ app.get(
 );
 
 app.post(
+  "/api/alexa/skill/device-seen",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const requestId = req.body?.requestId ? String(req.body.requestId) : null;
+    const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
+    const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
+    const locale = req.body?.locale ? String(req.body.locale) : null;
+
+    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
+      userId: req.skillAuth.userId,
+      tokenId: req.skillAuth.tokenId,
+      deviceId,
+      alexaUserId,
+      requestId,
+      seenSource: 'skill',
+      deviceName: req.body?.deviceName ? String(req.body.deviceName) : null,
+    });
+
+    if (registeredDevice) {
+      await logAlexaDispatch(pool, {
+        userId: req.skillAuth.userId,
+        requestId,
+        prayerName: null,
+        deviceId,
+        triggerSource: "skill",
+        status: "device_seen",
+        message: `Registered Alexa device ${registeredDevice.id}`,
+        payload: { alexaUserId, locale, deviceName: registeredDevice.name },
+      });
+    }
+
+    res.json({ ok: true, device: registeredDevice });
+  })
+);
+
+app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
@@ -2913,9 +2973,14 @@ app.post(
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
     const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
 
-    if (alexaUserId) {
-      await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
-    }
+    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
+      userId: req.skillAuth.userId,
+      tokenId: req.skillAuth.tokenId,
+      deviceId,
+      alexaUserId,
+      requestId,
+      seenSource: 'skill',
+    });
 
     try {
       const plan = await resolvePrayerPlaybackPlan(pool, {
@@ -2937,10 +3002,11 @@ app.post(
           reciterId: plan.reciterId,
           afterAdhan: plan.afterAdhan,
           userContext: plan.userContext,
+          registeredDevice,
         },
       });
 
-      res.json(plan);
+      res.json({ ...plan, registeredDevice });
     } catch (err) {
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
@@ -3293,6 +3359,22 @@ async function handleSaveUserSettings(req, res) {
     ? parseStringArray(body.selectedAlexaDeviceIds ?? body.selectedDeviceIds)
     : undefined;
 
+  const quietDownPolicy = isObject(body.quietDown) ? body.quietDown : isObject(body.quietDownPolicy) ? body.quietDownPolicy : null;
+  const hasQuietDownPolicy = !!quietDownPolicy;
+  const quietDownEnabled = hasQuietDownPolicy ? quietDownPolicy.enabled === true : undefined;
+  const quietDownStrategy = hasQuietDownPolicy && String(quietDownPolicy.strategy || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower';
+  const quietDownTargetVolumePct = hasQuietDownPolicy ? Math.min(80, Math.max(5, Math.trunc(Number(quietDownPolicy.targetVolumePct ?? 20) || 20))) : undefined;
+  const quietDownRestore = hasQuietDownPolicy ? quietDownPolicy.restoreAfter !== false : undefined;
+  const quietDownIncludeFireTv = hasQuietDownPolicy ? quietDownPolicy.includeFireTv === true : undefined;
+  const quietDownPolicyJson = hasQuietDownPolicy ? JSON.stringify({
+    enabled: !!quietDownEnabled,
+    mode: quietDownStrategy === 'mute' ? 'mute' : 'volume',
+    volume: quietDownTargetVolumePct,
+    restoreAfterAdhan: quietDownRestore !== false,
+    applyToSelectedDevices: true,
+    includeFireTv: !!quietDownIncludeFireTv,
+  }) : null;
+
   const offsets = parseOffsetsFromBody(body, {
     fajr: currentProfile.offset_fajr || 0,
     dhuhr: currentProfile.offset_dhuhr || 0,
@@ -3397,6 +3479,13 @@ async function handleSaveUserSettings(req, res) {
     sql.Float,
     hasMosqueLng ? parseOptionalNumber(body.mosqueLng) ?? null : null
   );
+  profileReq.input('set_quiet_down_policy', sql.Bit, hasQuietDownPolicy ? 1 : 0);
+  profileReq.input('quiet_down_enabled', sql.Bit, hasQuietDownPolicy ? (quietDownEnabled ? 1 : 0) : null);
+  profileReq.input('quiet_down_strategy', sql.NVarChar(16), hasQuietDownPolicy ? quietDownStrategy : null);
+  profileReq.input('quiet_down_target_volume_pct', sql.Int, hasQuietDownPolicy ? quietDownTargetVolumePct : null);
+  profileReq.input('quiet_down_restore', sql.Bit, hasQuietDownPolicy ? (quietDownRestore ? 1 : 0) : null);
+  profileReq.input('quiet_down_include_fire_tv', sql.Bit, hasQuietDownPolicy ? (quietDownIncludeFireTv ? 1 : 0) : null);
+  profileReq.input('quiet_down_policy_json', sql.NVarChar(sql.MAX), quietDownPolicyJson);
 
   await profileReq.query(`
     UPDATE dbo.user_profiles
@@ -3418,6 +3507,12 @@ async function handleSaveUserSettings(req, res) {
       mosque_lat = CASE WHEN @set_mosque_lat = 1 THEN @mosque_lat ELSE mosque_lat END,
       mosque_lng = CASE WHEN @set_mosque_lng = 1 THEN @mosque_lng ELSE mosque_lng END,
       selected_alexa_device_ids_json = CASE WHEN @set_selected_alexa_device_ids_json = 1 THEN @selected_alexa_device_ids_json ELSE selected_alexa_device_ids_json END,
+      quiet_down_enabled = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_enabled ELSE quiet_down_enabled END,
+      quiet_down_strategy = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_strategy ELSE quiet_down_strategy END,
+      quiet_down_target_volume_pct = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_target_volume_pct ELSE quiet_down_target_volume_pct END,
+      quiet_down_restore = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_restore ELSE quiet_down_restore END,
+      quiet_down_include_fire_tv = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_include_fire_tv ELSE quiet_down_include_fire_tv END,
+      quiet_down_policy_json = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_policy_json ELSE quiet_down_policy_json END,
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -3734,13 +3829,31 @@ app.get(
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .query(`
-        SELECT device_id AS id, device_name AS name, platform
+        SELECT device_id AS id, device_name AS name, platform,
+               COALESCE(device_family, 'unknown') AS family,
+               last_seen_at AS lastSeenAt
         FROM dbo.devices
-        WHERE user_id = @user_id AND platform = 'alexa'
-        ORDER BY device_name
+        WHERE user_id = @user_id AND platform = 'alexa' AND COALESCE(enabled, 1) = 1
+        ORDER BY COALESCE(last_seen_at, created_at) DESC, device_name
       `);
 
-    res.json({ devices: result.recordset });
+    const devices = (result.recordset || []).map((device) => ({
+      ...device,
+      familyLabel: getAlexaDeviceFamilyLabel(device.family),
+    }));
+    const needsSkillDeviceRegistration = devices.length === 0;
+
+    res.json({
+      devices,
+      source: 'database',
+      needsSkillDeviceRegistration,
+      message: needsSkillDeviceRegistration
+        ? 'No Alexa devices have been seen by AdhanCast yet. Open AdhanCast on each Echo or Fire TV device you want to use, then run one supported request so the backend can register that device automatically.'
+        : 'These are devices seen by AdhanCast so far. They can be used for selection, targeting, and future quiet-mode automation.',
+      registrationHint: needsSkillDeviceRegistration
+        ? { voiceCommand: 'Alexa, open AdhanCast. Then say what is the next prayer.' }
+        : null,
+    });
   })
 );
 
@@ -3757,23 +3870,15 @@ app.post(
       return res.status(400).json({ error: "Provide {id, name}" });
     }
 
-    await pool
-      .request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .input("device_id", sql.NVarChar(255), String(id))
-      .input("device_name", sql.NVarChar(255), String(name))
-      .query(`
-        MERGE dbo.devices AS target
-        USING (SELECT @user_id AS user_id, 'alexa' AS platform, @device_id AS device_id) AS src
-        ON target.user_id = src.user_id AND target.platform = src.platform AND target.device_id = src.device_id
-        WHEN MATCHED THEN
-          UPDATE SET device_name = @device_name
-        WHEN NOT MATCHED THEN
-          INSERT (user_id, platform, device_id, device_name)
-          VALUES (@user_id, 'alexa', @device_id, @device_name);
-      `);
+    const device = await upsertAlexaDevice(pool, {
+      userId,
+      deviceId: String(id),
+      deviceName: String(name),
+      platform: 'alexa',
+      seenSource: 'manual',
+    });
 
-    res.json({ ok: true });
+    res.json({ ok: true, device });
   })
 );
 
