@@ -534,9 +534,6 @@ export default function Settings({
   const [duas, setDuas] = useState<DuaItem[]>([]);
   const [surahs, setSurahs] = useState<SurahItem[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [devicesMessage, setDevicesMessage] = useState<string | null>(null);
-  const [devicesDescription, setDevicesDescription] = useState<string | null>(null);
-  const [devicesHintVoiceCommand, setDevicesHintVoiceCommand] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
 
   const [saving, setSaving] = useState(false);
@@ -587,11 +584,11 @@ export default function Settings({
 
         const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
           await Promise.all([
-            apiFetchWithAmazonRepair("/api/user/settings"),
+            apiFetch("/api/user/settings"),
             apiFetch("/api/library/reciters?type=adhan"),
             apiFetch("/api/duas"),
             apiFetch("/api/quran/surahs"),
-            apiFetchWithAmazonRepair("/api/alexa/devices"),
+            apiFetch("/api/alexa/devices"),
           ]);
 
         if (!settingsRes.ok) {
@@ -624,19 +621,8 @@ export default function Settings({
         }
 
         if (devicesRes.ok) {
-          const devicesJson = (await devicesRes.json()) as DeviceListResponse | unknown;
+          const devicesJson = await devicesRes.json();
           setDevices(normalizeDevices(devicesJson));
-          if (isRecord(devicesJson)) {
-            setDevicesMessage(asString(devicesJson.message));
-            setDevicesDescription(asString(devicesJson.description));
-            setDevicesHintVoiceCommand(
-              isRecord(devicesJson.registrationHint) ? asString(devicesJson.registrationHint.voiceCommand) : null
-            );
-          } else {
-            setDevicesMessage(null);
-            setDevicesDescription(null);
-            setDevicesHintVoiceCommand(null);
-          }
         }
 
         await loadSchedules();
@@ -1118,24 +1104,10 @@ export default function Settings({
                   </div>
 
                   <div className="border-t border-slate-800 pt-6">
-                    <h3 className="text-white text-lg mb-3">Devices seen by AdhanCast</h3>
-                    {(devicesMessage || devicesDescription || devicesHintVoiceCommand) ? (
-                      <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-100 space-y-2">
-                        {devicesMessage ? <p>{devicesMessage}</p> : null}
-                        {devicesDescription ? <p className="text-amber-50/90">{devicesDescription}</p> : null}
-                        {devicesHintVoiceCommand ? (
-                          <div className="font-mono text-xs rounded-md border border-amber-400/20 bg-slate-950/40 px-3 py-2 break-all">
-                            {devicesHintVoiceCommand}
-                          </div>
-                        ) : null}
-                        <div>
-                          <Button variant="secondary" onClick={() => window.location.reload()}>Refresh seen devices</Button>
-                        </div>
-                      </div>
-                    ) : null}
+                    <h3 className="text-white text-lg mb-3">Alexa devices</h3>
                     {devices.length === 0 ? (
                       <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm text-slate-400">
-                        No Echo Dot or Fire TV devices have been seen by AdhanCast yet. Say “Alexa, open AdhanCast” once on each device you want the app to recognize, then refresh this page.
+                        No Alexa devices seen by AdhanCast were returned yet. Reconnect Amazon in onboarding if needed.
                       </div>
                     ) : (
                       <div className="space-y-3">
@@ -1152,7 +1124,7 @@ export default function Settings({
                             >
                               <div>
                                 <div className="text-slate-100">{device.name}</div>
-                                <div className="text-xs text-slate-400">Selected seen devices can use your AdhanCast Alexa playback flow after the skill verifies the request device at runtime.</div>
+                                <div className="text-xs text-slate-400">Selected devices can use your Adhan Home Alexa playback flow.</div>
                               </div>
                               <Checkbox
                                 checked={checked}
@@ -1166,7 +1138,7 @@ export default function Settings({
                       </div>
                     )}
                     <p className="text-xs text-slate-400 mt-3">
-                      These selections are saved in your account and checked by the Alexa skill at runtime. Use Alexa routines as the primary way to target rooms, speaker groups, or Fire TV playback.
+                      These selections are saved in your account and checked by the Alexa skill at runtime.
                     </p>
                   </div>
 

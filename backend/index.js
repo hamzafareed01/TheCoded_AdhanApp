@@ -38,21 +38,10 @@ const {
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
-app.set("etag", false);
 app.use(helmet());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }));
-
-app.use((req, res, next) => {
-  if (req.path.startsWith("/api/") || req.path.startsWith("/oauth/")) {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-    res.setHeader("Surrogate-Control", "no-store");
-  }
-  next();
-});
 
 // -----------------------------
 // Constants
@@ -274,6 +263,20 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
+
+app.use((req, res, next) => {
+  if (
+    req.path.startsWith("/api/alexa") ||
+    req.path.startsWith("/api/integrations") ||
+    req.path.startsWith("/api/user/settings")
+  ) {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    res.set("Surrogate-Control", "no-store");
+  }
+  next();
+});
 
 // -----------------------------
 // Generic helpers
@@ -600,6 +603,12 @@ const DEFAULT_ALEXA_API_ENDPOINTS = [
 ];
 const APP_LINK_STATE_TTL_MS = 10 * 60 * 1000;
 const ALEXA_APP_LINK_SCOPE = "alexa::skills:account_linking";
+const APP_SESSION_PREFIX = "adhapp_";
+const APP_SESSION_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  Number(process.env.APP_SESSION_TTL_MS || 1000 * 60 * 60 * 24 * 30) ||
+    1000 * 60 * 60 * 24 * 30
+);
 
 function getAlexaSkillId() {
   return String(
@@ -671,6 +680,88 @@ function base64UrlDecode(value) {
   const pad = input.length % 4;
   const normalized = pad ? input + "=".repeat(4 - pad) : input;
   return Buffer.from(normalized, "base64").toString("utf8");
+}
+
+function getAppSessionSecret() {
+  return String(
+    process.env.APP_SESSION_SECRET ||
+      process.env.ALEXA_APP_LINK_STATE_SECRET ||
+      process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
+      "adhancast-app-session"
+  ).trim();
+}
+
+function getAppSessionExpiryIso() {
+  return new Date(Date.now() + APP_SESSION_TTL_MS).toISOString();
+}
+
+function signSessionValue(encodedPayload) {
+  return crypto
+    .createHmac("sha256", getAppSessionSecret())
+    .update(String(encodedPayload || ""))
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function createAppSessionToken(profile) {
+  const payload = {
+    kind: "app_session",
+    sub: String(profile?.user_id || "").trim(),
+    name: profile?.name ? String(profile.name) : null,
+    email: profile?.email ? String(profile.email) : null,
+    iat: Date.now(),
+    exp: Date.now() + APP_SESSION_TTL_MS,
+  };
+
+  if (!payload.sub) {
+    const err = new Error("Could not create app session without an Amazon user id.");
+    err.status = 500;
+    throw err;
+  }
+
+  const encoded = base64UrlEncode(JSON.stringify(payload));
+  const signature = signSessionValue(encoded);
+  return `${APP_SESSION_PREFIX}${encoded}.${signature}`;
+}
+
+function verifyAppSessionToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw.startsWith(APP_SESSION_PREFIX)) return null;
+
+  const compact = raw.slice(APP_SESSION_PREFIX.length);
+  const splitAt = compact.lastIndexOf(".");
+  if (splitAt <= 0) {
+    const err = new Error("Invalid AdhanCast session token.");
+    err.status = 401;
+    throw err;
+  }
+
+  const encoded = compact.slice(0, splitAt);
+  const signature = compact.slice(splitAt + 1);
+  const expected = signSessionValue(encoded);
+
+  if (signature !== expected) {
+    const err = new Error("AdhanCast session token could not be verified.");
+    err.status = 401;
+    throw err;
+  }
+
+  const payload = JSON.parse(base64UrlDecode(encoded));
+  if (!payload?.sub || payload?.kind !== "app_session") {
+    const err = new Error("AdhanCast session token payload is incomplete.");
+    err.status = 401;
+    throw err;
+  }
+
+  if (Number(payload.exp || 0) <= Date.now()) {
+    const err = new Error("AdhanCast session token has expired.");
+    err.status = 401;
+    throw err;
+  }
+
+  return payload;
 }
 
 function createPkceVerifier() {
@@ -1221,9 +1312,22 @@ async function requireAmazonAuth(req, res, next) {
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
 
+    if (token.startsWith(APP_SESSION_PREFIX)) {
+      const session = verifyAppSessionToken(token);
+      req.amazonProfile = {
+        user_id: session.sub,
+        name: session.name || null,
+        email: session.email || null,
+      };
+      req.amazonToken = null;
+      req.appSession = session;
+      return next();
+    }
+
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
+    req.appSession = null;
     next();
   } catch (e) {
     const status = e.status || 401;
@@ -2152,6 +2256,10 @@ app.get(
 
     res.json({
       userKey: p.user_id,
+      session: {
+        kind: req.appSession ? "app" : "amazon",
+        expiresAt: req.appSession?.exp ? new Date(req.appSession.exp).toISOString() : null,
+      },
       amazon: {
         connected: true,
         email: p.email || null,
@@ -2203,9 +2311,14 @@ app.post(
         WHERE user_id = @user_id
       `);
 
+    const sessionToken = createAppSessionToken(profile);
+    const sessionExpiresAt = getAppSessionExpiryIso();
+
     res.json({
       ok: true,
       userKey: profile.user_id,
+      sessionToken,
+      sessionExpiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),

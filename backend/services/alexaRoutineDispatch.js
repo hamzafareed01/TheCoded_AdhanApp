@@ -280,7 +280,7 @@ function buildRoutineTemplates() {
       id: prayerName,
       prayerName,
       title,
-      routineName: `AdhanCast – ${title}`,
+      routineName: `Adhan Cast – ${title}`,
       phrase: `open ${invocationName} and play ${prayerName} adhan`,
     };
   });
