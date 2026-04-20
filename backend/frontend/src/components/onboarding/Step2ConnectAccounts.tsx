@@ -7,12 +7,12 @@ import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { AlexaIcon, GoogleIcon } from "../shared/BrandIcons";
 import {
-  apiFetch,
   apiFetchWithAmazonRepair,
   clearStoredAmazonToken,
   getStoredAmazonToken,
   restoreAmazonTokenFromUrl,
   setStoredAmazonToken,
+  subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 import {
   ensureAmazonSdk,
@@ -43,6 +43,8 @@ type Props = {
 
 type IntegrationStatus = {
   userKey?: string;
+  sessionToken?: string | null;
+  sessionExpiresAt?: string | null;
   alexa?: {
     connected: boolean;
     linkedAt: string | null;
@@ -136,6 +138,7 @@ export default function Step2ConnectAccounts({
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [deviceHint, setDeviceHint] = useState<string | null>(null);
   const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
   const [alexaStatus, setAlexaStatus] = useState<AlexaLinkStatus | null>(null);
 
@@ -199,11 +202,12 @@ export default function Step2ConnectAccounts({
 
     try {
       const resp = await apiFetchWithAmazonRepair("/api/integrations");
-
       if (!resp.ok) {
         if (resp.status === 401) {
+          clearStoredAmazonToken();
+          clearPendingAlexaLink();
+          markDisconnected("alexa");
           setServerStatus(null);
-          setError("Your Amazon session expired. Please reconnect Amazon.");
         }
         return;
       }
@@ -218,6 +222,7 @@ export default function Step2ConnectAccounts({
       setServerStatus(null);
     }
   }
+
   async function refreshAlexaLinkStatus() {
     const token = getStoredAmazonToken();
     if (!token) {
@@ -227,14 +232,7 @@ export default function Step2ConnectAccounts({
 
     try {
       const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/status");
-
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          setAlexaStatus(null);
-        }
-        return;
-      }
-
+      if (!resp.ok) return;
       const data = (await resp.json()) as AlexaLinkStatus;
       setAlexaStatus(data);
     } catch {
@@ -243,8 +241,7 @@ export default function Step2ConnectAccounts({
   }
 
   async function completeAlexaLogin(accessToken: string) {
-    setStoredAmazonToken(accessToken);
-    const linkRes = await apiFetch("/api/integrations/alexa/login", {
+    const linkRes = await apiFetchWithAmazonRepair("/api/integrations/alexa/login", {
       method: "POST",
       body: JSON.stringify({ accessToken }),
     });
@@ -254,8 +251,16 @@ export default function Step2ConnectAccounts({
       throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
     }
 
-    setTokens((prev) => ({ ...prev, alexa: accessToken }));
+    const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus;
+    const durableToken =
+      typeof data?.sessionToken === "string" && data.sessionToken.trim()
+        ? data.sessionToken.trim()
+        : accessToken;
+
+    setStoredAmazonToken(durableToken);
+    setTokens((prev) => ({ ...prev, alexa: durableToken }));
     markConnected("alexa");
+    setServerStatus(data);
     setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
 
     void refreshServerStatus();
@@ -272,7 +277,7 @@ export default function Step2ConnectAccounts({
 
     cleanCurrentUrl();
 
-    const resp = await apiFetch("/api/alexa/account-linking/complete", {
+    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/complete", {
       method: "POST",
       body: JSON.stringify({
         code,
@@ -297,6 +302,9 @@ export default function Step2ConnectAccounts({
     clearPendingAlexaLink();
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
     setInfo("Alexa skill enabled and account linking completed.");
+    setDeviceHint(
+      "Devices appear in Step 5 after the linked Alexa device talks to the skill once. Say: Alexa, open AdhanCast. Then say play Fajr adhan."
+    );
   }
 
   useEffect(() => {
@@ -411,43 +419,43 @@ export default function Step2ConnectAccounts({
   }
 
   async function startAlexaSkillLinking() {
-    setError(null);
-    setInfo(null);
-    setLoadingKey("alexa");
+  setError(null);
+  setInfo(null);
+  setLoadingKey("alexa");
 
-    if (!getStoredAmazonToken()) {
-      setLoadingKey(null);
-      setError("Connect your Amazon account first.");
-      return;
+  if (!getStoredAmazonToken()) {
+    setLoadingKey(null);
+    setError("Connect your Amazon account first.");
+    return;
+  }
+
+  try {
+    const redirectUri = currentAlexaLinkUrl();
+
+    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/start", {
+      method: "POST",
+      body: JSON.stringify({ redirectUri }),
+    });
+
+    if (!resp.ok) {
+      const msg = await resp.text().catch(() => "");
+      throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
     }
 
-    try {
-      const redirectUri = currentAlexaLinkUrl();
+    const data = (await resp.json()) as AlexaLinkStartResponse;
 
-      const resp = await apiFetch("/api/alexa/account-linking/start", {
-        method: "POST",
-        body: JSON.stringify({ redirectUri }),
-      });
+    storePendingAlexaLink({
+      state: data.state,
+      codeVerifier: data.codeVerifier,
+      redirectUri: data.redirectUri,
+      startedAt: Date.now(),
+    });
 
-      if (!resp.ok) {
-        const msg = await resp.text().catch(() => "");
-        throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
-      }
-
-      const data = (await resp.json()) as AlexaLinkStartResponse;
-
-      storePendingAlexaLink({
-        state: data.state,
-        codeVerifier: data.codeVerifier,
-        redirectUri: data.redirectUri,
-        startedAt: Date.now(),
-      });
-
-      window.location.assign(data.authorizationUrl);
-    } catch (e: unknown) {
-      setLoadingKey(null);
-      setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
-    }
+    window.location.assign(data.authorizationUrl);
+  } catch (e: unknown) {
+    setLoadingKey(null);
+    setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
+  }
   }
 
   async function disconnectAlexa() {
@@ -456,7 +464,7 @@ export default function Step2ConnectAccounts({
     setLoadingKey("alexa");
 
     try {
-      await apiFetch("/api/integrations/alexa/disconnect", {
+      await apiFetchWithAmazonRepair("/api/integrations/alexa/disconnect", {
         method: "POST",
       }).catch(() => undefined);
 
@@ -559,12 +567,12 @@ export default function Step2ConnectAccounts({
               <div
                 key={platform.key}
                 className={`rounded-2xl border p-5 shadow-sm transition ${disabled
-                  ? "border-border/50 bg-card/60 opacity-70"
-                  : linked
-                    ? "border-emerald-500/40 bg-emerald-500/5"
-                    : serverConnected
-                      ? "border-sky-500/40 bg-sky-500/5"
-                      : "border-border bg-card"
+                    ? "border-border/50 bg-card/60 opacity-70"
+                    : linked
+                      ? "border-emerald-500/40 bg-emerald-500/5"
+                      : serverConnected
+                        ? "border-sky-500/40 bg-sky-500/5"
+                        : "border-border bg-card"
                   }`}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -654,6 +662,13 @@ export default function Step2ConnectAccounts({
             <div>3. Step 5 and Settings will stay the source of truth for reciters, devices, and after-Adhan playback.</div>
           </div>
         </div>
+
+        {(deviceHint || skillLinked) && (
+          <div className="mt-4 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-100">
+            {deviceHint ||
+              "After linking, use the skill once from each Alexa device you want to appear in Step 5. Saying ‘Alexa, open AdhanCast’ and then ‘play Fajr adhan’ is enough."}
+          </div>
+        )}
 
         <div className="mt-10 flex items-center justify-between">
           <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>
