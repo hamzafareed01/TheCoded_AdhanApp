@@ -28,14 +28,31 @@ const {
   resolvePrayerPlaybackPlan,
   logAlexaDispatch,
 } = require("./services/alexaRoutineDispatch");
+const {
+  buildDiscoveryEndpoints,
+  buildStateForEndpoint,
+  handleSmartHomeDirective,
+  loadSmartHomeContext,
+} = require("./services/alexaSmartHome");
 
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+app.set("etag", false);
 app.use(helmet());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }));
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/") || req.path.startsWith("/oauth/")) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+  }
+  next();
+});
 
 // -----------------------------
 // Constants
@@ -601,53 +618,6 @@ function getAlexaSkillStage() {
     .toLowerCase();
   return raw === "live" ? "live" : "development";
 }
-
-function buildAlexaReadinessSummary(input = {}) {
-  const amazonConnected = input.amazonConnected === true;
-  const appToAppLinked = input.appToAppLinked === true || input.lwaLinked === true;
-  const enablementStatus = String(input.enablementStatus || input.skillStatus || "").trim().toUpperCase();
-  const accountLinkStatus = String(input.accountLinkStatus || input.skillAccountLinkStatus || "").trim().toUpperCase();
-
-  const skillEnabled = enablementStatus === "ENABLED" || enablementStatus === "ENABLING";
-  const skillAccountLinked = accountLinkStatus === "LINKED" || input.skillLinked === true || input.linked === true;
-
-  let connectionStage = "ready";
-  if (!amazonConnected) {
-    connectionStage = "amazon_login_required";
-  } else if (!appToAppLinked) {
-    connectionStage = "app_link_required";
-  } else if (!skillEnabled) {
-    connectionStage = "skill_enable_required";
-  } else if (!skillAccountLinked) {
-    connectionStage = "skill_link_required";
-  }
-
-  const statusLabelMap = {
-    amazon_login_required: "Connect Amazon",
-    app_link_required: "Reconnect Amazon app link",
-    skill_enable_required: "Enable Alexa skill",
-    skill_link_required: "Link Alexa skill account",
-    ready: "Ready for Alexa playback",
-  };
-
-  return {
-    amazonConnected,
-    appToAppLinked,
-    skillEnabled,
-    skillAccountLinked,
-    readyForPlayback:
-      amazonConnected && appToAppLinked && skillEnabled && skillAccountLinked,
-    connectionStage,
-    statusLabel: statusLabelMap[connectionStage] || "Check Alexa status",
-    invocationName: input.invocationName || null,
-    skillId: input.skillId || null,
-    skillStage: input.skillStage || null,
-    endpointHost: input.endpointHost || null,
-    enablementStatus: enablementStatus || null,
-    accountLinkStatus: accountLinkStatus || null,
-  };
-}
-
 
 function getSkillOauthScope() {
   return getDefaultAlexaOauthScope();
@@ -1465,78 +1435,6 @@ async function getUserProfileAndPrayers(pool, amazonUserId) {
   const userId = await ensureUser(pool, amazonUserId);
   return getUserProfileAndPrayersByUserId(pool, userId);
 }
-
-
-function normalizeAlexaDeviceId(value) {
-  return String(value || "").trim();
-}
-
-function buildAlexaDevicePlaceholderName(deviceId) {
-  const normalized = normalizeAlexaDeviceId(deviceId);
-  const suffix = normalized ? normalized.slice(-6) : "unknown";
-  return `Alexa device • ${suffix}`;
-}
-
-async function upsertAlexaDevice(pool, params) {
-  const userId = params?.userId || null;
-  const deviceId = normalizeAlexaDeviceId(params?.deviceId);
-  const deviceName = String(params?.deviceName || "").trim() || buildAlexaDevicePlaceholderName(deviceId);
-  const platform = String(params?.platform || "alexa").trim() || "alexa";
-
-  if (!userId || !deviceId) return null;
-
-  await pool
-    .request()
-    .input("user_id", sql.UniqueIdentifier, userId)
-    .input("device_id", sql.NVarChar(255), deviceId)
-    .input("device_name", sql.NVarChar(255), deviceName)
-    .input("platform", sql.NVarChar(50), platform)
-    .query(`
-      MERGE dbo.devices AS target
-      USING (
-        SELECT @user_id AS user_id, @platform AS platform, @device_id AS device_id
-      ) AS src
-      ON target.user_id = src.user_id
-         AND target.platform = src.platform
-         AND target.device_id = src.device_id
-      WHEN MATCHED THEN
-        UPDATE SET
-          device_name = CASE
-            WHEN target.device_name IS NULL OR target.device_name = '' OR target.device_name LIKE 'Alexa device • %'
-              THEN @device_name
-            ELSE target.device_name
-          END
-      WHEN NOT MATCHED THEN
-        INSERT (user_id, platform, device_id, device_name)
-        VALUES (@user_id, @platform, @device_id, @device_name);
-    `);
-
-  return { id: deviceId, name: deviceName, platform };
-}
-
-async function registerAlexaSkillDeviceSeen(pool, params) {
-  const userId = params?.userId || null;
-  const tokenId = params?.tokenId || null;
-  const deviceId = normalizeAlexaDeviceId(params?.deviceId);
-  const alexaUserId = String(params?.alexaUserId || "").trim() || null;
-  const deviceName = String(params?.deviceName || "").trim() || buildAlexaDevicePlaceholderName(deviceId);
-
-  if (tokenId && alexaUserId) {
-    await rememberAlexaSkillUser(pool, tokenId, alexaUserId);
-  }
-
-  if (!userId || !deviceId) {
-    return null;
-  }
-
-  return upsertAlexaDevice(pool, {
-    userId,
-    deviceId,
-    deviceName,
-    platform: "alexa",
-  });
-}
-
 // -----------------------------
 // Prayer helpers
 // -----------------------------
@@ -2252,19 +2150,6 @@ app.get(
       }
     }
 
-    const alexaPayload = {
-      connected: true,
-      linkedAt: null,
-      displayName: p.name || null,
-      accountId: p.user_id || null,
-      skillLinked: enablement?.data?.accountLink?.status === "LINKED" || !!skillLink.linked,
-      skillEnabled: enablement?.data?.status === "ENABLED" || enablement?.data?.status === "ENABLING",
-      skillStatus: enablement?.data?.status || null,
-      skillAccountLinkStatus: enablement?.data?.accountLink?.status || (skillLink.linked ? "LINKED" : "NOT_LINKED"),
-      skillLinkExpiresAt: skillLink.expiresAt,
-      appToAppLinked: !!storedAlexaLink?.amazonAccessToken,
-    };
-
     res.json({
       userKey: p.user_id,
       amazon: {
@@ -2272,19 +2157,16 @@ app.get(
         email: p.email || null,
       },
       alexa: {
-        ...alexaPayload,
-        readiness: buildAlexaReadinessSummary({
-          amazonConnected: alexaPayload.connected,
-          appToAppLinked: alexaPayload.appToAppLinked,
-          skillEnabled: alexaPayload.skillEnabled,
-          skillLinked: alexaPayload.skillLinked,
-          skillStatus: alexaPayload.skillStatus,
-          skillAccountLinkStatus: alexaPayload.skillAccountLinkStatus,
-          invocationName: getSkillInvocationName(),
-          skillId,
-          skillStage: getAlexaSkillStage(),
-          endpointHost: enablement?.endpointHost || storedAlexaLink?.endpointHost || null,
-        }),
+        connected: true,
+        linkedAt: null,
+        displayName: p.name || null,
+        accountId: p.user_id || null,
+        skillLinked: enablement?.data?.accountLink?.status === "LINKED" || !!skillLink.linked,
+        skillEnabled: enablement?.data?.status === "ENABLED" || enablement?.data?.status === "ENABLING",
+        skillStatus: enablement?.data?.status || null,
+        skillAccountLinkStatus: enablement?.data?.accountLink?.status || (skillLink.linked ? "LINKED" : "NOT_LINKED"),
+        skillLinkExpiresAt: skillLink.expiresAt,
+        appToAppLinked: !!storedAlexaLink?.amazonAccessToken,
       },
       google: {
         connected: false,
@@ -2469,7 +2351,7 @@ app.get(
       }
     }
 
-    const alexaStatusPayload = {
+    res.json({
       configured: oauth.configured,
       clientId: oauth.clientId || null,
       appLinkClientConfigured: getAlexaAppLinkConfig().configured,
@@ -2485,23 +2367,6 @@ app.get(
       endpointHost: enablement?.endpointHost || tokenRecord?.endpointHost || null,
       customerUserId: enablement?.data?.user?.id || tokenRecord?.customerUserId || null,
       ...status,
-    };
-
-    res.json({
-      ...alexaStatusPayload,
-      readiness: buildAlexaReadinessSummary({
-        amazonConnected: true,
-        appToAppLinked: alexaStatusPayload.lwaLinked,
-        lwaLinked: alexaStatusPayload.lwaLinked,
-        linked: alexaStatusPayload.linked,
-        skillLinked: alexaStatusPayload.linked,
-        enablementStatus: alexaStatusPayload.enablementStatus,
-        accountLinkStatus: alexaStatusPayload.accountLinkStatus,
-        invocationName: alexaStatusPayload.invocationName,
-        skillId: alexaStatusPayload.skillId,
-        skillStage: alexaStatusPayload.skillStage,
-        endpointHost: alexaStatusPayload.endpointHost,
-      }),
     });
   })
 );
@@ -2855,22 +2720,52 @@ app.get(
   })
 );
 
+
+app.get(
+  "/api/alexa/smart-home/discovery",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ endpoints: buildDiscoveryEndpoints(profile, devices) });
+  })
+);
+
+app.get(
+  "/api/alexa/smart-home/state",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const endpointId = String(req.query.endpointId || "").trim();
+    if (!endpointId) {
+      return res.status(400).json({ error: "endpointId is required." });
+    }
+
+    const pool = await getPool();
+    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ properties: buildStateForEndpoint(profile, devices, endpointId) });
+  })
+);
+
+app.post(
+  "/api/alexa/smart-home/directive",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const directive = req.body?.directive;
+    if (!directive || typeof directive !== "object") {
+      return res.status(400).json({ error: "directive payload is required." });
+    }
+
+    const pool = await getPool();
+    const result = await handleSmartHomeDirective(pool, req.skillAuth.userId, directive);
+    res.json(result);
+  })
+);
+
 app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool = await getPool();
-    const requestId = req.query?.requestId ? String(req.query.requestId) : null;
-    const deviceId = req.query?.deviceId ? String(req.query.deviceId) : null;
-    const alexaUserId = req.query?.alexaUserId ? String(req.query.alexaUserId) : null;
-
-    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
-      userId: req.skillAuth.userId,
-      tokenId: req.skillAuth.tokenId,
-      deviceId,
-      alexaUserId,
-    });
-
     const { profile, prayers } = await getUserProfileAndPrayersByUserId(
       pool,
       req.skillAuth.userId
@@ -2878,25 +2773,8 @@ app.get(
 
     const result = await computePrayerTimesForProfile(profile, prayers, new Date());
 
-    if (registeredDevice) {
-      await logAlexaDispatch(pool, {
-        userId: req.skillAuth.userId,
-        requestId,
-        prayerName: null,
-        deviceId,
-        triggerSource: "skill",
-        status: "device_seen",
-        message: `Registered Alexa device ${registeredDevice.id}`,
-        payload: {
-          alexaUserId,
-          deviceName: registeredDevice.name,
-        },
-      });
-    }
-
     res.json({
       ...result,
-      registeredDevice,
       userContext: {
         userId: req.skillAuth.userId,
         sect: profile.sect || "SUNNI",
@@ -2913,48 +2791,6 @@ app.get(
 );
 
 app.post(
-  "/api/alexa/skill/device-seen",
-  requireAlexaSkillAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const requestId = req.body?.requestId ? String(req.body.requestId) : null;
-    const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
-    const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
-    const locale = req.body?.locale ? String(req.body.locale) : null;
-
-    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
-      userId: req.skillAuth.userId,
-      tokenId: req.skillAuth.tokenId,
-      deviceId,
-      alexaUserId,
-      deviceName: req.body?.deviceName ? String(req.body.deviceName) : null,
-    });
-
-    if (registeredDevice) {
-      await logAlexaDispatch(pool, {
-        userId: req.skillAuth.userId,
-        requestId,
-        prayerName: null,
-        deviceId,
-        triggerSource: "skill",
-        status: "device_seen",
-        message: `Registered Alexa device ${registeredDevice.id}`,
-        payload: {
-          alexaUserId,
-          locale,
-          deviceName: registeredDevice.name,
-        },
-      });
-    }
-
-    res.json({
-      ok: true,
-      device: registeredDevice,
-    });
-  })
-);
-
-app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
@@ -2964,18 +2800,16 @@ app.post(
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
     const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
 
-    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
-      userId: req.skillAuth.userId,
-      tokenId: req.skillAuth.tokenId,
-      deviceId,
-      alexaUserId,
-    });
+    if (alexaUserId) {
+      await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
+    }
 
     try {
       const plan = await resolvePrayerPlaybackPlan(pool, {
         userId: req.skillAuth.userId,
         prayerName,
         req,
+        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -2990,14 +2824,10 @@ app.post(
           reciterId: plan.reciterId,
           afterAdhan: plan.afterAdhan,
           userContext: plan.userContext,
-          registeredDevice,
         },
       });
 
-      res.json({
-        ...plan,
-        registeredDevice,
-      });
+      res.json(plan);
     } catch (err) {
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
@@ -3797,22 +3627,7 @@ app.get(
         ORDER BY device_name
       `);
 
-    const devices = result.recordset || [];
-    const needsSkillDeviceRegistration = devices.length === 0;
-
-    res.json({
-      devices,
-      source: "database",
-      needsSkillDeviceRegistration,
-      message: needsSkillDeviceRegistration
-        ? "No Alexa devices are registered yet. After linking, open AdhanCast on the Echo you want to use and run one supported request so the backend can register that device automatically."
-        : null,
-      registrationHint: needsSkillDeviceRegistration
-        ? {
-            voiceCommand: "Alexa, open AdhanCast. Then say play Fajr adhan.",
-          }
-        : null,
-    });
+    res.json({ devices: result.recordset });
   })
 );
 
@@ -3829,14 +3644,23 @@ app.post(
       return res.status(400).json({ error: "Provide {id, name}" });
     }
 
-    const device = await upsertAlexaDevice(pool, {
-      userId,
-      deviceId: String(id),
-      deviceName: String(name),
-      platform: "alexa",
-    });
+    await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("device_id", sql.NVarChar(255), String(id))
+      .input("device_name", sql.NVarChar(255), String(name))
+      .query(`
+        MERGE dbo.devices AS target
+        USING (SELECT @user_id AS user_id, 'alexa' AS platform, @device_id AS device_id) AS src
+        ON target.user_id = src.user_id AND target.platform = src.platform AND target.device_id = src.device_id
+        WHEN MATCHED THEN
+          UPDATE SET device_name = @device_name
+        WHEN NOT MATCHED THEN
+          INSERT (user_id, platform, device_id, device_name)
+          VALUES (@user_id, 'alexa', @device_id, @device_name);
+      `);
 
-    res.json({ ok: true, device });
+    res.json({ ok: true });
   })
 );
 

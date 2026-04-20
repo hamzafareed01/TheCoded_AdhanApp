@@ -43,6 +43,16 @@ type PrayerConfig = {
   afterAdhan: AfterAdhan;
 };
 
+type QuietDownPolicy = {
+  enabled: boolean;
+  strategy: "lower" | "mute";
+  targetVolumePct: number;
+  restoreAfter: boolean;
+  includeFireTv: boolean;
+  mode?: string;
+  note?: string | null;
+};
+
 type UserSettings = {
   sect: Sect;
   language: string;
@@ -61,6 +71,7 @@ type UserSettings = {
   mosqueLat?: number | null;
   mosqueLng?: number | null;
   selectedAlexaDeviceIds?: string[];
+  quietDown: QuietDownPolicy;
   accountEnabled: boolean;
   globalOffsets: Offsets;
   prayerConfigs: PrayerConfig[];
@@ -243,6 +254,19 @@ function normalizeAfterAdhan(source: unknown): AfterAdhan {
   };
 }
 
+function normalizeQuietDown(source: unknown): QuietDownPolicy {
+  const src = isRecord(source) ? source : {};
+  return {
+    enabled: src.enabled === true,
+    strategy: src.strategy === "mute" ? "mute" : "lower",
+    targetVolumePct: Math.min(80, Math.max(5, asNumber(src.targetVolumePct) ?? 20)),
+    restoreAfter: src.restoreAfter !== false,
+    includeFireTv: src.includeFireTv === true,
+    mode: asString(src.mode) ?? undefined,
+    note: asString(src.note),
+  };
+}
+
 function normalizePrayerConfigs(source: unknown): PrayerConfig[] {
   const incoming = Array.isArray(source)
     ? source.filter((item): item is JsonRecord => isRecord(item))
@@ -291,8 +315,8 @@ function normalizeSettings(payload: unknown): UserSettings {
   const offsetsSource = isRecord(src.globalOffsets)
     ? src.globalOffsets
     : isRecord(src.offsets)
-      ? src.offsets
-      : {};
+    ? src.offsets
+    : {};
 
   return {
     sect,
@@ -304,8 +328,8 @@ function normalizeSettings(payload: unknown): UserSettings {
     calculationMethod: getSafeCalculationMethod(
       sect,
       asString(src.calculationMethod) ??
-      asString(src.calculation_method) ??
-      (sect === "SHIA" ? "jafari" : "isna")
+        asString(src.calculation_method) ??
+        (sect === "SHIA" ? "jafari" : "isna")
     ),
     highLatitudeMethod:
       asString(src.highLatitudeMethod) ??
@@ -324,9 +348,10 @@ function normalizeSettings(payload: unknown): UserSettings {
     mosqueLng: asNumber(src.mosqueLng),
     selectedAlexaDeviceIds: Array.isArray(src.selectedAlexaDeviceIds)
       ? src.selectedAlexaDeviceIds.filter(
-        (id): id is string => typeof id === "string" && id.trim().length > 0
-      )
+          (id): id is string => typeof id === "string" && id.trim().length > 0
+        )
       : [],
+    quietDown: normalizeQuietDown(src.quietDown ?? src.quietDownPolicy),
     accountEnabled:
       asBoolean(src.accountEnabled) ??
       asBoolean(src.account_enabled) ??
@@ -346,8 +371,8 @@ function normalizeReciters(payload: unknown): Reciter[] {
   const list = Array.isArray(payload)
     ? payload
     : isRecord(payload) && Array.isArray(payload.reciters)
-      ? payload.reciters
-      : [];
+    ? payload.reciters
+    : [];
 
   return list
     .filter((item): item is JsonRecord => isRecord(item))
@@ -403,8 +428,8 @@ function normalizeDevices(payload: unknown): Device[] {
   const list = Array.isArray(payload)
     ? payload
     : isRecord(payload) && Array.isArray(payload.devices)
-      ? payload.devices
-      : [];
+    ? payload.devices
+    : [];
 
   return list
     .filter((item): item is JsonRecord => isRecord(item))
@@ -432,10 +457,10 @@ function normalizeSchedules(payload: unknown): Schedule[] {
       deviceId: asString(item.deviceId),
       payload: isRecord(item.payload)
         ? {
-          surahNumber: asNumber(item.payload.surahNumber) ?? 1,
-          title: asString(item.payload.title),
-          reciterId: asString(item.payload.reciterId),
-        }
+            surahNumber: asNumber(item.payload.surahNumber) ?? 1,
+            title: asString(item.payload.title),
+            reciterId: asString(item.payload.reciterId),
+          }
         : { surahNumber: 1 },
       createdAt: asString(item.createdAt) ?? undefined,
     }))
@@ -467,7 +492,7 @@ async function geocodeLocation(city: string, country: string) {
   if (!res.ok) {
     throw new Error(
       (isRecord(data) && asString(data.error)) ||
-      "Could not geocode the selected location."
+        "Could not geocode the selected location."
     );
   }
 
@@ -509,6 +534,9 @@ export default function Settings({
   const [duas, setDuas] = useState<DuaItem[]>([]);
   const [surahs, setSurahs] = useState<SurahItem[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [devicesMessage, setDevicesMessage] = useState<string | null>(null);
+  const [devicesDescription, setDevicesDescription] = useState<string | null>(null);
+  const [devicesHintVoiceCommand, setDevicesHintVoiceCommand] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
 
   const [saving, setSaving] = useState(false);
@@ -596,8 +624,19 @@ export default function Settings({
         }
 
         if (devicesRes.ok) {
-          const devicesJson = await devicesRes.json();
+          const devicesJson = (await devicesRes.json()) as DeviceListResponse | unknown;
           setDevices(normalizeDevices(devicesJson));
+          if (isRecord(devicesJson)) {
+            setDevicesMessage(asString(devicesJson.message));
+            setDevicesDescription(asString(devicesJson.description));
+            setDevicesHintVoiceCommand(
+              isRecord(devicesJson.registrationHint) ? asString(devicesJson.registrationHint.voiceCommand) : null
+            );
+          } else {
+            setDevicesMessage(null);
+            setDevicesDescription(null);
+            setDevicesHintVoiceCommand(null);
+          }
         }
 
         await loadSchedules();
@@ -610,7 +649,7 @@ export default function Settings({
   }, [hasAmazonToken]);
 
   async function loadSchedules() {
-    const res = await apiFetchWithAmazonRepair("/api/user/schedules");
+    const res = await apiFetch("/api/user/schedules");
     if (!res.ok) return;
 
     const json = await res.json();
@@ -743,6 +782,7 @@ export default function Settings({
         useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
         selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
+        quietDown: syncedSettings.quietDown,
         globalOffsets: sanitizedGlobalOffsets,
         prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
           prayerName: pc.prayerName,
@@ -929,10 +969,11 @@ export default function Settings({
                       <button
                         type="button"
                         onClick={() => updateField("sect", "SUNNI")}
-                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${settings.sect === "SUNNI"
-                          ? "border-emerald-500 bg-emerald-500/10 text-white"
-                          : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
-                          }`}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+                          settings.sect === "SUNNI"
+                            ? "border-emerald-500 bg-emerald-500/10 text-white"
+                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                        }`}
                       >
                         <div className="font-medium">Sunni</div>
                         <div className="text-xs text-slate-400 mt-1">
@@ -943,10 +984,11 @@ export default function Settings({
                       <button
                         type="button"
                         onClick={() => updateField("sect", "SHIA")}
-                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${settings.sect === "SHIA"
-                          ? "border-emerald-500 bg-emerald-500/10 text-white"
-                          : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
-                          }`}
+                        className={`rounded-xl border px-4 py-3 text-left transition-colors ${
+                          settings.sect === "SHIA"
+                            ? "border-emerald-500 bg-emerald-500/10 text-white"
+                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                        }`}
                       >
                         <div className="font-medium">Shia</div>
                         <div className="text-xs text-slate-400 mt-1">
@@ -1033,28 +1075,28 @@ export default function Settings({
                     </h3>
 
                     <div className="space-y-3">
-                      {offsetsRows.map((p) => (
-                        <div
-                          key={p}
-                          className="flex items-center justify-between gap-4"
-                        >
-                          <Label className="text-slate-200 capitalize">{p}</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            step={1}
-                            className="w-28 bg-slate-900 border-slate-700 text-slate-100"
-                            value={settings.globalOffsets[p]}
-                            onChange={(e) => {
-                              const nextValue = Math.max(0, Number(e.target.value || 0));
-                              updateField("globalOffsets", {
-                                ...settings.globalOffsets,
-                                [p]: nextValue,
-                              });
-                            }}
-                          />
-                        </div>
-                      ))}
+                        {offsetsRows.map((p) => (
+                          <div
+                            key={p}
+                            className="flex items-center justify-between gap-4"
+                          >
+                            <Label className="text-slate-200 capitalize">{p}</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              step={1}
+                              className="w-28 bg-slate-900 border-slate-700 text-slate-100"
+                              value={settings.globalOffsets[p]}
+                              onChange={(e) => {
+                                const nextValue = Math.max(0, Number(e.target.value || 0));
+                                updateField("globalOffsets", {
+                                  ...settings.globalOffsets,
+                                  [p]: nextValue,
+                                });
+                              }}
+                            />
+                          </div>
+                        ))}
                     </div>
                   </div>
 
@@ -1076,10 +1118,24 @@ export default function Settings({
                   </div>
 
                   <div className="border-t border-slate-800 pt-6">
-                    <h3 className="text-white text-lg mb-3">Alexa devices</h3>
+                    <h3 className="text-white text-lg mb-3">Devices seen by AdhanCast</h3>
+                    {(devicesMessage || devicesDescription || devicesHintVoiceCommand) ? (
+                      <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-100 space-y-2">
+                        {devicesMessage ? <p>{devicesMessage}</p> : null}
+                        {devicesDescription ? <p className="text-amber-50/90">{devicesDescription}</p> : null}
+                        {devicesHintVoiceCommand ? (
+                          <div className="font-mono text-xs rounded-md border border-amber-400/20 bg-slate-950/40 px-3 py-2 break-all">
+                            {devicesHintVoiceCommand}
+                          </div>
+                        ) : null}
+                        <div>
+                          <Button variant="secondary" onClick={() => window.location.reload()}>Refresh seen devices</Button>
+                        </div>
+                      </div>
+                    ) : null}
                     {devices.length === 0 ? (
                       <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm text-slate-400">
-                        No linked Alexa devices were returned yet. Reconnect Amazon in onboarding if needed.
+                        No Echo Dot or Fire TV devices have been seen by AdhanCast yet. Say “Alexa, open AdhanCast” once on each device you want the app to recognize, then refresh this page.
                       </div>
                     ) : (
                       <div className="space-y-3">
@@ -1088,18 +1144,19 @@ export default function Settings({
                           return (
                             <label
                               key={device.id}
-                              className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 cursor-pointer ${checked
-                                ? "border-emerald-500/50 bg-emerald-500/10"
-                                : "border-slate-700"
-                                }`}
+                              className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 cursor-pointer ${
+                                checked
+                                  ? "border-emerald-500/50 bg-emerald-500/10"
+                                  : "border-slate-700"
+                              }`}
                             >
                               <div>
                                 <div className="text-slate-100">{device.name}</div>
-                                <div className="text-xs text-slate-400">Selected devices can use your AdhanCast Alexa playback flow.</div>
+                                <div className="text-xs text-slate-400">Selected seen devices can use your AdhanCast Alexa playback flow after the skill verifies the request device at runtime.</div>
                               </div>
                               <Checkbox
                                 checked={checked}
-                                onCheckedChange={(value) =>
+                                onCheckedChange={(value: boolean | "indeterminate") =>
                                   toggleSelectedDevice(device.id, value === true)
                                 }
                               />
@@ -1109,8 +1166,144 @@ export default function Settings({
                       </div>
                     )}
                     <p className="text-xs text-slate-400 mt-3">
-                      These selections are saved in your account and checked by the Alexa skill at runtime.
+                      These selections are saved in your account and checked by the Alexa skill at runtime. Use Alexa routines as the primary way to target rooms, speaker groups, or Fire TV playback.
                     </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-white text-sm font-medium">Quiet down during Adhan</div>
+                        <div className="text-slate-400 text-xs mt-1">
+                          Save your preferred quiet-down policy for selected Alexa devices.
+                        </div>
+                      </div>
+                      <Switch
+                        checked={settings.quietDown.enabled}
+                        onCheckedChange={(v: boolean) =>
+                          setSettings((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  quietDown: { ...prev.quietDown, enabled: v },
+                                }
+                              : prev
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-slate-200">Quiet-down action</Label>
+                        <Select
+                          value={settings.quietDown.strategy}
+                          onValueChange={(value: string) =>
+                            setSettings((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    quietDown: {
+                                      ...prev.quietDown,
+                                      strategy: value === "mute" ? "mute" : "lower",
+                                    },
+                                  }
+                                : prev
+                            )
+                          }
+                        >
+                          <SelectTrigger className="bg-slate-950 border-slate-700 text-slate-100">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-900 border-slate-700">
+                            <SelectItem value="lower">Lower volume</SelectItem>
+                            <SelectItem value="mute">Mute</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-slate-200">Target volume</Label>
+                        <Select
+                          value={String(settings.quietDown.targetVolumePct)}
+                          onValueChange={(value: string) =>
+                            setSettings((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    quietDown: {
+                                      ...prev.quietDown,
+                                      targetVolumePct: Math.min(80, Math.max(5, Number(value) || 20)),
+                                    },
+                                  }
+                                : prev
+                            )
+                          }
+                        >
+                          <SelectTrigger className="bg-slate-950 border-slate-700 text-slate-100">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-900 border-slate-700">
+                            <SelectItem value="10">10%</SelectItem>
+                            <SelectItem value="20">20%</SelectItem>
+                            <SelectItem value="30">30%</SelectItem>
+                            <SelectItem value="40">40%</SelectItem>
+                            <SelectItem value="50">50%</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <label className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3">
+                        <div>
+                          <div className="text-white text-sm">Restore after Adhan</div>
+                          <div className="text-slate-400 text-xs mt-1">
+                            Return supported devices to their previous state after playback.
+                          </div>
+                        </div>
+                        <Switch
+                          checked={settings.quietDown.restoreAfter}
+                          onCheckedChange={(v: boolean) =>
+                            setSettings((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    quietDown: { ...prev.quietDown, restoreAfter: v },
+                                  }
+                                : prev
+                            )
+                          }
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between gap-4 rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3">
+                        <div>
+                          <div className="text-white text-sm">Include Fire TV devices</div>
+                          <div className="text-slate-400 text-xs mt-1">
+                            Keep Fire TV devices inside the saved quiet-down policy.
+                          </div>
+                        </div>
+                        <Switch
+                          checked={settings.quietDown.includeFireTv}
+                          onCheckedChange={(v: boolean) =>
+                            setSettings((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    quietDown: { ...prev.quietDown, includeFireTv: v },
+                                  }
+                                : prev
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
+                      {settings.quietDown.note ||
+                        "This saves the quiet-down policy in your AdhanCast account now. Actual device-wide mute or volume changes still depend on separate Alexa smart-home or video device integration."}
+                    </div>
                   </div>
                 </div>
 
@@ -1234,16 +1427,16 @@ export default function Settings({
                         <Label className="text-slate-200">Offset (min)</Label>
                         <Input
                           type="number"
-                          min={0}
-                          step={1}
-                          className="bg-slate-900 border-slate-700 text-slate-100"
-                          value={pc.offsetMin}
-                          onChange={(e) => {
-                            const nextValue = Math.max(0, Number(e.target.value || 0));
-                            updatePrayerConfig(pc.prayerName, {
-                              offsetMin: nextValue,
-                            });
-                          }}
+                            min={0}
+                            step={1}
+                            className="bg-slate-900 border-slate-700 text-slate-100"
+                            value={pc.offsetMin}
+                            onChange={(e) => {
+                              const nextValue = Math.max(0, Number(e.target.value || 0));
+                              updatePrayerConfig(pc.prayerName, {
+                                offsetMin: nextValue,
+                              });
+                            }}
                         />
                       </div>
 
@@ -1396,9 +1589,9 @@ export default function Settings({
                                   v === NONE_VALUE
                                     ? { type: "surah", payload: null }
                                     : {
-                                      type: "surah",
-                                      payload: { surahNumber: Number(v) },
-                                    },
+                                        type: "surah",
+                                        payload: { surahNumber: Number(v) },
+                                      },
                               })
                             }
                           >
@@ -1526,10 +1719,11 @@ export default function Settings({
                           <button
                             key={d}
                             type="button"
-                            className={`px-2 py-1 rounded border text-xs ${newDays[i]
-                              ? "border-emerald-500 text-emerald-300"
-                              : "border-slate-700 text-slate-300"
-                              }`}
+                            className={`px-2 py-1 rounded border text-xs ${
+                              newDays[i]
+                                ? "border-emerald-500 text-emerald-300"
+                                : "border-slate-700 text-slate-300"
+                            }`}
                             onClick={() => toggleDay(i)}
                           >
                             {d}
@@ -1572,9 +1766,10 @@ export default function Settings({
                               .filter(Boolean)
                               .join(", ")}
                             {s.deviceId
-                              ? ` · Device: ${devices.find((d) => d.id === s.deviceId)?.name ||
-                              s.deviceId
-                              }`
+                              ? ` · Device: ${
+                                  devices.find((d) => d.id === s.deviceId)?.name ||
+                                  s.deviceId
+                                }`
                               : ""}
                           </div>
                         </div>

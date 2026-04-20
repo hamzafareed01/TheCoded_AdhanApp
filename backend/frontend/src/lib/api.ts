@@ -146,11 +146,16 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
   }
 
   const credentials = init.credentials ?? "omit";
+  const cache = init.cache ?? "no-store";
+
+  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
+  if (!headers.has("Pragma")) headers.set("Pragma", "no-cache");
 
   return fetch(url, {
     ...init,
     headers,
     credentials,
+    cache,
     mode: "cors",
   });
 }
