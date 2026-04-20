@@ -260,7 +260,7 @@ export default function Step2ConnectAccounts({
     setTokens((prev) => ({ ...prev, alexa: durableToken }));
     markConnected("alexa");
     setServerStatus(data);
-    setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
+    setInfo(durableToken.startsWith("adhapp_") ? "Amazon account connected and saved to a longer-lasting AdhanCast session. You can now enable the Alexa skill from this screen." : "Amazon account connected. You can now enable the Alexa skill from this screen.");
 
     void refreshServerStatus();
     void refreshAlexaLinkStatus();
@@ -648,11 +648,9 @@ export default function Step2ConnectAccounts({
         <div className="mt-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-muted-foreground">
           <div className="font-medium text-foreground">What happens here</div>
           <div className="mt-2 space-y-1">
-            <div>1. Connect Amazon so AdhanCast can save your settings, Alexa link state, and routine-ready playback profile.</div>
+            <div>1. Connect Amazon so the app can save your settings and devices.</div>
             <div>2. Enable and link the Alexa skill from this same screen.</div>
-            <div>3. After linking, say “Alexa, open AdhanCast” once on each Echo Dot or Fire TV device you want AdhanCast to recognize.</div>
-            <div>4. Alexa routines are the primary SmartAzan-style path for automatic cloud playback across rooms and speaker groups.</div>
-            <div>5. Step 5 and Settings stay the source of truth for reciters, seen devices, and after-Adhan playback behavior.</div>
+            <div>3. Step 5 and Settings will stay the source of truth for reciters, devices, and after-Adhan playback.</div>
           </div>
         </div>
 

@@ -34,15 +34,6 @@ type Device = {
   familyLabel?: string;
 };
 
-type DeviceListResponse = {
-  devices?: Device[];
-  message?: string | null;
-  description?: string | null;
-  registrationHint?: { voiceCommand?: string | null } | null;
-  source?: string | null;
-  listLabel?: string | null;
-};
-
 type Reciter = {
   id: string;
   name: string;
@@ -331,9 +322,6 @@ export default function Step5DevicesAdhan({
     normalizeQuietDown(onboardingData.quietDown)
   );
   const [devices, setDevices] = useState<Device[]>([]);
-  const [devicesMessage, setDevicesMessage] = useState<string | null>(null);
-  const [devicesDescription, setDevicesDescription] = useState<string | null>(null);
-  const [devicesHintVoiceCommand, setDevicesHintVoiceCommand] = useState<string | null>(null);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
     Array.isArray(onboardingData.devices)
       ? onboardingData.devices.filter((id): id is string => typeof id === "string")
@@ -458,20 +446,8 @@ export default function Step5DevicesAdhan({
       }
 
       if (devicesRes.ok) {
-        const payload = (await devicesRes.json()) as DeviceListResponse | unknown;
+        const payload = (await devicesRes.json()) as unknown;
         setDevices(normalizeDevices(payload));
-
-        if (isRecord(payload)) {
-          setDevicesMessage(asString(payload.message));
-          setDevicesDescription(asString(payload.description));
-          setDevicesHintVoiceCommand(
-            isRecord(payload.registrationHint) ? asString(payload.registrationHint.voiceCommand) : null
-          );
-        } else {
-          setDevicesMessage(null);
-          setDevicesDescription(null);
-          setDevicesHintVoiceCommand(null);
-        }
       }
 
       if (recitersRes.ok) {
@@ -590,7 +566,7 @@ export default function Step5DevicesAdhan({
     }
   };
 
-  const tabs = useMemo(() => ["Seen Devices", "Adhan per Prayer"], []);
+  const tabs = useMemo(() => ["Linked Devices", "Adhan per Prayer"], []);
 
   return (
     <div className="min-h-screen bg-slate-950 py-8 px-4">
@@ -612,9 +588,8 @@ export default function Step5DevicesAdhan({
           </div>
 
           <p className="text-slate-300 mb-6">
-            Enable your account, review devices seen by AdhanCast, and set Adhan plus
-            after-Adhan actions for each prayer. Alexa routines remain the primary
-            SmartAzan-style path for automatic cloud playback.
+            Enable your account, review Alexa devices seen by AdhanCast, and set Adhan plus
+            after-Adhan actions for each prayer.
           </p>
 
           <div className="grid md:grid-cols-3 gap-4 mb-6">
@@ -774,30 +749,12 @@ export default function Step5DevicesAdhan({
             </TabsList>
 
             <TabsContent value={tabs[0]} className="mt-4">
-              {!loading && (devicesMessage || devicesDescription || devicesHintVoiceCommand) ? (
-                <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm text-amber-100 space-y-2">
-                  {devicesMessage ? <p>{devicesMessage}</p> : null}
-                  {devicesDescription ? <p className="text-amber-50/90">{devicesDescription}</p> : null}
-                  {devicesHintVoiceCommand ? (
-                    <div className="font-mono text-xs rounded-md border border-amber-400/20 bg-slate-950/40 px-3 py-2 break-all">
-                      {devicesHintVoiceCommand}
-                    </div>
-                  ) : null}
-                  <div>
-                    <Button variant="secondary" className="mt-1" onClick={() => void loadAll()}>
-                      Refresh seen devices
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-
               {loading ? (
-                <p className="text-slate-400 text-sm">Loading seen devices…</p>
+                <p className="text-slate-400 text-sm">Loading linked devices…</p>
               ) : devices.length === 0 ? (
                 <p className="text-slate-300 text-sm">
-                  No devices have been seen by AdhanCast yet. Create routines in Alexa Setup,
-                  then say “Alexa, open AdhanCast” once on each Echo Dot or Fire TV device you
-                  want AdhanCast to recognize.
+                  No Alexa devices seen by AdhanCast were returned yet. You can continue and
+                  link or review device usage later.
                 </p>
               ) : (
                 <div className="space-y-3">
@@ -827,7 +784,7 @@ export default function Step5DevicesAdhan({
                           </div>
                         </div>
                         <Badge variant="secondary">
-                          {checked ? "Selected" : "Seen"}
+                          {checked ? "Selected" : "Linked"}
                         </Badge>
                       </label>
                     );
@@ -836,8 +793,8 @@ export default function Step5DevicesAdhan({
               )}
 
               <p className="text-xs text-slate-400 mt-4">
-                Selected devices are saved to your backend profile and checked by the Alexa skill at runtime.
-                Use Alexa routines as the primary way to target rooms, speaker groups, or Fire TV playback.
+                Selected devices are saved to your backend profile so later
+                playback routing can use the same stored targets consistently.
               </p>
             </TabsContent>
 

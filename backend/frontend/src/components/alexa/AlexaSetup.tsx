@@ -5,7 +5,7 @@ import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Badge } from "../ui/badge";
 import { AlertTriangle, Check, CheckCircle2, Copy, Link2, RefreshCw } from "lucide-react";
-import { apiFetch, apiFetchWithAmazonRepair } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
 
 type Template = {
   id: string;
@@ -42,41 +42,38 @@ type UserSettingsSummary = {
 
 type DeviceListResponse = {
   devices?: Array<{ id: string; name: string; platform?: string | null }>;
-  message?: string | null;
-  description?: string | null;
-  registrationHint?: { voiceCommand?: string | null } | null;
 };
 
 const FALLBACK_TEMPLATES: Template[] = [
   {
     id: "fajr",
     title: "Fajr Adhan",
-    routineName: "AdhanCast – Fajr Adhan",
-    phrase: "open adhan cast and play fajr adhan",
+    routineName: "Adhan Home – Fajr Adhan",
+    phrase: "open adhan home and play fajr adhan",
   },
   {
     id: "dhuhr",
     title: "Dhuhr Adhan",
-    routineName: "AdhanCast – Dhuhr Adhan",
-    phrase: "open adhan cast and play dhuhr adhan",
+    routineName: "Adhan Home – Dhuhr Adhan",
+    phrase: "open adhan home and play dhuhr adhan",
   },
   {
     id: "asr",
     title: "Asr Adhan",
-    routineName: "AdhanCast – Asr Adhan",
-    phrase: "open adhan cast and play asr adhan",
+    routineName: "Adhan Home – Asr Adhan",
+    phrase: "open adhan home and play asr adhan",
   },
   {
     id: "maghrib",
     title: "Maghrib Adhan",
-    routineName: "AdhanCast – Maghrib Adhan",
-    phrase: "open adhan cast and play maghrib adhan",
+    routineName: "Adhan Home – Maghrib Adhan",
+    phrase: "open adhan home and play maghrib adhan",
   },
   {
     id: "isha",
     title: "Isha Adhan",
-    routineName: "AdhanCast – Isha Adhan",
-    phrase: "open adhan cast and play isha adhan",
+    routineName: "Adhan Home – Isha Adhan",
+    phrase: "open adhan home and play isha adhan",
   },
 ];
 
@@ -96,9 +93,6 @@ export default function AlexaSetup() {
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [settings, setSettings] = useState<UserSettingsSummary | null>(null);
   const [deviceNames, setDeviceNames] = useState<string[]>([]);
-  const [devicesMessage, setDevicesMessage] = useState<string | null>(null);
-  const [devicesDescription, setDevicesDescription] = useState<string | null>(null);
-  const [devicesHintVoiceCommand, setDevicesHintVoiceCommand] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -129,10 +123,10 @@ export default function AlexaSetup() {
 
     try {
       const [templatesRes, statusRes, settingsRes, devicesRes] = await Promise.all([
-        apiFetchWithAmazonRepair("/api/alexa/routines/templates"),
-        apiFetchWithAmazonRepair("/api/alexa/account-linking/status"),
-        apiFetchWithAmazonRepair("/api/user/settings"),
-        apiFetchWithAmazonRepair("/api/alexa/devices"),
+        apiFetch("/api/alexa/routines/templates"),
+        apiFetch("/api/alexa/account-linking/status"),
+        apiFetch("/api/user/settings"),
+        apiFetch("/api/alexa/devices"),
       ]);
 
       if (templatesRes.ok) {
@@ -161,9 +155,6 @@ export default function AlexaSetup() {
           ? payload.devices.map((device) => device.name).filter(Boolean)
           : [];
         setDeviceNames(names);
-        setDevicesMessage(payload.message || null);
-        setDevicesDescription(payload.description || null);
-        setDevicesHintVoiceCommand(payload.registrationHint?.voiceCommand || null);
       }
     } catch {
       setError("Could not load Alexa setup details right now.");
@@ -195,9 +186,9 @@ export default function AlexaSetup() {
       return "Enable and link the Alexa skill from onboarding step 2. After linking succeeds, come back here to verify status.";
     }
     if (!selectedDeviceCount) {
-      return "Pick at least one seen device in Step 5 or Settings so playback verification can stay predictable.";
+      return "Pick at least one Alexa-compatible device in Step 5 or Settings. Devices appear here after AdhanCast sees them once from the live skill.";
     }
-    return "Alexa core setup looks healthy. Next: create routines for each prayer, then test voice playback on your Echo Dot and Fire TV.";
+    return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, then create routines if you want scheduled playback.";
   }, [selectedDeviceCount, status]);
 
   return (
@@ -209,7 +200,7 @@ export default function AlexaSetup() {
             <div>
               <div className="text-slate-100 font-semibold text-lg">Alexa Setup</div>
               <div className="text-slate-400 text-sm">
-                Guided Alexa status, routine phrases, and SmartAzan-style cloud playback checks.
+                Guided Alexa status, routine phrases, durable sign-in, and device-seen playback checks.
               </div>
             </div>
           </div>
@@ -306,21 +297,10 @@ export default function AlexaSetup() {
               <div>Method: <span className="text-slate-100">{settings?.calculationMethod || "isna"}</span></div>
               <div>Madhhab: <span className="text-slate-100">{settings?.madhhab || "hanafi"}</span></div>
               <div>Playback enabled: <span className="text-slate-100">{settings?.accountEnabled ? "Yes" : "No"}</span></div>
-              <div>Selected seen devices: <span className="text-slate-100">{selectedDeviceCount}</span></div>
+              <div>Selected devices: <span className="text-slate-100">{selectedDeviceCount}</span></div>
               {deviceNames.length ? (
                 <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-xs text-slate-100">
                   {deviceNames.join(", ")}
-                </div>
-              ) : (
-                <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-xs text-slate-300">
-                  No devices have been seen by AdhanCast yet. Create routines now, then say “Alexa, open AdhanCast” once on each Echo Dot or Fire TV device you want the app to recognize.
-                </div>
-              )}
-              {devicesMessage || devicesDescription || devicesHintVoiceCommand ? (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-100 space-y-2">
-                  {devicesMessage ? <div>{devicesMessage}</div> : null}
-                  {devicesDescription ? <div className="text-amber-50/90">{devicesDescription}</div> : null}
-                  {devicesHintVoiceCommand ? <div className="font-mono break-all">{devicesHintVoiceCommand}</div> : null}
                 </div>
               ) : null}
               <div>
@@ -350,9 +330,8 @@ export default function AlexaSetup() {
               <li>Open the Alexa app, then go to <b>More → Routines → +</b>.</li>
               <li>Pick the correct prayer-time trigger for the routine.</li>
               <li>Choose <b>Add action → Custom</b> and paste one of the phrases below.</li>
-              <li>Under <b>From</b>, pick the Echo Dot, Echo Show, Fire TV, or other Alexa device that should speak the command.</li>
+              <li>Under <b>From</b>, pick the Echo device that should speak the command.</li>
               <li>Save, then run the routine once manually before relying on it daily.</li>
-              <li>For any device you want to appear in AdhanCast, say “Alexa, open AdhanCast” once after setup so the app can mark it as seen.</li>
             </ol>
           </CardContent>
         </Card>
