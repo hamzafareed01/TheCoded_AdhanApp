@@ -1,5 +1,3 @@
-// src/lib/api.ts
-
 function normalizeBase(base: string): string {
   const b = (base || "").trim();
   if (!b) return "";
@@ -171,14 +169,10 @@ export async function apiFetchWithAmazonRepair(
     return response;
   }
 
-  // If the app is already using a durable backend session token, do not
-  // aggressively clear it here. Let the caller decide how to message 401s.
   if (isAppSessionToken(storedToken)) {
     return response;
   }
 
-  // For legacy raw Amazon tokens, try to recover a fresher token from the URL
-  // once before giving up.
   const repairedToken = restoreAmazonTokenFromUrl();
   if (repairedToken && repairedToken !== storedToken) {
     return apiFetch(path, init);
