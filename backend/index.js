@@ -1501,12 +1501,14 @@ async function getUserProfileAndPrayersByUserId(pool, userId) {
     `);
 
   const targetEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
+  const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
 
   return {
     userId,
     profile: profileResult.recordset[0] || {},
     prayers: prayerResult.recordset || [],
     targetEndpointIds,
+    prayerTargetEndpointMap,
   };
 }
 
@@ -3293,8 +3295,14 @@ app.get(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
 
-    const { profile, prayers, targetEndpointIds } = await getUserProfileAndPrayers(pool, amazonUserId);
-    const settings = buildUserSettingsPayload(amazonUserId, profile, prayers, targetEndpointIds);
+    const { profile, prayers, targetEndpointIds, prayerTargetEndpointMap } = await getUserProfileAndPrayers(pool, amazonUserId);
+    const settings = buildUserSettingsPayload(
+      amazonUserId,
+      profile,
+      prayers,
+      targetEndpointIds,
+      prayerTargetEndpointMap
+    );
 
     res.json({
       userKey: amazonUserId,
@@ -3368,7 +3376,12 @@ async function handleSaveUserSettings(req, res) {
     ? parseStringArray(body.selectedAlexaTargetEndpointIds ?? body.selectedTargetEndpointIds)
     : undefined;
 
-  const hasPerPrayerTargetEndpointIds = hasOwn(body, "perPrayerTargetEndpointIds") || hasOwn(body, "prayerTargetEndpointIds");
+  const rawPerPrayerTargetEndpointIds = isObject(body.perPrayerTargetEndpointIds)
+    ? body.perPrayerTargetEndpointIds
+    : isObject(body.prayerTargetEndpointIds)
+    ? body.prayerTargetEndpointIds
+    : null;
+  const hasPerPrayerTargetEndpointIds = !!rawPerPrayerTargetEndpointIds;
   const quietDownPolicy = isObject(body.quietDown) ? body.quietDown : isObject(body.quietDownPolicy) ? body.quietDownPolicy : null;
   const hasQuietDownPolicy = !!quietDownPolicy;
   const quietDownEnabled = hasQuietDownPolicy ? quietDownPolicy.enabled === true : undefined;
@@ -3546,11 +3559,7 @@ async function handleSaveUserSettings(req, res) {
   }
 
   if (hasPerPrayerTargetEndpointIds) {
-    await replacePrayerTargetEndpointMap(
-      pool,
-      userId,
-      rawPerPrayerTargetEndpointIds && typeof rawPerPrayerTargetEndpointIds === 'object' ? rawPerPrayerTargetEndpointIds : {}
-    );
+    await replacePrayerTargetEndpointMap(pool, userId, rawPerPrayerTargetEndpointIds || {});
   }
 
   const quietHours = body.quietHours;
@@ -3700,7 +3709,8 @@ async function handleSaveUserSettings(req, res) {
     amazonUserId,
     refreshed.profile,
     refreshed.prayers,
-    refreshed.targetEndpointIds
+    refreshed.targetEndpointIds,
+    refreshed.prayerTargetEndpointMap
   );
 
   res.json({
