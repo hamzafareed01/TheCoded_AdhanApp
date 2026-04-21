@@ -34,6 +34,16 @@ type Device = {
   familyLabel?: string;
 };
 
+type PlaybackEndpoint = {
+  endpointId: string;
+  friendlyName: string;
+  endpointKind?: string;
+  deviceFamily?: string;
+  deviceId?: string | null;
+  supportsAudio?: boolean;
+  supportsFireTv?: boolean;
+};
+
 type Reciter = {
   id: string;
   name: string;
@@ -81,6 +91,7 @@ type UserSettingsPayload = {
   accountEnabled?: unknown;
   account_enabled?: unknown;
   selectedAlexaDeviceIds?: unknown;
+  selectedAlexaTargetEndpointIds?: unknown;
   selectedDeviceIds?: unknown;
   quietDown?: unknown;
   quietDownPolicy?: unknown;
@@ -222,6 +233,27 @@ function normalizeDevices(payload: unknown): Device[] {
     .filter((item: Device) => item.id.length > 0 && item.name.length > 0);
 }
 
+function normalizePlaybackEndpoints(payload: unknown): PlaybackEndpoint[] {
+  const rawList = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.endpoints)
+    ? payload.endpoints
+    : [];
+
+  return rawList
+    .filter((item): item is JsonRecord => isRecord(item))
+    .map((item: JsonRecord) => ({
+      endpointId: asString(item.endpointId) ?? "",
+      friendlyName: asString(item.friendlyName) ?? "",
+      endpointKind: asString(item.endpointKind) ?? undefined,
+      deviceFamily: asString(item.deviceFamily) ?? undefined,
+      deviceId: asString(item.deviceId),
+      supportsAudio: asBoolean(item.supportsAudio) ?? undefined,
+      supportsFireTv: asBoolean(item.supportsFireTv) ?? undefined,
+    }))
+    .filter((item) => item.endpointId.length > 0 && item.friendlyName.length > 0);
+}
+
 function normalizeReciters(payload: unknown): Reciter[] {
   const rawList = Array.isArray(payload)
     ? payload
@@ -322,6 +354,8 @@ export default function Step5DevicesAdhan({
     normalizeQuietDown(onboardingData.quietDown)
   );
   const [devices, setDevices] = useState<Device[]>([]);
+  const [playbackEndpoints, setPlaybackEndpoints] = useState<PlaybackEndpoint[]>([]);
+  const [selectedEndpointIds, setSelectedEndpointIds] = useState<string[]>([]);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
     Array.isArray(onboardingData.devices)
       ? onboardingData.devices.filter((id): id is string => typeof id === "string")
@@ -346,10 +380,11 @@ export default function Step5DevicesAdhan({
 
   const canContinue = useMemo(() => {
     const anyReciter = prayerConfigs.some((p) => !!p.adhanReciterId);
-    const hasValidDeviceSelection =
-      devices.length === 0 || selectedDeviceIds.length > 0;
-    return accountEnabled && anyReciter && hasValidDeviceSelection && !saving;
-  }, [accountEnabled, prayerConfigs, devices.length, selectedDeviceIds.length, saving]);
+    const hasValidSelection = playbackEndpoints.length > 0
+      ? selectedEndpointIds.length > 0
+      : devices.length === 0 || selectedDeviceIds.length > 0;
+    return accountEnabled && anyReciter && hasValidSelection && !saving;
+  }, [accountEnabled, prayerConfigs, playbackEndpoints.length, selectedEndpointIds.length, devices.length, selectedDeviceIds.length, saving]);
 
   function updatePrayer(prayerName: PrayerName, patch: Partial<PrayerConfig>) {
     setPrayerConfigs((prev) =>
@@ -362,6 +397,15 @@ export default function Step5DevicesAdhan({
       const next = checked
         ? Array.from(new Set([...prev, deviceId]))
         : prev.filter((id) => id !== deviceId);
+      return next;
+    });
+  }
+
+  function toggleSelectedEndpoint(endpointId: string, checked: boolean) {
+    setSelectedEndpointIds((prev) => {
+      const next = checked
+        ? Array.from(new Set([...prev, endpointId]))
+        : prev.filter((id) => id !== endpointId);
       return next;
     });
   }
@@ -420,6 +464,20 @@ export default function Step5DevicesAdhan({
         if (Array.isArray(selectedDeviceIdsSource)) {
           setSelectedDeviceIds(
             selectedDeviceIdsSource.filter(
+              (id): id is string => typeof id === "string" && id.trim().length > 0
+            )
+          );
+        }
+
+        const selectedEndpointIdsSource = Array.isArray((settings as JsonRecord).selectedAlexaTargetEndpointIds)
+          ? (settings as JsonRecord).selectedAlexaTargetEndpointIds
+          : Array.isArray((payload as JsonRecord).selectedAlexaTargetEndpointIds)
+          ? (payload as JsonRecord).selectedAlexaTargetEndpointIds
+          : [];
+
+        if (Array.isArray(selectedEndpointIdsSource)) {
+          setSelectedEndpointIds(
+            selectedEndpointIdsSource.filter(
               (id): id is string => typeof id === "string" && id.trim().length > 0
             )
           );
@@ -491,6 +549,16 @@ export default function Step5DevicesAdhan({
   }, []);
 
   useEffect(() => {
+    if (playbackEndpoints.length === 0) return;
+
+    setSelectedEndpointIds((prev) => {
+      const filtered = prev.filter((id) => playbackEndpoints.some((endpoint) => endpoint.endpointId === id));
+      if (filtered.length > 0) return filtered;
+      return playbackEndpoints.map((endpoint) => endpoint.endpointId);
+    });
+  }, [playbackEndpoints]);
+
+  useEffect(() => {
     if (devices.length === 0) return;
 
     setSelectedDeviceIds((prev) => {
@@ -520,7 +588,12 @@ export default function Step5DevicesAdhan({
       return;
     }
 
-    if (devices.length > 0 && selectedDeviceIds.length === 0) {
+    if (playbackEndpoints.length > 0 && selectedEndpointIds.length === 0) {
+      setError("Please select at least one playback target before continuing.");
+      return;
+    }
+
+    if (playbackEndpoints.length === 0 && devices.length > 0 && selectedDeviceIds.length === 0) {
       setError("Please select at least one Alexa device before continuing.");
       return;
     }
@@ -529,6 +602,7 @@ export default function Step5DevicesAdhan({
     try {
       const payload: JsonRecord = {
         accountEnabled,
+        selectedAlexaTargetEndpointIds: selectedEndpointIds,
         selectedAlexaDeviceIds: selectedDeviceIds,
         quietDown,
         quietDownPolicy: quietDown,
@@ -549,6 +623,7 @@ export default function Step5DevicesAdhan({
       setOnboardingData({
         ...onboardingData,
         devices: selectedDeviceIds,
+        selectedAlexaTargetEndpointIds: selectedEndpointIds,
         accountEnabled,
         prayerConfigs,
         quietDown,
@@ -588,7 +663,7 @@ export default function Step5DevicesAdhan({
           </div>
 
           <p className="text-slate-300 mb-6">
-            Enable your account, review linked Alexa devices seen by AdhanCast, and set Adhan plus
+            Enable your account, review linked Alexa devices, and set Adhan plus
             after-Adhan actions for each prayer.
           </p>
 
@@ -731,7 +806,7 @@ export default function Step5DevicesAdhan({
 
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
               {quietDown.note ||
-                "AdhanCast will save this quiet-mode policy now. The separate Alexa Smart Home skill reads this policy for future supported household volume control and Fire TV handling."}
+                "AdhanCast will save this quiet-down policy now. Actual device-wide volume control still depends on separate Alexa smart-home or video device integration for the selected hardware."}
             </div>
           </div>
 
@@ -749,11 +824,33 @@ export default function Step5DevicesAdhan({
             </TabsList>
 
             <TabsContent value={tabs[0]} className="mt-4">
+              {playbackEndpoints.length > 0 ? (
+                <div className="mb-5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <div className="text-white text-sm font-medium mb-2">Playback targets</div>
+                  <p className="text-slate-300 text-sm mb-3">
+                    AdhanCast now builds household playback targets from recently seen Alexa devices and logical groups.
+                  </p>
+                  <div className="space-y-2">
+                    {playbackEndpoints.map((endpoint) => {
+                      const checked = selectedEndpointIds.includes(endpoint.endpointId);
+                      return (
+                        <label key={endpoint.endpointId} className={`flex items-center gap-3 rounded-lg border px-3 py-3 cursor-pointer ${checked ? "border-emerald-500/50 bg-emerald-500/10" : "border-slate-700 bg-slate-800/40"}`}>
+                          <Checkbox checked={checked} onCheckedChange={(value) => toggleSelectedEndpoint(endpoint.endpointId, value === true)} />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-slate-100 text-sm font-medium">{endpoint.friendlyName}</div>
+                            <div className="text-slate-400 text-xs mt-1">{endpoint.endpointKind === "group" ? "Logical playback group" : "Device-backed playback target"}{endpoint.supportsFireTv ? " · Includes Fire TV support" : ""}</div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               {loading ? (
                 <p className="text-slate-400 text-sm">Loading linked devices…</p>
               ) : devices.length === 0 ? (
                 <p className="text-slate-300 text-sm">
-                  No linked Alexa devices seen by AdhanCast were returned yet. You can continue and
+                  No linked Alexa devices were returned yet. You can continue and
                   link or review device usage later.
                 </p>
               ) : (

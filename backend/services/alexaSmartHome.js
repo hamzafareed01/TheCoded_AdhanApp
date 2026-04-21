@@ -1,9 +1,6 @@
 
 const { sql } = require("../db/sql");
-
-function normalizeQuietStrategy(value) {
-  return String(value || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower';
-}
+const { listAlexaCustomerEndpoints, getSelectedAlexaTargetEndpointIds } = require('./alexaPlaybackTargets');
 
 const DEFAULT_QUIET_DOWN_POLICY = {
   enabled: false,
@@ -70,11 +67,11 @@ function parseQuietDownPolicy(profile = {}) {
   const parsed = safeParseJson(profile.quiet_down_policy_json, {}) || {};
   return {
     enabled: normalizeBool(profile.quiet_down_enabled, normalizeBool(parsed.enabled, DEFAULT_QUIET_DOWN_POLICY.enabled)),
-    mode: normalizeQuietStrategy(profile.quiet_down_strategy || parsed.mode),
-    volume: normalizeInt(profile.quiet_down_target_volume_pct, normalizeInt(parsed.volume, DEFAULT_QUIET_DOWN_POLICY.volume)),
-    restoreAfterAdhan: normalizeBool(profile.quiet_down_restore, normalizeBool(parsed.restoreAfterAdhan, DEFAULT_QUIET_DOWN_POLICY.restoreAfterAdhan)),
+    mode: parsed.mode === "volume" ? "volume" : DEFAULT_QUIET_DOWN_POLICY.mode,
+    volume: normalizeInt(parsed.volume, DEFAULT_QUIET_DOWN_POLICY.volume),
+    restoreAfterAdhan: normalizeBool(parsed.restoreAfterAdhan, DEFAULT_QUIET_DOWN_POLICY.restoreAfterAdhan),
     applyToSelectedDevices: normalizeBool(parsed.applyToSelectedDevices, DEFAULT_QUIET_DOWN_POLICY.applyToSelectedDevices),
-    includeFireTv: normalizeBool(profile.quiet_down_include_fire_tv, normalizeBool(parsed.includeFireTv, DEFAULT_QUIET_DOWN_POLICY.includeFireTv)),
+    includeFireTv: normalizeBool(parsed.includeFireTv, DEFAULT_QUIET_DOWN_POLICY.includeFireTv),
   };
 }
 
@@ -261,13 +258,10 @@ async function loadSmartHomeContext(pool, userId) {
     .request()
     .input("user_id", sql.UniqueIdentifier, userId)
     .query(`
-      SELECT device_id, device_name AS name, platform,
-             COALESCE(device_family, 'unknown') AS device_family,
-             COALESCE(enabled, 1) AS enabled,
-             last_seen_at
+      SELECT device_id, name, platform, enabled
       FROM dbo.devices
       WHERE user_id = @user_id
-      ORDER BY COALESCE(last_seen_at, created_at) DESC
+      ORDER BY created_at DESC
     `);
 
   return {
@@ -287,10 +281,6 @@ async function updateQuietDownPolicy(pool, userId, nextPolicy) {
       SET
         quiet_down_enabled = @quiet_down_enabled,
         quiet_down_policy_json = @quiet_down_policy_json,
-        quiet_down_strategy = CASE WHEN @quiet_down_enabled = 1 AND JSON_VALUE(@quiet_down_policy_json, '$.mode') = 'mute' THEN 'mute' ELSE 'lower' END,
-        quiet_down_target_volume_pct = TRY_CAST(JSON_VALUE(@quiet_down_policy_json, '$.volume') AS INT),
-        quiet_down_restore = CASE WHEN JSON_VALUE(@quiet_down_policy_json, '$.restoreAfterAdhan') IN ('false','0') THEN 0 ELSE 1 END,
-        quiet_down_include_fire_tv = CASE WHEN JSON_VALUE(@quiet_down_policy_json, '$.includeFireTv') IN ('true','1') THEN 1 ELSE 0 END,
         updated_at = SYSUTCDATETIME()
       WHERE user_id = @user_id
     `);
@@ -423,25 +413,4 @@ module.exports = {
   buildDiscoveryEndpoints,
   buildStateForEndpoint,
   handleSmartHomeDirective,
-  buildSmartHomeSummary,
 };
-
-
-function buildSmartHomeSummary(profile = {}, devices = []) {
-  const quiet = parseQuietDownPolicy(profile);
-  const selectedDeviceIds = parseSelectedDeviceIds(profile.selected_alexa_device_ids_json);
-  const fireTvTargets = inferFireTvTargets(devices);
-  return {
-    automationEnabled: !!profile.account_enabled,
-    quietModeEnabled: quiet.enabled,
-    quietModeStrategy: quiet.mode,
-    quietVolume: quiet.volume,
-    restoreAfterAdhan: quiet.restoreAfterAdhan,
-    includeFireTv: quiet.includeFireTv,
-    selectedDeviceCount: selectedDeviceIds.length,
-    seenDeviceCount: Array.isArray(devices) ? devices.length : 0,
-    fireTvTargetCount: fireTvTargets.length,
-    policyModeOnly: true,
-    note: 'AdhanCast can already store and expose quiet-mode controls. Real household-wide mute or volume changes still depend on the separate Smart Home skill and supported Alexa device capabilities.',
-  };
-}
