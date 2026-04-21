@@ -10,8 +10,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "migrate:up": "node scripts/migrate.js",
-    "start:with-migrations": "node scripts/migrate.js && node index.js",
+    "migrate:up": "node scripts/migrate.cjs",
+    "start:with-migrations": "node scripts/migrate.cjs && node index.js",
     "healthcheck": "node -e \"require('http').get('http://127.0.0.1:'+(process.env.PORT||4000)+'/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""
   },
   "dependencies": {

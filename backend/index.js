@@ -33,7 +33,14 @@ const {
   buildStateForEndpoint,
   handleSmartHomeDirective,
   loadSmartHomeContext,
+  buildSmartHomeSummary,
 } = require("./services/alexaSmartHome");
+const {
+  syncAlexaCustomerEndpoints,
+  listAlexaCustomerEndpoints,
+  getSelectedAlexaTargetEndpointIds,
+  replaceSelectedAlexaTargetEndpointIds,
+} = require("./services/alexaPlaybackTargets");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -297,64 +304,78 @@ function getBearerToken(req) {
   return match ? match[1].trim() : "";
 }
 
-function getAppSessionSecret() {
-  return String(process.env.APP_SESSION_SECRET || '').trim();
-}
-
-function getAppSessionTtlMs() {
-  return Math.max(60_000, Number(process.env.APP_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000) || 30 * 24 * 60 * 60 * 1000);
-}
-
-function createAppSessionToken(payload) {
-  const secret = getAppSessionSecret();
-  if (!secret) return null;
-  const body = {
-    ...payload,
-    exp: Date.now() + getAppSessionTtlMs(),
-  };
-  const encoded = base64UrlEncode(JSON.stringify(body));
-  const signature = crypto
-    .createHmac('sha256', secret)
-    .update(encoded)
-    .digest('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-  return `${APP_SESSION_PREFIX}${encoded}.${signature}`;
-}
-
-function verifyAppSessionToken(token) {
-  const secret = getAppSessionSecret();
-  const raw = String(token || '');
-  if (!secret || !raw.startsWith(APP_SESSION_PREFIX)) return null;
-
-  const value = raw.slice(APP_SESSION_PREFIX.length);
-  const splitAt = value.lastIndexOf('.');
-  if (splitAt <= 0) return null;
-  const encoded = value.slice(0, splitAt);
-  const signature = value.slice(splitAt + 1);
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(encoded)
-    .digest('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-  if (signature !== expected) return null;
-  try {
-    const payload = JSON.parse(base64UrlDecode(encoded));
-    if (!payload?.userKey || !payload?.exp || Number(payload.exp) <= Date.now()) return null;
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
 function getAmazonTokenFromRequest(req) {
   return (
     getBearerToken(req) ||
     String(req.body?.accessToken || req.body?.access_token || "").trim()
   );
+}
+
+function getAppSessionSecret() {
+  return String(process.env.APP_SESSION_SECRET || "").trim();
+}
+
+function getAppSessionTtlMs() {
+  return Math.max(
+    60_000,
+    Number(process.env.APP_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000) ||
+      30 * 24 * 60 * 60 * 1000
+  );
+}
+
+function createAppSessionToken(payload) {
+  const secret = getAppSessionSecret();
+  if (!secret) return null;
+
+  const body = {
+    userId: payload.userId,
+    userKey: payload.amazonUserId,
+    exp: Date.now() + getAppSessionTtlMs(),
+    iat: Date.now(),
+  };
+
+  const encoded = base64UrlEncode(JSON.stringify(body));
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  return `${APP_SESSION_PREFIX}${encoded}.${signature}`;
+}
+
+function verifyAppSessionToken(token) {
+  const secret = getAppSessionSecret();
+  const raw = String(token || "").trim();
+  if (!secret || !raw.startsWith(APP_SESSION_PREFIX)) return null;
+
+  const value = raw.slice(APP_SESSION_PREFIX.length);
+  const splitAt = value.lastIndexOf(".");
+  if (splitAt <= 0) return null;
+
+  const encoded = value.slice(0, splitAt);
+  const signature = value.slice(splitAt + 1);
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(encoded)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+
+  if (signature !== expected) return null;
+
+  try {
+    const payload = JSON.parse(base64UrlDecode(encoded));
+    if (!payload?.userKey || !payload?.exp || Number(payload.exp) <= Date.now()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 function cleanupExpiredTokenCache() {
@@ -399,7 +420,6 @@ function normalizeTimeString(value, fallback) {
   return "22:00:00";
 }
 
-
 function toSqlTime(value, fallback = "00:00:00") {
   const normalized = normalizeTimeString(value, fallback);
   const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})$/);
@@ -426,10 +446,8 @@ function toSqlTime(value, fallback = "00:00:00") {
     throw new Error(`Invalid time value: ${normalized}`);
   }
 
-  const d = new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
-  return d;
+  return new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
 }
-
 
 function getRegionCode(value) {
   const raw = String(value || "").trim();
@@ -2263,12 +2281,19 @@ app.post(
         WHERE user_id = @user_id
       `);
 
-    const sessionToken = createAppSessionToken({ userKey: profile.user_id });
+    const sessionToken = createAppSessionToken({
+      userId,
+      amazonUserId: profile.user_id,
+    });
+    const sessionExpiresAt = sessionToken
+      ? new Date(Date.now() + getAppSessionTtlMs()).toISOString()
+      : null;
 
     res.json({
       ok: true,
       userKey: profile.user_id,
       sessionToken,
+      sessionExpiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),
@@ -2829,6 +2854,23 @@ app.get(
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool = await getPool();
+    const requestId = req.query?.requestId ? String(req.query.requestId) : null;
+    const deviceId = req.query?.deviceId ? String(req.query.deviceId) : null;
+    const alexaUserId = req.query?.alexaUserId ? String(req.query.alexaUserId) : null;
+
+    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
+      userId: req.skillAuth.userId,
+      tokenId: req.skillAuth.tokenId,
+      deviceId,
+      alexaUserId,
+      requestId,
+      seenSource: "skill",
+    });
+
+    if (registeredDevice) {
+      await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
+    }
+
     const { profile, prayers } = await getUserProfileAndPrayersByUserId(
       pool,
       req.skillAuth.userId
@@ -2836,8 +2878,22 @@ app.get(
 
     const result = await computePrayerTimesForProfile(profile, prayers, new Date());
 
+    if (registeredDevice) {
+      await logAlexaDispatch(pool, {
+        userId: req.skillAuth.userId,
+        requestId,
+        prayerName: null,
+        deviceId,
+        triggerSource: "skill",
+        status: "device_seen",
+        message: `Registered Alexa device ${registeredDevice.id}`,
+        payload: { alexaUserId, deviceName: registeredDevice.name },
+      });
+    }
+
     res.json({
       ...result,
+      registeredDevice,
       userContext: {
         userId: req.skillAuth.userId,
         sect: profile.sect || "SUNNI",
@@ -2854,6 +2910,44 @@ app.get(
 );
 
 app.post(
+  "/api/alexa/skill/device-seen",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const requestId = req.body?.requestId ? String(req.body.requestId) : null;
+    const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
+    const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
+    const locale = req.body?.locale ? String(req.body.locale) : null;
+
+    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
+      userId: req.skillAuth.userId,
+      tokenId: req.skillAuth.tokenId,
+      deviceId,
+      alexaUserId,
+      requestId,
+      seenSource: "skill",
+      deviceName: req.body?.deviceName ? String(req.body.deviceName) : null,
+    });
+
+    if (registeredDevice) {
+      await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
+      await logAlexaDispatch(pool, {
+        userId: req.skillAuth.userId,
+        requestId,
+        prayerName: null,
+        deviceId,
+        triggerSource: "skill",
+        status: "device_seen",
+        message: `Registered Alexa device ${registeredDevice.id}`,
+        payload: { alexaUserId, locale, deviceName: registeredDevice.name },
+      });
+    }
+
+    res.json({ ok: true, device: registeredDevice });
+  })
+);
+
+app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
@@ -2863,8 +2957,17 @@ app.post(
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
     const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
 
-    if (alexaUserId) {
-      await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
+    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
+      userId: req.skillAuth.userId,
+      tokenId: req.skillAuth.tokenId,
+      deviceId,
+      alexaUserId,
+      requestId,
+      seenSource: "skill",
+    });
+
+    if (registeredDevice) {
+      await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
     }
 
     try {
@@ -2872,6 +2975,7 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
+        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -2886,10 +2990,11 @@ app.post(
           reciterId: plan.reciterId,
           afterAdhan: plan.afterAdhan,
           userContext: plan.userContext,
+          registeredDevice,
         },
       });
 
-      res.json(plan);
+      res.json({ ...plan, registeredDevice });
     } catch (err) {
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
@@ -3741,7 +3846,8 @@ app.post(
           VALUES (@user_id, 'alexa', @device_id, @device_name);
       `);
 
-    res.json({ ok: true });
+    const endpoints = await syncAlexaCustomerEndpoints(pool, userId);
+    res.json({ ok: true, endpoints });
   })
 );
 
