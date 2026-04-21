@@ -18,6 +18,7 @@ import {
   connectAmazonInteractive,
   getAmazonClientId,
   getAmazonReturnUrl,
+  isAmazonNativeRuntime,
 } from "../../lib/amazonLogin";
 
 // Retrigger deploy..delete later if not needed
@@ -138,6 +139,7 @@ export default function Step2ConnectAccounts({
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [deviceHint, setDeviceHint] = useState<string | null>(null);
   const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
   const [alexaStatus, setAlexaStatus] = useState<AlexaLinkStatus | null>(null);
 
@@ -301,27 +303,10 @@ export default function Step2ConnectAccounts({
     clearPendingAlexaLink();
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
     setInfo("Alexa skill enabled and account linking completed.");
+    setDeviceHint(
+      "Devices appear in Step 5 after the linked Alexa device talks to the skill once. Say: Alexa, open AdhanCast. Then say play Fajr adhan."
+    );
   }
-
-  useEffect(() => {
-    return subscribeToAmazonAuthChanges(() => {
-      void refreshServerStatus();
-      void refreshAlexaLinkStatus();
-    });
-  }, []);
-
-  useEffect(() => {
-    const token = getStoredAmazonToken();
-    if (!token) return;
-
-    const interval = window.setInterval(() => {
-      void refreshServerStatus();
-      void refreshAlexaLinkStatus();
-    }, 30000);
-
-    return () => window.clearInterval(interval);
-  }, [serverStatus?.alexa?.connected, alexaStatus?.accountLinkStatus]);
-
 
   useEffect(() => {
     const boot = async () => {
@@ -340,7 +325,6 @@ export default function Step2ConnectAccounts({
           await completeAlexaLogin(restoredToken);
         } else if (getStoredAmazonToken()) {
           markConnected("alexa");
-          await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
         }
 
         if (returnedError) {
@@ -401,10 +385,15 @@ export default function Step2ConnectAccounts({
       }
 
       await completeAlexaLogin(accessToken);
-      setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
+      setInfo(
+        isAmazonNativeRuntime()
+          ? "Amazon account connected in the app. You can now enable the Alexa skill from this screen."
+          : "Amazon account connected. You can now enable the Alexa skill from this screen."
+      );
     } catch (e: unknown) {
-      setLoadingKey(null);
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
+    } finally {
+      setLoadingKey(null);
     }
   }
 
@@ -652,6 +641,13 @@ export default function Step2ConnectAccounts({
             <div>3. Step 5 and Settings will stay the source of truth for reciters, devices, and after-Adhan playback.</div>
           </div>
         </div>
+
+        {(deviceHint || skillLinked) && (
+          <div className="mt-4 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-100">
+            {deviceHint ||
+              "After linking, use the skill once from each Alexa device you want to appear in Step 5. Saying ‘Alexa, open AdhanCast’ and then ‘play Fajr adhan’ is enough."}
+          </div>
+        )}
 
         <div className="mt-10 flex items-center justify-between">
           <Button variant="ghost" onClick={() => navigate("/onboarding/step1")}>

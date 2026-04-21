@@ -5,6 +5,10 @@ const config: CapacitorConfig = {
   appName: 'Adhan Home',
   webDir: 'build',
   bundledWebRuntime: false,
+  server: {
+    androidScheme: 'https',
+    hostname: 'localhost',
+  },
 };
 
 export default config;

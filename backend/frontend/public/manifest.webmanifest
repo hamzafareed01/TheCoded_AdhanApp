@@ -1,7 +1,7 @@
 {
   "name": "AdhanCast by TheCoded Inc",
   "short_name": "AdhanCast",
-  "description": "Prayer times, Adhan playback, Duas & Surahs",
+  "description": "Prayer times, Adhan playback, Duas, Surahs, and Alexa setup.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#020617",
