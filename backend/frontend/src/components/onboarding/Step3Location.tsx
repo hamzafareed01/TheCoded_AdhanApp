@@ -52,6 +52,29 @@ function getBrowserTimezone() {
   }
 }
 
+const GEOLOCATION_HIGH_ACCURACY_TIMEOUT_MS = 25000;
+const GEOLOCATION_FALLBACK_TIMEOUT_MS = 15000;
+const GEOLOCATION_MAX_CACHED_AGE_MS = 5 * 60 * 1000;
+const GEOLOCATION_APPROXIMATE_ACCURACY_METERS = 1000;
+
+function describeGeoError(error: unknown) {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = Number((error as GeolocationPositionError).code);
+    if (code === 1) return "Location permission was denied. Please allow location access or enter your city manually.";
+    if (code === 2) return "Your device could not determine a location right now. Try again near a window or enter your city manually.";
+    if (code === 3) return "Location took too long to respond. We will try a faster fallback, or you can enter your city manually.";
+  }
+
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "Could not access your device location.";
+}
+
+function getCurrentPositionAsync(options: PositionOptions) {
+  return new Promise<GeolocationPosition>((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, options);
+  });
+}
+
 function getGlobalTimezones() {
   try {
     const values = (Intl as typeof Intl & {
@@ -268,6 +291,36 @@ export default function Step3Location({
     }
   };
 
+  const reverseGeocodeCoordinates = async (lat: number, lng: number) => {
+    const params = new URLSearchParams({
+      lat: String(lat),
+      lng: String(lng),
+    });
+
+    const res = await apiFetch(`/api/geocode?${params.toString()}`);
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "Could not resolve your device location."
+      );
+    }
+
+    return {
+      lat: typeof data?.lat === "number" ? data.lat : lat,
+      lng: typeof data?.lng === "number" ? data.lng : lng,
+      city: normalizeCity(String(data?.city || data?.query || location.city || "")),
+      country: normalizeCountry(String(data?.countryCode || data?.country || location.country || "")),
+      timezone: normalizeTimezone(String(data?.timezone || getBrowserTimezone())),
+      formatted:
+        typeof data?.formatted === "string" && data.formatted.trim()
+          ? data.formatted.trim()
+          : null,
+    };
+  };
+
   const handleUseDeviceLocation = async () => {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setGeocodeError("Device location is not available in this browser.");
@@ -278,66 +331,72 @@ export default function Step3Location({
     setGeocodeError(null);
     setResolvedMessage(null);
 
+    let position: GeolocationPosition | null = null;
+    let fallbackUsed = false;
+
     try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
+      try {
+        position = await getCurrentPositionAsync({
           enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0,
+          timeout: GEOLOCATION_HIGH_ACCURACY_TIMEOUT_MS,
+          maximumAge: GEOLOCATION_MAX_CACHED_AGE_MS,
         });
-      });
+      } catch (highAccuracyError) {
+        console.warn("High-accuracy geolocation failed, retrying with fallback", highAccuracyError);
+        fallbackUsed = true;
+        position = await getCurrentPositionAsync({
+          enableHighAccuracy: false,
+          timeout: GEOLOCATION_FALLBACK_TIMEOUT_MS,
+          maximumAge: GEOLOCATION_MAX_CACHED_AGE_MS * 2,
+        });
+      }
 
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
+      const accuracy =
+        typeof position.coords.accuracy === "number" && Number.isFinite(position.coords.accuracy)
+          ? Math.round(position.coords.accuracy)
+          : null;
 
-      const params = new URLSearchParams({
-        lat: String(lat),
-        lng: String(lng),
-      });
-
-      const res = await apiFetch(`/api/geocode?${params.toString()}`);
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        throw new Error(
-          typeof data?.error === "string"
-            ? data.error
-            : "Could not resolve your device location."
-        );
-      }
-
-      const reverseCity = normalizeCity(
-        String(data?.city || data?.query || location.city || "")
-      );
-      const reverseCountry = normalizeCountry(
-        String(data?.countryCode || data?.country || location.country || "")
-      );
-      const reverseTimezone = normalizeTimezone(
-        String(data?.timezone || getBrowserTimezone())
-      );
+      const resolved = await reverseGeocodeCoordinates(lat, lng);
+      const reverseCity = resolved.city;
+      const reverseCountry = resolved.country;
+      const reverseTimezone = resolved.timezone;
+      const effectiveLookupKey = makeResolvedKey(reverseCountry, reverseCity || location.city);
 
       setLocation((prev) => ({
         ...prev,
         city: reverseCity || prev.city,
         country: reverseCountry || prev.country,
         timezone: reverseTimezone || prev.timezone,
-        latitude: lat,
-        longitude: lng,
+        latitude: resolved.lat,
+        longitude: resolved.lng,
       }));
-      setTimezoneManuallyEdited(true);
-      setResolvedKey(makeResolvedKey(reverseCountry, reverseCity || location.city));
-      setResolvedMessage(
-        `Using device location${data?.formatted ? ` · ${data.formatted}` : ""} · ${lat.toFixed(
-          5
-        )}, ${lng.toFixed(5)}`
-      );
+      setTimezoneManuallyEdited(false);
+      setResolvedKey(effectiveLookupKey);
+
+      const statusParts = ["Device location ready"];
+      if (resolved.formatted) statusParts.push(resolved.formatted);
+      if (accuracy != null) {
+        statusParts.push(
+          accuracy > GEOLOCATION_APPROXIMATE_ACCURACY_METERS
+            ? `approximate (${accuracy}m accuracy)`
+            : `${accuracy}m accuracy`
+        );
+      }
+      if (fallbackUsed) statusParts.push("fallback mode used");
+      statusParts.push(`${resolved.lat.toFixed(5)}, ${resolved.lng.toFixed(5)}`);
+
+      setResolvedMessage(statusParts.join(" · "));
+
+      if (accuracy != null && accuracy > GEOLOCATION_APPROXIMATE_ACCURACY_METERS) {
+        setGeocodeError(
+          `Your device returned an approximate location (${accuracy}m accuracy). Review the city and timezone below before continuing.`
+        );
+      }
     } catch (err) {
       console.error(err);
-      setGeocodeError(
-        err instanceof Error
-          ? err.message
-          : "Could not access your device location."
-      );
+      setGeocodeError(describeGeoError(err));
     } finally {
       setUsingDeviceLocation(false);
     }
@@ -490,6 +549,16 @@ export default function Step3Location({
                   <LocateFixed className="w-4 h-4 mr-2" />
                   {usingDeviceLocation ? "Getting location…" : "Use my location"}
                 </Button>
+                {resolvedMessage && !usingDeviceLocation && (
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-300">
+                    {resolvedMessage}
+                  </div>
+                )}
+                {geocodeError && !usingDeviceLocation && (
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
+                    {geocodeError}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -538,18 +607,6 @@ export default function Step3Location({
                   className="bg-slate-800/60 border-slate-700/60 text-white h-11"
                   placeholder="e.g., Chicago, Karachi, London"
                 />
-                {geocodeError && (
-                  <p className="mt-2 text-xs text-red-400 flex items-center gap-1.5">
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                      <path
-                        fillRule="evenodd"
-                        d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {geocodeError}
-                  </p>
-                )}
                 {geocoding && !geocodeError && (
                   <p className="mt-2 text-xs text-slate-400 flex items-center gap-1.5">
                     <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -568,18 +625,6 @@ export default function Step3Location({
                       />
                     </svg>
                     Verifying coordinates…
-                  </p>
-                )}
-                {!geocoding && !geocodeError && resolvedMessage && (
-                  <p className="mt-2 text-xs text-emerald-400 flex items-center gap-1.5">
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
-                      <path
-                        fillRule="evenodd"
-                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {resolvedMessage}
                   </p>
                 )}
               </div>
