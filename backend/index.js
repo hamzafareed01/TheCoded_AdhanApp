@@ -5,7 +5,7 @@ const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-
+//redeploy line...delete alter
 dotenv.config();
 const { getPool, sql } = require("./db/sql");
 const {
