@@ -40,6 +40,8 @@ const {
   listAlexaCustomerEndpoints,
   getSelectedAlexaTargetEndpointIds,
   replaceSelectedAlexaTargetEndpointIds,
+  getPrayerTargetEndpointMap,
+  replacePrayerTargetEndpointMap,
 } = require("./services/alexaPlaybackTargets");
 
 const app = express();
@@ -1875,7 +1877,7 @@ function computeQiblahBearing(lat, lon) {
 // -----------------------------
 // User settings shape
 // -----------------------------
-function buildUserSettingsPayload(amazonUserId, profile, prayerRows, targetEndpointIds = []) {
+function buildUserSettingsPayload(amazonUserId, profile, prayerRows, targetEndpointIds = [], prayerTargetEndpointMap = {}) {
   const rows = Array.isArray(prayerRows) ? prayerRows : [];
 
   const firstQuietRow =
@@ -1956,6 +1958,16 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows, targetEndpo
     accountEnabled: !!profile.account_enabled,
     selectedAlexaDeviceIds: parseStringArray(profile.selected_alexa_device_ids_json),
     selectedAlexaTargetEndpointIds: Array.isArray(targetEndpointIds) ? targetEndpointIds : [],
+    perPrayerTargetEndpointIds: prayerTargetEndpointMap && typeof prayerTargetEndpointMap === 'object' ? prayerTargetEndpointMap : {},
+    quietDown: {
+      enabled: !!profile.quiet_down_enabled,
+      strategy: String(profile.quiet_down_strategy || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower',
+      targetVolumePct: Math.min(80, Math.max(5, Number(profile.quiet_down_target_volume_pct || 20) || 20)),
+      restoreAfter: profile.quiet_down_restore !== false,
+      includeFireTv: !!profile.quiet_down_include_fire_tv,
+      mode: 'smart_home_ready',
+      note: 'Playback targets are the main source of truth now. Quiet-down policy is stored in AdhanCast and read by the Smart Home skill when supported.',
+    },
     quietHours,
     globalOffsets: {
       fajr: profile.offset_fajr || 0,
@@ -2814,8 +2826,10 @@ app.get(
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool = await getPool();
-    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
-    res.json({ endpoints: buildDiscoveryEndpoints(profile, devices) });
+    await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
+    await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
+    const ctx = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ endpoints: buildDiscoveryEndpoints(ctx.profile, ctx.devices, ctx.playbackEndpoints, ctx.selectedEndpointIds) });
   })
 );
 
@@ -2829,8 +2843,8 @@ app.get(
     }
 
     const pool = await getPool();
-    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
-    res.json({ properties: buildStateForEndpoint(profile, devices, endpointId) });
+    const ctx = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ properties: buildStateForEndpoint(ctx.profile, ctx.devices, endpointId, ctx.playbackEndpoints, ctx.selectedEndpointIds) });
   })
 );
 
@@ -3354,6 +3368,23 @@ async function handleSaveUserSettings(req, res) {
     ? parseStringArray(body.selectedAlexaTargetEndpointIds ?? body.selectedTargetEndpointIds)
     : undefined;
 
+  const hasPerPrayerTargetEndpointIds = hasOwn(body, "perPrayerTargetEndpointIds") || hasOwn(body, "prayerTargetEndpointIds");
+  const quietDownPolicy = isObject(body.quietDown) ? body.quietDown : isObject(body.quietDownPolicy) ? body.quietDownPolicy : null;
+  const hasQuietDownPolicy = !!quietDownPolicy;
+  const quietDownEnabled = hasQuietDownPolicy ? quietDownPolicy.enabled === true : undefined;
+  const quietDownStrategy = hasQuietDownPolicy && String(quietDownPolicy.strategy || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower';
+  const quietDownTargetVolumePct = hasQuietDownPolicy ? Math.min(80, Math.max(5, Math.trunc(Number(quietDownPolicy.targetVolumePct ?? 20) || 20))) : undefined;
+  const quietDownRestore = hasQuietDownPolicy ? quietDownPolicy.restoreAfter !== false : undefined;
+  const quietDownIncludeFireTv = hasQuietDownPolicy ? quietDownPolicy.includeFireTv === true : undefined;
+  const quietDownPolicyJson = hasQuietDownPolicy ? JSON.stringify({
+    enabled: !!quietDownEnabled,
+    mode: quietDownStrategy === 'mute' ? 'mute' : 'volume',
+    volume: quietDownTargetVolumePct,
+    restoreAfterAdhan: quietDownRestore !== false,
+    applyToSelectedDevices: true,
+    includeFireTv: !!quietDownIncludeFireTv,
+  }) : null;
+
   const offsets = parseOffsetsFromBody(body, {
     fajr: currentProfile.offset_fajr || 0,
     dhuhr: currentProfile.offset_dhuhr || 0,
@@ -3458,6 +3489,13 @@ async function handleSaveUserSettings(req, res) {
     sql.Float,
     hasMosqueLng ? parseOptionalNumber(body.mosqueLng) ?? null : null
   );
+  profileReq.input('set_quiet_down_policy', sql.Bit, hasQuietDownPolicy ? 1 : 0);
+  profileReq.input('quiet_down_enabled', sql.Bit, hasQuietDownPolicy ? (quietDownEnabled ? 1 : 0) : null);
+  profileReq.input('quiet_down_strategy', sql.NVarChar(16), hasQuietDownPolicy ? quietDownStrategy : null);
+  profileReq.input('quiet_down_target_volume_pct', sql.Int, hasQuietDownPolicy ? quietDownTargetVolumePct : null);
+  profileReq.input('quiet_down_restore', sql.Bit, hasQuietDownPolicy ? (quietDownRestore ? 1 : 0) : null);
+  profileReq.input('quiet_down_include_fire_tv', sql.Bit, hasQuietDownPolicy ? (quietDownIncludeFireTv ? 1 : 0) : null);
+  profileReq.input('quiet_down_policy_json', sql.NVarChar(sql.MAX), quietDownPolicyJson);
 
   await profileReq.query(`
     UPDATE dbo.user_profiles
@@ -3479,6 +3517,12 @@ async function handleSaveUserSettings(req, res) {
       mosque_lat = CASE WHEN @set_mosque_lat = 1 THEN @mosque_lat ELSE mosque_lat END,
       mosque_lng = CASE WHEN @set_mosque_lng = 1 THEN @mosque_lng ELSE mosque_lng END,
       selected_alexa_device_ids_json = CASE WHEN @set_selected_alexa_device_ids_json = 1 THEN @selected_alexa_device_ids_json ELSE selected_alexa_device_ids_json END,
+      quiet_down_enabled = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_enabled ELSE quiet_down_enabled END,
+      quiet_down_strategy = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_strategy ELSE quiet_down_strategy END,
+      quiet_down_target_volume_pct = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_target_volume_pct ELSE quiet_down_target_volume_pct END,
+      quiet_down_restore = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_restore ELSE quiet_down_restore END,
+      quiet_down_include_fire_tv = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_include_fire_tv ELSE quiet_down_include_fire_tv END,
+      quiet_down_policy_json = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_policy_json ELSE quiet_down_policy_json END,
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -3489,12 +3533,23 @@ async function handleSaveUserSettings(req, res) {
     WHERE user_id = @user_id
   `);
 
-  if (hasSelectedAlexaTargetEndpointIds) {
+  if (hasSelectedAlexaTargetEndpointIds || hasPerPrayerTargetEndpointIds) {
     await syncAlexaCustomerEndpoints(pool, userId);
+  }
+
+  if (hasSelectedAlexaTargetEndpointIds) {
     await replaceSelectedAlexaTargetEndpointIds(
       pool,
       userId,
       selectedAlexaTargetEndpointIds || []
+    );
+  }
+
+  if (hasPerPrayerTargetEndpointIds) {
+    await replacePrayerTargetEndpointMap(
+      pool,
+      userId,
+      rawPerPrayerTargetEndpointIds && typeof rawPerPrayerTargetEndpointIds === 'object' ? rawPerPrayerTargetEndpointIds : {}
     );
   }
 
@@ -3861,13 +3916,15 @@ app.get(
 
     const endpoints = await syncAlexaCustomerEndpoints(pool, userId);
     const selectedEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
+    const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
 
     res.json({
       endpoints,
       selectedEndpointIds,
+      prayerTargetEndpointMap,
       source: 'customer_endpoint_registry',
       message: endpoints.length
-        ? 'These are AdhanCast playback targets built from recently seen Alexa devices and logical household groups.'
+        ? 'These are AdhanCast playback targets built from recently seen Alexa devices, household groups, and room presets.'
         : 'No playback targets are available yet. Use the skill once on each Echo or Fire TV you want to target, then refresh this page.',
     });
   })
@@ -3899,16 +3956,20 @@ app.get(
     const userId = await ensureUser(pool, amazonUserId);
     const endpoints = await syncAlexaCustomerEndpoints(pool, userId);
     const selectedEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
+    const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
     const devices = endpoints.filter((item) => item.endpointKind === 'device');
     const groups = endpoints.filter((item) => item.endpointKind === 'group');
+    const perPrayerSelectedCount = Object.values(prayerTargetEndpointMap).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
     res.json({
       summary: {
         playbackTargetCount: endpoints.length,
         selectedPlaybackTargetCount: selectedEndpointIds.length,
+        perPrayerPlaybackTargetCount: perPrayerSelectedCount,
         physicalDeviceTargetCount: devices.length,
         logicalGroupCount: groups.length,
         fireTvTargetCount: endpoints.filter((item) => item.supportsFireTv).length,
       },
+      prayerTargetEndpointMap,
     });
   })
 );

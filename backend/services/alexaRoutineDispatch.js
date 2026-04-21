@@ -4,6 +4,7 @@ const { sql } = require('../db/sql');
 const {
   listAlexaCustomerEndpoints,
   getSelectedAlexaTargetEndpointIds,
+  getPrayerTargetEndpointMap,
   findMatchingSelectedEndpoints,
 } = require('./alexaPlaybackTargets');
 
@@ -354,11 +355,15 @@ async function resolvePrayerPlaybackPlan(pool, params) {
 
   const playbackEndpoints = await listAlexaCustomerEndpoints(pool, userId);
   const selectedTargetEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
-  const selectedTargetEndpoints = playbackEndpoints.filter((endpoint) => selectedTargetEndpointIds.includes(String(endpoint.endpointId || '')));
+  const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
+  const prayerSpecificEndpointIds = Array.isArray(prayerTargetEndpointMap[normalizedPrayer]) ? prayerTargetEndpointMap[normalizedPrayer] : [];
+  const activeTargetEndpointIds = prayerSpecificEndpointIds.length > 0 ? prayerSpecificEndpointIds : selectedTargetEndpointIds;
+  const selectedTargetEndpoints = playbackEndpoints.filter((endpoint) => activeTargetEndpointIds.includes(String(endpoint.endpointId || '')));
   const matchingSelectedTargets = findMatchingSelectedEndpoints(
     selectedTargetEndpoints,
     normalizedDeviceId,
-    currentDevice?.family || null
+    currentDevice?.family || null,
+    currentDevice?.name || null
   );
 
   if (selectedTargetEndpoints.length > 0) {
@@ -374,7 +379,7 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       throw createAlexaSkillError(
         403,
         'DEVICE_NOT_ENABLED',
-        'This Alexa device is not covered by your selected AdhanCast playback targets.'
+        prayerSpecificEndpointIds.length > 0 ? 'This Alexa device is not covered by the selected playback target for that prayer.' : 'This Alexa device is not covered by your selected AdhanCast playback targets.'
       );
     }
   } else if (selectedDeviceIds.length > 0) {
@@ -498,6 +503,8 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       sect: profile.sect || 'SUNNI',
       selectedDeviceIds,
       selectedTargetEndpointIds,
+      prayerSpecificTargetEndpointIds: prayerSpecificEndpointIds,
+      activeTargetEndpointIds,
       requestedDeviceId: normalizedDeviceId || null,
       matchedTargetEndpointIds: matchingSelectedTargets.map((item) => item.endpointId),
       currentDeviceFamily: currentDevice?.family || null,

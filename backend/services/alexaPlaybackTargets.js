@@ -1,5 +1,19 @@
 const { sql } = require('../db/sql');
 
+const PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
+const ROOM_KEYWORDS = [
+  ['kitchen', 'Kitchen'],
+  ['living', 'Living Room'],
+  ['bedroom', 'Bedroom'],
+  ['upstairs', 'Upstairs'],
+  ['downstairs', 'Downstairs'],
+  ['office', 'Office'],
+  ['garage', 'Garage'],
+  ['basement', 'Basement'],
+  ['family', 'Family Room'],
+  ['dining', 'Dining Room'],
+];
+
 function normalizeId(value) {
   return String(value || '').trim();
 }
@@ -17,43 +31,70 @@ function endpointIdForDevice(deviceId) {
   return `device:${normalizeId(deviceId)}`;
 }
 
+function endpointIdForRoom(roomKey) {
+  return `group:room:${normalizeId(roomKey).toLowerCase()}`;
+}
+
 function groupDefinitions(devices = []) {
   const enabledDevices = devices.filter((d) => String(d.platform || '').toLowerCase() === 'alexa');
   const defs = [];
   if (enabledDevices.length > 0) {
     defs.push({
-      endpointId: 'group:all-devices',
-      friendlyName: 'All registered Alexa devices',
+      endpointId: 'group:whole-house',
+      friendlyName: 'Whole House',
       endpointKind: 'group',
       deviceFamily: 'mixed',
       supportsAudio: true,
       supportsFireTv: enabledDevices.some((d) => inferAlexaDeviceFamily(d.name, d.platform) === 'fire_tv'),
-      metadata: { rule: 'all_devices' },
+      metadata: { rule: 'all_devices', recommended: true },
       sortOrder: 10,
     });
   }
   if (enabledDevices.some((d) => ['echo', 'echo_show'].includes(inferAlexaDeviceFamily(d.name, d.platform)))) {
     defs.push({
       endpointId: 'group:echo-speakers',
-      friendlyName: 'All Echo speakers',
+      friendlyName: 'All Echo Speakers',
       endpointKind: 'group',
       deviceFamily: 'echo',
       supportsAudio: true,
       supportsFireTv: false,
-      metadata: { rule: 'echo_devices' },
+      metadata: { rule: 'echo_devices', recommended: true },
       sortOrder: 20,
     });
   }
   if (enabledDevices.some((d) => inferAlexaDeviceFamily(d.name, d.platform) === 'fire_tv')) {
     defs.push({
       endpointId: 'group:fire-tv',
-      friendlyName: 'All Fire TV devices',
+      friendlyName: 'All Fire TV Devices',
       endpointKind: 'group',
       deviceFamily: 'fire_tv',
       supportsAudio: true,
       supportsFireTv: true,
-      metadata: { rule: 'fire_tv' },
+      metadata: { rule: 'fire_tv', recommended: true },
       sortOrder: 30,
+    });
+  }
+
+  const byRoom = new Map();
+  for (const device of enabledDevices) {
+    const haystack = `${String(device.name || '')} ${String(device.platform || '')}`.toLowerCase();
+    for (const [key, label] of ROOM_KEYWORDS) {
+      if (!haystack.includes(key)) continue;
+      const entry = byRoom.get(key) || { key, label, items: [] };
+      entry.items.push(device);
+      byRoom.set(key, entry);
+    }
+  }
+  for (const entry of byRoom.values()) {
+    defs.push({
+      endpointId: endpointIdForRoom(entry.key),
+      friendlyName: `${entry.label} Target`,
+      endpointKind: 'group',
+      deviceFamily: entry.items.some((d) => inferAlexaDeviceFamily(d.name, d.platform) === 'fire_tv') ? 'mixed' : 'echo',
+      supportsAudio: true,
+      supportsFireTv: entry.items.some((d) => inferAlexaDeviceFamily(d.name, d.platform) === 'fire_tv'),
+      metadata: { rule: 'room_keyword', room: entry.key, memberCount: entry.items.length },
+      sortOrder: 40,
     });
   }
   return defs;
@@ -121,11 +162,7 @@ async function listAlexaCustomerEndpoints(pool, userId, opts = {}) {
 
   return (result.recordset || []).map((row) => {
     let metadata = null;
-    try {
-      metadata = row.metadata_json ? JSON.parse(row.metadata_json) : null;
-    } catch {
-      metadata = null;
-    }
+    try { metadata = row.metadata_json ? JSON.parse(row.metadata_json) : null; } catch { metadata = null; }
     return {
       endpointId: row.endpoint_id,
       friendlyName: row.friendly_name,
@@ -188,10 +225,7 @@ async function syncAlexaCustomerEndpoints(pool, userId) {
     .input('active_json', sql.NVarChar(sql.MAX), JSON.stringify(activeEndpointIds))
     .query(`
       UPDATE dbo.alexa_customer_endpoints
-      SET is_enabled = CASE
-            WHEN endpoint_id IN (SELECT value FROM OPENJSON(@active_json)) THEN 1
-            ELSE 0
-          END,
+      SET is_enabled = CASE WHEN endpoint_id IN (SELECT value FROM OPENJSON(@active_json)) THEN 1 ELSE 0 END,
           updated_at = SYSUTCDATETIME()
       WHERE user_id = @user_id
     `);
@@ -209,9 +243,7 @@ async function getSelectedAlexaTargetEndpointIds(pool, userId) {
       WHERE user_id = @user_id AND COALESCE(enabled,1)=1
       ORDER BY created_at ASC
     `);
-  return (result.recordset || [])
-    .map((row) => String(row.endpoint_id || '').trim())
-    .filter(Boolean);
+  return (result.recordset || []).map((row) => String(row.endpoint_id || '').trim()).filter(Boolean);
 }
 
 async function replaceSelectedAlexaTargetEndpointIds(pool, userId, endpointIds) {
@@ -219,25 +251,17 @@ async function replaceSelectedAlexaTargetEndpointIds(pool, userId, endpointIds) 
   const valid = await listAlexaCustomerEndpoints(pool, userId);
   const validSet = new Set(valid.map((item) => item.endpointId));
   const filtered = ids.filter((id) => validSet.has(id));
-
   const tx = new sql.Transaction(pool);
   await tx.begin();
   try {
-    await new sql.Request(tx)
-      .input('user_id', sql.UniqueIdentifier, userId)
-      .query(`DELETE FROM dbo.alexa_playback_target_selections WHERE user_id = @user_id`);
-
+    await new sql.Request(tx).input('user_id', sql.UniqueIdentifier, userId).query(`DELETE FROM dbo.alexa_playback_target_selections WHERE user_id = @user_id`);
     for (const endpointId of filtered) {
       await new sql.Request(tx)
         .input('user_id', sql.UniqueIdentifier, userId)
         .input('endpoint_id', sql.NVarChar(255), endpointId)
         .input('enabled', sql.Bit, 1)
-        .query(`
-          INSERT INTO dbo.alexa_playback_target_selections (user_id, endpoint_id, enabled)
-          VALUES (@user_id, @endpoint_id, @enabled)
-        `);
+        .query(`INSERT INTO dbo.alexa_playback_target_selections (user_id, endpoint_id, enabled) VALUES (@user_id, @endpoint_id, @enabled)`);
     }
-
     await tx.commit();
     return filtered;
   } catch (err) {
@@ -246,34 +270,83 @@ async function replaceSelectedAlexaTargetEndpointIds(pool, userId, endpointIds) 
   }
 }
 
-function endpointMatchesDevice(endpoint, deviceId, deviceFamily) {
+async function getPrayerTargetEndpointMap(pool, userId) {
+  const result = await pool.request().input('user_id', sql.UniqueIdentifier, userId).query(`
+    SELECT prayer_name, endpoint_id
+    FROM dbo.alexa_prayer_target_selections
+    WHERE user_id = @user_id AND COALESCE(enabled,1)=1
+    ORDER BY prayer_name ASC, created_at ASC
+  `);
+  const out = {};
+  for (const row of result.recordset || []) {
+    const prayer = String(row.prayer_name || '').trim().toLowerCase();
+    const endpointId = String(row.endpoint_id || '').trim();
+    if (!PRAYERS.includes(prayer) || !endpointId) continue;
+    if (!out[prayer]) out[prayer] = [];
+    out[prayer].push(endpointId);
+  }
+  return out;
+}
+
+async function replacePrayerTargetEndpointMap(pool, userId, selections) {
+  const valid = await listAlexaCustomerEndpoints(pool, userId);
+  const validSet = new Set(valid.map((item) => item.endpointId));
+  const tx = new sql.Transaction(pool);
+  await tx.begin();
+  try {
+    await new sql.Request(tx).input('user_id', sql.UniqueIdentifier, userId).query(`DELETE FROM dbo.alexa_prayer_target_selections WHERE user_id = @user_id`);
+    const normalized = {};
+    const src = selections && typeof selections === 'object' ? selections : {};
+    for (const prayer of PRAYERS) {
+      const ids = [...new Set((Array.isArray(src[prayer]) ? src[prayer] : src[prayer] ? [src[prayer]] : []).map((v) => String(v || '').trim()).filter((id) => validSet.has(id)))];
+      normalized[prayer] = ids;
+      for (const endpointId of ids) {
+        await new sql.Request(tx)
+          .input('user_id', sql.UniqueIdentifier, userId)
+          .input('prayer_name', sql.NVarChar(20), prayer)
+          .input('endpoint_id', sql.NVarChar(255), endpointId)
+          .input('enabled', sql.Bit, 1)
+          .query(`INSERT INTO dbo.alexa_prayer_target_selections (user_id, prayer_name, endpoint_id, enabled) VALUES (@user_id, @prayer_name, @endpoint_id, @enabled)`);
+      }
+    }
+    await tx.commit();
+    return normalized;
+  } catch (err) { await tx.rollback(); throw err; }
+}
+
+function endpointMatchesDevice(endpoint, deviceId, deviceFamily, deviceName) {
   const endpointId = String(endpoint?.endpointId || '');
   const kind = String(endpoint?.endpointKind || '');
   const family = String(deviceFamily || '').toLowerCase();
   const normalizedDeviceId = normalizeId(deviceId);
   if (!endpointId) return false;
-
-  if (kind === 'device') {
-    return String(endpoint?.deviceId || '').trim() === normalizedDeviceId;
-  }
-
-  if (endpointId === 'group:all-devices') return !!normalizedDeviceId;
+  if (kind === 'device') return String(endpoint?.deviceId || '').trim() === normalizedDeviceId;
+  if (endpointId === 'group:whole-house') return !!normalizedDeviceId;
   if (endpointId === 'group:echo-speakers') return family === 'echo' || family === 'echo_show';
   if (endpointId === 'group:fire-tv') return family === 'fire_tv';
+  const room = endpoint?.metadata?.room ? String(endpoint.metadata.room).toLowerCase() : '';
+  if (room) {
+    const name = String(endpoint?.metadata?.deviceName || endpoint?.friendlyName || '').toLowerCase();
+    const currentName = String(deviceName || '').toLowerCase();
+    return !!normalizedDeviceId && currentName.includes(room);
+  }
   return false;
 }
 
-function findMatchingSelectedEndpoints(selectedEndpoints, deviceId, deviceFamily) {
+function findMatchingSelectedEndpoints(selectedEndpoints, deviceId, deviceFamily, deviceName) {
   const list = Array.isArray(selectedEndpoints) ? selectedEndpoints : [];
-  return list.filter((endpoint) => endpointMatchesDevice(endpoint, deviceId, deviceFamily));
+  return list.filter((endpoint) => endpointMatchesDevice(endpoint, deviceId, deviceFamily, deviceName));
 }
 
 module.exports = {
+  PRAYERS,
   inferAlexaDeviceFamily,
   endpointIdForDevice,
   syncAlexaCustomerEndpoints,
   listAlexaCustomerEndpoints,
   getSelectedAlexaTargetEndpointIds,
   replaceSelectedAlexaTargetEndpointIds,
+  getPrayerTargetEndpointMap,
+  replacePrayerTargetEndpointMap,
   findMatchingSelectedEndpoints,
 };

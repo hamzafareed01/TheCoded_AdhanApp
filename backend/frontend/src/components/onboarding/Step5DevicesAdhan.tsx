@@ -92,6 +92,7 @@ type UserSettingsPayload = {
   account_enabled?: unknown;
   selectedAlexaDeviceIds?: unknown;
   selectedAlexaTargetEndpointIds?: unknown;
+  perPrayerTargetEndpointIds?: unknown;
   selectedDeviceIds?: unknown;
   quietDown?: unknown;
   quietDownPolicy?: unknown;
@@ -100,6 +101,8 @@ type UserSettingsPayload = {
 type OnboardingData = {
   devices?: string[];
   accountEnabled?: boolean;
+  selectedAlexaTargetEndpointIds?: string[];
+  perPrayerTargetEndpointIds?: Partial<Record<PrayerName, string[]>>;
   prayerConfigs?: unknown;
   prayerSettings?: { sect?: string };
   quietDown?: QuietDownPolicy;
@@ -356,6 +359,7 @@ export default function Step5DevicesAdhan({
   const [devices, setDevices] = useState<Device[]>([]);
   const [playbackEndpoints, setPlaybackEndpoints] = useState<PlaybackEndpoint[]>([]);
   const [selectedEndpointIds, setSelectedEndpointIds] = useState<string[]>([]);
+  const [perPrayerTargetEndpointIds, setPerPrayerTargetEndpointIds] = useState<Partial<Record<PrayerName, string[]>>>({});
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
     Array.isArray(onboardingData.devices)
       ? onboardingData.devices.filter((id): id is string => typeof id === "string")
@@ -424,10 +428,11 @@ export default function Step5DevicesAdhan({
     }
 
     try {
-      const [settingsRes, devicesRes, recitersRes, duasRes, surahsRes] =
+      const [settingsRes, devicesRes, endpointsRes, recitersRes, duasRes, surahsRes] =
         await Promise.all([
           apiFetchWithAmazonRepair("/api/user/settings"),
           apiFetchWithAmazonRepair("/api/alexa/devices"),
+          apiFetchWithAmazonRepair("/api/alexa/endpoints"),
           apiFetch("/api/library/reciters?type=adhan"),
           apiFetch("/api/duas"),
           apiFetch("/api/quran/surahs"),
@@ -483,6 +488,21 @@ export default function Step5DevicesAdhan({
           );
         }
 
+        const prayerTargetSource = isRecord((settings as JsonRecord).perPrayerTargetEndpointIds)
+          ? (settings as JsonRecord).perPrayerTargetEndpointIds
+          : isRecord((payload as JsonRecord).perPrayerTargetEndpointIds)
+          ? (payload as JsonRecord).perPrayerTargetEndpointIds
+          : {};
+
+        const nextPrayerTargets = {} as Partial<Record<PrayerName, string[]>>;
+        PRAYERS.forEach((prayerName) => {
+          const raw = prayerTargetSource[prayerName];
+          nextPrayerTargets[prayerName] = Array.isArray(raw)
+            ? raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+            : [];
+        });
+        setPerPrayerTargetEndpointIds(nextPrayerTargets);
+
         const configsSource = Array.isArray(settings.prayerConfigs)
           ? settings.prayerConfigs
           : payload.prayerConfigs;
@@ -506,6 +526,11 @@ export default function Step5DevicesAdhan({
       if (devicesRes.ok) {
         const payload = (await devicesRes.json()) as unknown;
         setDevices(normalizeDevices(payload));
+      }
+
+      if (endpointsRes.ok) {
+        const payload = (await endpointsRes.json()) as unknown;
+        setPlaybackEndpoints(normalizePlaybackEndpoints(payload));
       }
 
       if (recitersRes.ok) {
@@ -568,6 +593,13 @@ export default function Step5DevicesAdhan({
     });
   }, [devices]);
 
+  const updatePrayerTargetSelection = (prayerName: PrayerName, endpointId: string) => {
+    setPerPrayerTargetEndpointIds((prev) => ({
+      ...prev,
+      [prayerName]: endpointId && endpointId !== NONE_VALUE ? [endpointId] : [],
+    }));
+  };
+
   const handleNext = async () => {
     setError(null);
 
@@ -603,6 +635,7 @@ export default function Step5DevicesAdhan({
       const payload: JsonRecord = {
         accountEnabled,
         selectedAlexaTargetEndpointIds: selectedEndpointIds,
+        perPrayerTargetEndpointIds,
         selectedAlexaDeviceIds: selectedDeviceIds,
         quietDown,
         quietDownPolicy: quietDown,
@@ -624,6 +657,7 @@ export default function Step5DevicesAdhan({
         ...onboardingData,
         devices: selectedDeviceIds,
         selectedAlexaTargetEndpointIds: selectedEndpointIds,
+        perPrayerTargetEndpointIds,
         accountEnabled,
         prayerConfigs,
         quietDown,
@@ -915,6 +949,29 @@ export default function Step5DevicesAdhan({
                       </div>
 
                       <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-slate-200">Playback target</Label>
+                          <Select
+                            value={perPrayerTargetEndpointIds[pc.prayerName]?.[0] ?? NONE_VALUE}
+                            onValueChange={(value: string) => updatePrayerTargetSelection(pc.prayerName, value)}
+                          >
+                            <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                              <SelectValue placeholder="Use default playback targets" />
+                            </SelectTrigger>
+                            <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
+                              <SelectItem value={NONE_VALUE}>Use default playback targets</SelectItem>
+                              {playbackEndpoints.map((endpoint) => (
+                                <SelectItem key={endpoint.endpointId} value={endpoint.endpointId}>
+                                  {endpoint.friendlyName}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-slate-500">
+                            Override the default target for this prayer only.
+                          </p>
+                        </div>
+
                         <div className="space-y-2">
                           <Label className="text-slate-200">Adhan reciter</Label>
                           <Select

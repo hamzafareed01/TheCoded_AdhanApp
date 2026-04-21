@@ -72,6 +72,7 @@ type UserSettings = {
   mosqueLng?: number | null;
   selectedAlexaDeviceIds?: string[];
   selectedAlexaTargetEndpointIds?: string[];
+  perPrayerTargetEndpointIds?: Partial<Record<PrayerName, string[]>>;
   quietDown: QuietDownPolicy;
   accountEnabled: boolean;
   globalOffsets: Offsets;
@@ -367,6 +368,15 @@ function normalizeSettings(payload: unknown): UserSettings {
           (id): id is string => typeof id === "string" && id.trim().length > 0
         )
       : [],
+    perPrayerTargetEndpointIds: PRAYERS.reduce((acc, prayerName) => {
+      const raw = isRecord((src as JsonRecord).perPrayerTargetEndpointIds)
+        ? (src as JsonRecord).perPrayerTargetEndpointIds[prayerName]
+        : undefined;
+      acc[prayerName] = Array.isArray(raw)
+        ? raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        : [];
+      return acc;
+    }, {} as Partial<Record<PrayerName, string[]>>),
     quietDown: normalizeQuietDown(src.quietDown ?? src.quietDownPolicy),
     accountEnabled:
       asBoolean(src.accountEnabled) ??
@@ -620,13 +630,14 @@ export default function Settings({
           return;
         }
 
-        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
+        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes, endpointsRes] =
           await Promise.all([
             apiFetch("/api/user/settings"),
             apiFetch("/api/library/reciters?type=adhan"),
             apiFetch("/api/duas"),
             apiFetch("/api/quran/surahs"),
             apiFetch("/api/alexa/devices"),
+            apiFetch("/api/alexa/endpoints"),
           ]);
 
         if (!settingsRes.ok) {
@@ -661,6 +672,11 @@ export default function Settings({
         if (devicesRes.ok) {
           const devicesJson = await devicesRes.json();
           setDevices(normalizeDevices(devicesJson));
+        }
+
+        if (endpointsRes.ok) {
+          const endpointsJson = await endpointsRes.json();
+          setPlaybackEndpoints(normalizePlaybackEndpoints(endpointsJson));
         }
 
         await loadSchedules();
@@ -705,6 +721,16 @@ export default function Settings({
       }
 
       return { ...prev, [key]: value };
+    });
+  };
+
+
+  const updatePrayerTargetSelection = (prayerName: PrayerName, endpointId: string) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const next = { ...(prev.perPrayerTargetEndpointIds ?? {}) } as Partial<Record<PrayerName, string[]>>;
+      next[prayerName] = endpointId && endpointId !== NONE_VALUE ? [endpointId] : [];
+      return { ...prev, perPrayerTargetEndpointIds: next };
     });
   };
 
@@ -806,6 +832,7 @@ export default function Settings({
         useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
         selectedAlexaTargetEndpointIds: syncedSettings.selectedAlexaTargetEndpointIds ?? [],
+        perPrayerTargetEndpointIds: syncedSettings.perPrayerTargetEndpointIds ?? {},
         selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
         quietDown: syncedSettings.quietDown,
         globalOffsets: sanitizedGlobalOffsets,
@@ -853,6 +880,8 @@ export default function Settings({
         },
         accountEnabled: syncedSettings.accountEnabled,
         devices: syncedSettings.selectedAlexaDeviceIds ?? [],
+        selectedAlexaTargetEndpointIds: syncedSettings.selectedAlexaTargetEndpointIds ?? [],
+        perPrayerTargetEndpointIds: syncedSettings.perPrayerTargetEndpointIds ?? {},
         prayerConfigs: syncedSettings.prayerConfigs,
       });
 
@@ -1541,6 +1570,29 @@ export default function Settings({
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-800">
+                      <div className="space-y-2">
+                        <Label className="text-slate-200">Playback target</Label>
+                        <Select
+                          value={(settings.perPrayerTargetEndpointIds?.[pc.prayerName]?.[0] ?? NONE_VALUE)}
+                          onValueChange={(v: string) => updatePrayerTargetSelection(pc.prayerName, v)}
+                        >
+                          <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
+                            <SelectValue placeholder="Use default playback targets" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
+                            <SelectItem value={NONE_VALUE}>Use default playback targets</SelectItem>
+                            {playbackEndpoints.map((endpoint) => (
+                              <SelectItem key={endpoint.endpointId} value={endpoint.endpointId}>
+                                {endpoint.friendlyName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-slate-500">
+                          Override the default target for this prayer only. Leave on default to use the main playback targets above.
+                        </p>
+                      </div>
+
                       <div className="space-y-2">
                         <Label className="text-slate-200">Adhan reciter</Label>
                         <Select
