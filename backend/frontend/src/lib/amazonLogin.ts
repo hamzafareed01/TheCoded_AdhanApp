@@ -1,10 +1,13 @@
 // amazonLogin.ts
 // Production-safe Login with Amazon helper for AdhanCast
 // Goals:
-// - no bad hardcoded Azure fallback host
-// - strict env validation
-// - popup-first auth to avoid the "next must be redirect URI if !options.popup" error
-// - consistent redirect URI handling across prod and localhost
+// - prefer the app-link / app-login client on web and native
+// - keep web popup login for browser UX
+// - force redirect login on native runtimes (Capacitor/Android)
+// - support https://localhost callbacks for native shells
+// - keep current production web fallback safe
+
+import { Capacitor } from "@capacitor/core";
 
 const AMAZON_SDK_SRC = "https://assets.loginwithamazon.com/sdk/na/login1.js";
 
@@ -48,10 +51,12 @@ declare global {
 
 const PROD_STEP2_URL =
   "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
+const NATIVE_STEP2_URL = "https://localhost/onboarding/step2";
 
 const ALLOWED_RETURN_ORIGINS = new Set([
   "https://nice-ground-009684610.1.azurestaticapps.net",
   "http://localhost:5173",
+  "https://localhost",
 ]);
 
 let sdkLoadPromise: Promise<void> | null = null;
@@ -84,20 +89,48 @@ function getEnv(name: string): string {
   return String(import.meta.env?.[name] || "").trim();
 }
 
+function isNativeRuntime(): boolean {
+  try {
+    return !!Capacitor?.isNativePlatform?.();
+  } catch {
+    return false;
+  }
+}
+
+function getPreferredClientIdCandidates(): string[] {
+  const native = isNativeRuntime();
+  const candidates = native
+    ? [
+        getEnv("VITE_AMAZON_NATIVE_CLIENT_ID"),
+        getEnv("VITE_AMAZON_APP_LINK_CLIENT_ID"),
+        getEnv("VITE_AMAZON_CLIENT_ID"),
+      ]
+    : [
+        getEnv("VITE_AMAZON_APP_LINK_CLIENT_ID"),
+        getEnv("VITE_AMAZON_CLIENT_ID"),
+      ];
+
+  return candidates.filter(Boolean);
+}
+
 export function getAmazonClientId(): string {
-  const clientId = getEnv("VITE_AMAZON_CLIENT_ID");
+  const clientId = getPreferredClientIdCandidates()[0] || "";
   if (!clientId) {
     throw new Error(
-      "VITE_AMAZON_CLIENT_ID is missing. Set it in Azure Static Web Apps and local .env."
+      "Amazon app-login client ID is missing. Set VITE_AMAZON_APP_LINK_CLIENT_ID (or VITE_AMAZON_CLIENT_ID) in the frontend environment."
     );
   }
   return clientId;
 }
 
 export function getAmazonReturnUrl(): string {
-  const explicit =
-    normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
-    normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"));
+  const native = isNativeRuntime();
+  const explicit = native
+    ? normalizeUrl(getEnv("VITE_AMAZON_NATIVE_RETURN_URL")) ||
+      normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
+      normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"))
+    : normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
+      normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"));
 
   if (explicit) {
     const origin = normalizeOrigin(explicit);
@@ -109,6 +142,10 @@ export function getAmazonReturnUrl(): string {
     return explicit;
   }
 
+  if (native) {
+    return NATIVE_STEP2_URL;
+  }
+
   if (typeof window !== "undefined") {
     const currentOrigin = normalizeOrigin(window.location.origin);
     if (ALLOWED_RETURN_ORIGINS.has(currentOrigin)) {
@@ -116,7 +153,6 @@ export function getAmazonReturnUrl(): string {
     }
   }
 
-  // Final safe fallback: only the correct production URL
   return PROD_STEP2_URL;
 }
 
@@ -197,7 +233,8 @@ export async function loadAmazonSdk(): Promise<void> {
 export function buildAmazonAuthorizeOptions(
   options: AmazonAuthorizeOptions = {}
 ): Record<string, unknown> {
-  const popup = options.popup ?? true;
+  const native = isNativeRuntime();
+  const popup = options.popup ?? !native;
   const returnUrl = getAmazonReturnUrl();
 
   const authorizeOptions: Record<string, unknown> = {
@@ -205,6 +242,7 @@ export function buildAmazonAuthorizeOptions(
     scope: options.scope || getAmazonScope(),
     response_type: options.responseType || "token",
     popup,
+    redirect_uri: returnUrl,
     return_url: returnUrl,
   };
 
@@ -212,8 +250,6 @@ export function buildAmazonAuthorizeOptions(
     authorizeOptions.state = options.state;
   }
 
-  // Only required when popup is false.
-  // This avoids the exact SDK error you were seeing.
   if (!popup) {
     authorizeOptions.next = returnUrl;
   }
@@ -266,7 +302,7 @@ export async function connectAmazonInteractive(
 ): Promise<AmazonAuthorizeResponse> {
   return authorizeWithAmazon({
     state,
-    popup: true,
+    popup: !isNativeRuntime(),
     responseType: "token",
     scope: "profile",
   });
@@ -280,5 +316,8 @@ export function logoutAmazon(): void {
   }
 }
 
-// Backward-compatible alias for existing imports
+export function isAmazonNativeRuntime(): boolean {
+  return isNativeRuntime();
+}
+
 export const ensureAmazonSdk = loadAmazonSdk;

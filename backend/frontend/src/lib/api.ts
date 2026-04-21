@@ -14,15 +14,35 @@ const envBase =
 
 const isBrowser = typeof window !== "undefined";
 const host = isBrowser ? window.location.hostname : "";
-const isLocal = host === "localhost" || host === "127.0.0.1";
+const protocol = isBrowser ? window.location.protocol : "";
 const isAzureStaticApps = host.endsWith("azurestaticapps.net");
+
+function isCapacitorNativeRuntime(): boolean {
+  if (!isBrowser) return false;
+
+  const cap = (window as any)?.Capacitor;
+  if (typeof cap?.isNativePlatform === "function") {
+    try {
+      return !!cap.isNativePlatform();
+    } catch {
+      return false;
+    }
+  }
+
+  return protocol === "capacitor:";
+}
+
+const isNativeRuntime = isCapacitorNativeRuntime();
+const isLocalWebDev = !isNativeRuntime && (host === "localhost" || host === "127.0.0.1");
 
 const TOKEN_KEY = "amazon_access_token";
 const AUTH_EVENT = "amazon-auth-changed";
 const APP_SESSION_PREFIX = "adhapp_";
 
 export const API_BASE =
-  normalizeBase(envBase) || (!isLocal && isAzureStaticApps ? FALLBACK_PROD_API : "");
+  normalizeBase(envBase) ||
+  (isNativeRuntime ? FALLBACK_PROD_API : "") ||
+  (!isLocalWebDev && isAzureStaticApps ? FALLBACK_PROD_API : "");
 
 export function getApiUrl(path: string): string {
   if (!path) return API_BASE || "";
