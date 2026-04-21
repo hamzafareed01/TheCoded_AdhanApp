@@ -279,3 +279,6 @@ export function logoutAmazon(): void {
     // no-op
   }
 }
+
+// Backward-compatible alias for existing imports
+export const ensureAmazonSdk = loadAmazonSdk;

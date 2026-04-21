@@ -15,7 +15,7 @@ import {
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 import {
-  ensureAmazonSdk,
+  connectAmazonInteractive,
   getAmazonClientId,
   getAmazonReturnUrl,
 } from "../../lib/amazonLogin";
@@ -260,7 +260,7 @@ export default function Step2ConnectAccounts({
     setTokens((prev) => ({ ...prev, alexa: durableToken }));
     markConnected("alexa");
     setServerStatus(data);
-    setInfo(durableToken.startsWith("adhapp_") ? "Amazon account connected and saved to a longer-lasting AdhanCast session. You can now enable the Alexa skill from this screen." : "Amazon account connected. You can now enable the Alexa skill from this screen.");
+    setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
 
     void refreshServerStatus();
     void refreshAlexaLinkStatus();
@@ -393,16 +393,15 @@ export default function Step2ConnectAccounts({
     }
 
     try {
-      await ensureAmazonSdk();
+      const tokenResp = await connectAmazonInteractive(`adhan_${Date.now()}`);
 
-      window.amazon?.Login?.authorize?.({
-        client_id: clientId,
-        scope: "profile",
-        response_type: "token",
-        redirect_uri: redirectUri,
-        popup: false,
-        state: `adhan_${Date.now()}`,
-      });
+      const accessToken: string | undefined = tokenResp?.access_token;
+      if (!accessToken) {
+        throw new Error("Amazon did not return an access token.");
+      }
+
+      await completeAlexaLogin(accessToken);
+      setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
     } catch (e: unknown) {
       setLoadingKey(null);
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
