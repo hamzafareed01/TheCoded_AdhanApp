@@ -462,6 +462,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const [deviceCount, setDeviceCount] = useState(0);
+  const [playbackTargetCount, setPlaybackTargetCount] = useState(0);
   const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
   const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
   const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
@@ -496,9 +497,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       try {
         setSettingsError(null);
-        const [settingsRes, devicesRes] = await Promise.all([
+        const [settingsRes, devicesRes, endpointsRes] = await Promise.all([
           apiFetchWithAmazonRepair("/api/user/settings"),
           apiFetchWithAmazonRepair("/api/alexa/devices"),
+          apiFetchWithAmazonRepair("/api/alexa/endpoints/summary"),
         ]);
 
         if (!settingsRes.ok) {
@@ -517,6 +519,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         } else {
           setDeviceCount(0);
         }
+
+        if (endpointsRes.ok) {
+          const endpointPayload = await endpointsRes.json().catch(() => null);
+          const count = Number(endpointPayload?.summary?.playbackTargetCount || 0);
+          setPlaybackTargetCount(Number.isFinite(count) ? count : 0);
+        } else {
+          setPlaybackTargetCount(0);
+        }
       } catch (err) {
         console.error("Failed to load settings/devices:", err);
         setSettingsError(
@@ -526,6 +536,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         );
         setUserSettings(null);
         setDeviceCount(0);
+        setPlaybackTargetCount(0);
       }
     }
 
@@ -839,7 +850,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 </p>
               )}
               {settingsError && <p className="text-amber-400 text-xs mt-1">{settingsError}</p>}
-              <p className="text-slate-500 text-xs mt-1">Smart Home phase: use the separate Alexa Smart Home skill for quiet mode controls and future supported Fire TV automation.</p>
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">
@@ -861,7 +871,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               {calcLabel}
             </Badge>
             <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
-              {deviceCount} Alexa device{deviceCount === 1 ? "" : "s"} seen by AdhanCast
+              {playbackTargetCount || deviceCount} Alexa target{(playbackTargetCount || deviceCount) === 1 ? "" : "s"}
             </Badge>
           </div>
 
@@ -1019,14 +1029,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   ))}
                 </div>
               )}
-              <p className="text-slate-400 text-sm mb-4">{deviceCount} Alexa device(s) seen by AdhanCast</p>
+              <p className="text-slate-400 text-sm mb-4">{playbackTargetCount || deviceCount} playback target(s) available</p>
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full border-slate-700 text-slate-300 hover:bg-slate-800"
                 onClick={() => navigate("/settings")}
               >
-                Manage Alexa setup
+                Manage connections
               </Button>
             </div>
 

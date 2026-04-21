@@ -1,6 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const { sql } = require('../db/sql');
+const {
+  listAlexaCustomerEndpoints,
+  getSelectedAlexaTargetEndpointIds,
+  findMatchingSelectedEndpoints,
+} = require('./alexaPlaybackTargets');
 
 const PRAYERS = ['fajr', 'dhuhr', 'asr', 'maghrib', 'isha'];
 
@@ -314,23 +319,6 @@ async function resolvePrayerPlaybackPlan(pool, params) {
   }
   const selectedDeviceIds = parseStringArray(profile.selected_alexa_device_ids_json);
   const normalizedDeviceId = String(deviceId || '').trim();
-  if (selectedDeviceIds.length > 0) {
-    if (!normalizedDeviceId) {
-      throw createAlexaSkillError(
-        403,
-        'DEVICE_NOT_ENABLED',
-        'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.'
-      );
-    }
-
-    if (!selectedDeviceIds.includes(normalizedDeviceId)) {
-      throw createAlexaSkillError(
-        403,
-        'DEVICE_NOT_ENABLED',
-        'This Alexa device is not enabled in your AdhanCast settings.'
-      );
-    }
-  }
 
   const deviceRowsResult = await pool
     .request()
@@ -363,6 +351,49 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       }))
       .find((row) => row.id === normalizedDeviceId) ||
     null;
+
+  const playbackEndpoints = await listAlexaCustomerEndpoints(pool, userId);
+  const selectedTargetEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
+  const selectedTargetEndpoints = playbackEndpoints.filter((endpoint) => selectedTargetEndpointIds.includes(String(endpoint.endpointId || '')));
+  const matchingSelectedTargets = findMatchingSelectedEndpoints(
+    selectedTargetEndpoints,
+    normalizedDeviceId,
+    currentDevice?.family || null
+  );
+
+  if (selectedTargetEndpoints.length > 0) {
+    if (!normalizedDeviceId) {
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa request did not include a device ID, so playback could not be verified against your selected playback targets.'
+      );
+    }
+
+    if (matchingSelectedTargets.length === 0) {
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa device is not covered by your selected AdhanCast playback targets.'
+      );
+    }
+  } else if (selectedDeviceIds.length > 0) {
+    if (!normalizedDeviceId) {
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa request did not include a device ID, so playback could not be verified against your selected devices.'
+      );
+    }
+
+    if (!selectedDeviceIds.includes(normalizedDeviceId)) {
+      throw createAlexaSkillError(
+        403,
+        'DEVICE_NOT_ENABLED',
+        'This Alexa device is not enabled in your AdhanCast settings.'
+      );
+    }
+  }
 
   const prayerResult = await pool
     .request()
@@ -406,6 +437,12 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       id: device.id,
       name: device.name,
       family: device.family,
+    })),
+    selectedTargets: selectedTargetEndpoints.map((endpoint) => ({
+      endpointId: endpoint.endpointId,
+      friendlyName: endpoint.friendlyName,
+      endpointKind: endpoint.endpointKind,
+      deviceFamily: endpoint.deviceFamily,
     })),
     canExecute: false,
     mode: 'policy_only',
@@ -460,7 +497,9 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       madhhab: profile.madhhab || 'hanafi',
       sect: profile.sect || 'SUNNI',
       selectedDeviceIds,
+      selectedTargetEndpointIds,
       requestedDeviceId: normalizedDeviceId || null,
+      matchedTargetEndpointIds: matchingSelectedTargets.map((item) => item.endpointId),
       currentDeviceFamily: currentDevice?.family || null,
       currentDeviceName: currentDevice?.name || null,
     },
