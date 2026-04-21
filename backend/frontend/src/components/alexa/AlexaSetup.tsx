@@ -33,6 +33,7 @@ type LinkStatus = {
 type UserSettingsSummary = {
   selectedAlexaDeviceIds?: string[];
   selectedAlexaTargetEndpointIds?: string[];
+  perPrayerTargetEndpointIds?: Record<string, string[]>;
   useMosqueLocation?: boolean;
   mosqueName?: string | null;
   calculationMethod?: string | null;
@@ -43,6 +44,12 @@ type UserSettingsSummary = {
 
 type DeviceListResponse = {
   devices?: Array<{ id: string; name: string; platform?: string | null }>;
+};
+
+type EndpointListResponse = {
+  endpoints?: Array<{ endpointId: string; friendlyName: string; endpointKind?: string; supportsFireTv?: boolean }>;
+  selectedEndpointIds?: string[];
+  prayerTargetEndpointMap?: Record<string, string[]>;
 };
 
 const FALLBACK_TEMPLATES: Template[] = [
