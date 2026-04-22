@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../ui/button";
@@ -15,10 +16,9 @@ import {
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 import {
-  connectAmazonInteractive,
+  ensureAmazonSdk,
   getAmazonClientId,
   getAmazonReturnUrl,
-  isAmazonNativeRuntime,
 } from "../../lib/amazonLogin";
 
 // Retrigger deploy..delete later if not needed
@@ -126,12 +126,8 @@ function cleanCurrentUrl() {
 }
 
 function currentAlexaLinkUrl(): string {
-  try {
-    return getAmazonReturnUrl();
-  } catch {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/onboarding/step2`;
-  }
+  if (typeof window === "undefined") return "";
+  return `${window.location.origin}/onboarding/step2`;
 }
 
 export default function Step2ConnectAccounts({
@@ -146,6 +142,8 @@ export default function Step2ConnectAccounts({
   const [deviceHint, setDeviceHint] = useState<string | null>(null);
   const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
   const [alexaStatus, setAlexaStatus] = useState<AlexaLinkStatus | null>(null);
+  const mountedRef = useRef(true);
+  const authInFlightRef = useRef(false);
 
   const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(() =>
     readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
@@ -162,6 +160,13 @@ export default function Step2ConnectAccounts({
   useEffect(() => {
     writeJson(LS_TOKENS, tokens);
   }, [tokens]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const platforms = useMemo(
     () => [
@@ -312,17 +317,68 @@ export default function Step2ConnectAccounts({
     );
   }
 
-  useEffect(() => {
-    const boot = async () => {
-      const restoredToken = restoreAmazonTokenFromUrl();
-      const params = new URLSearchParams(window.location.search || "");
-      const returnedCode = params.get("code");
-      const returnedState = params.get("state");
-      const returnedScope = params.get("scope");
-      const returnedError = params.get("error");
-      const returnedErrorDescription = params.get("error_description");
 
-      try {
+async function handleIncomingAuthUrl(rawUrl: string) {
+  const parsed = parseAuthReturnUrl(rawUrl);
+  if (!parsed || !isStep2CallbackPath(parsed.pathname)) {
+    return false;
+  }
+
+  if (authInFlightRef.current) {
+    return true;
+  }
+
+  authInFlightRef.current = true;
+  setLoadingKey("alexa");
+  setError(null);
+
+  try {
+    if (parsed.error) {
+      clearPendingAlexaLink();
+      setError(parsed.errorDescription || parsed.error);
+      return true;
+    }
+
+    if (parsed.accessToken) {
+      await completeAlexaLogin(parsed.accessToken);
+      return true;
+    }
+
+    if (parsed.code && parsed.state && getStoredAmazonToken()) {
+      if (
+        parsed.scope &&
+        !parsed.scope.split(/\s+/).includes("alexa::skills:account_linking")
+      ) {
+        throw new Error(
+          `Alexa returned the wrong scope (${parsed.scope}). The linking request must use alexa::skills:account_linking.`
+        );
+      }
+
+      await finalizeAlexaSkillLink(parsed.code, parsed.state);
+      return true;
+    }
+
+    return true;
+  } catch (e: unknown) {
+    setError(e instanceof Error ? e.message : "Alexa connection failed.");
+    return true;
+  } finally {
+    authInFlightRef.current = false;
+    if (mountedRef.current) {
+      setLoadingKey(null);
+      await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
+    }
+  }
+}
+
+
+useEffect(() => {
+  const boot = async () => {
+    try {
+      const handled = await handleIncomingAuthUrl(window.location.href);
+
+      if (!handled) {
+        const restoredToken = restoreAmazonTokenFromUrl();
         if (restoredToken) {
           setLoadingKey("alexa");
           setError(null);
@@ -330,35 +386,40 @@ export default function Step2ConnectAccounts({
         } else if (getStoredAmazonToken()) {
           markConnected("alexa");
         }
-
-        if (returnedError) {
-          clearPendingAlexaLink();
-          cleanCurrentUrl();
-          setError(returnedErrorDescription || returnedError);
-        } else if (returnedCode && returnedState && getStoredAmazonToken()) {
-          if (
-            returnedScope &&
-            !returnedScope.split(/\s+/).includes("alexa::skills:account_linking")
-          ) {
-            throw new Error(
-              `Alexa returned the wrong scope (${returnedScope}). The linking request must use alexa::skills:account_linking.`
-            );
-          }
-
-          setLoadingKey("alexa");
-          setError(null);
-          await finalizeAlexaSkillLink(returnedCode, returnedState);
-        }
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Alexa connection failed.");
-      } finally {
-        setLoadingKey(null);
-        await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
       }
-    };
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Alexa connection failed.");
+    } finally {
+      setLoadingKey(null);
+      await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
+    }
+  };
 
-    void boot();
-  }, []);
+  let removeListener: (() => void) | null = null;
+
+  void boot();
+
+  if (isAmazonNativeRuntime()) {
+    void CapacitorApp.addListener("appUrlOpen", ({ url }) => {
+      if (!url) return;
+      void handleIncomingAuthUrl(url);
+    }).then((listener) => {
+      removeListener = () => {
+        void listener.remove();
+      };
+    });
+
+    void CapacitorApp.getLaunchUrl().then((result) => {
+      if (result?.url) {
+        void handleIncomingAuthUrl(result.url);
+      }
+    });
+  }
+
+  return () => {
+    if (removeListener) removeListener();
+  };
+}, []);
 
   async function connectAlexa() {
     setError(null);
@@ -381,7 +442,33 @@ export default function Step2ConnectAccounts({
     }
 
     try {
-      const tokenResp = await connectAmazonInteractive(`adhan_${Date.now()}`);
+      await ensureAmazonSdk();
+
+      const tokenResp = await new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
+        window.amazon?.Login?.authorize?.(
+          {
+            client_id: clientId,
+            scope: "profile",
+            response_type: "token",
+            redirect_uri: redirectUri,
+            popup: true,
+            state: `adhan_${Date.now()}`,
+          },
+          (res: AmazonAuthorizeResponse | null) => {
+            if (!res) {
+              reject(new Error("No response from Amazon login."));
+              return;
+            }
+
+            if (typeof res.error === "string") {
+              reject(new Error(String(res.error_description || res.error)));
+              return;
+            }
+
+            resolve(res);
+          }
+        );
+      });
 
       const accessToken: string | undefined = tokenResp?.access_token;
       if (!accessToken) {
@@ -389,11 +476,7 @@ export default function Step2ConnectAccounts({
       }
 
       await completeAlexaLogin(accessToken);
-      setInfo(
-        isAmazonNativeRuntime()
-          ? "Amazon account connected in the app. You can now enable the Alexa skill from this screen."
-          : "Amazon account connected. You can now enable the Alexa skill from this screen."
-      );
+      setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
     } finally {
