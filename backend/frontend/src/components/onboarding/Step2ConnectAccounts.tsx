@@ -126,8 +126,12 @@ function cleanCurrentUrl() {
 }
 
 function currentAlexaLinkUrl(): string {
-  if (typeof window === "undefined") return "";
-  return `${window.location.origin}/onboarding/step2`;
+  try {
+    return getAmazonReturnUrl();
+  } catch {
+    if (typeof window === "undefined") return "";
+    return `${window.location.origin}/onboarding/step2`;
+  }
 }
 
 export default function Step2ConnectAccounts({
