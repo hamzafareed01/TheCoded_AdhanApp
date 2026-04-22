@@ -13,15 +13,15 @@ import {
   getStoredAmazonToken,
   restoreAmazonTokenFromUrl,
   setStoredAmazonToken,
-  subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 import {
-  ensureAmazonSdk,
+  connectAmazonInteractive,
   getAmazonClientId,
   getAmazonReturnUrl,
+  isAmazonNativeRuntime,
+  parseAuthReturnUrl,
+  isStep2CallbackPath,
 } from "../../lib/amazonLogin";
-
-// Retrigger deploy..delete later if not needed
 
 type AmazonAuthorizeResponse = {
   access_token?: string;
@@ -126,8 +126,11 @@ function cleanCurrentUrl() {
 }
 
 function currentAlexaLinkUrl(): string {
-  if (typeof window === "undefined") return "";
-  return `${window.location.origin}/onboarding/step2`;
+  try {
+    return getAmazonReturnUrl();
+  } catch {
+    return "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
+  }
 }
 
 export default function Step2ConnectAccounts({
@@ -142,6 +145,7 @@ export default function Step2ConnectAccounts({
   const [deviceHint, setDeviceHint] = useState<string | null>(null);
   const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
   const [alexaStatus, setAlexaStatus] = useState<AlexaLinkStatus | null>(null);
+
   const mountedRef = useRef(true);
   const authInFlightRef = useRef(false);
 
@@ -317,109 +321,109 @@ export default function Step2ConnectAccounts({
     );
   }
 
+  async function handleIncomingAuthUrl(rawUrl: string): Promise<boolean> {
+    const parsed = parseAuthReturnUrl(rawUrl);
+    if (!parsed || !isStep2CallbackPath(parsed.path)) {
+      return false;
+    }
 
-async function handleIncomingAuthUrl(rawUrl: string) {
-  const parsed = parseAuthReturnUrl(rawUrl);
-  if (!parsed || !isStep2CallbackPath(parsed.pathname)) {
-    return false;
-  }
-
-  if (authInFlightRef.current) {
-    return true;
-  }
-
-  authInFlightRef.current = true;
-  setLoadingKey("alexa");
-  setError(null);
-
-  try {
-    if (parsed.error) {
-      clearPendingAlexaLink();
-      setError(parsed.errorDescription || parsed.error);
+    if (authInFlightRef.current) {
       return true;
     }
 
-    if (parsed.accessToken) {
-      await completeAlexaLogin(parsed.accessToken);
-      return true;
-    }
+    authInFlightRef.current = true;
+    setLoadingKey("alexa");
+    setError(null);
 
-    if (parsed.code && parsed.state && getStoredAmazonToken()) {
-      if (
-        parsed.scope &&
-        !parsed.scope.split(/\s+/).includes("alexa::skills:account_linking")
-      ) {
-        throw new Error(
-          `Alexa returned the wrong scope (${parsed.scope}). The linking request must use alexa::skills:account_linking.`
-        );
-      }
-
-      await finalizeAlexaSkillLink(parsed.code, parsed.state);
-      return true;
-    }
-
-    return true;
-  } catch (e: unknown) {
-    setError(e instanceof Error ? e.message : "Alexa connection failed.");
-    return true;
-  } finally {
-    authInFlightRef.current = false;
-    if (mountedRef.current) {
-      setLoadingKey(null);
-      await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
-    }
-  }
-}
-
-
-useEffect(() => {
-  const boot = async () => {
     try {
-      const handled = await handleIncomingAuthUrl(window.location.href);
-
-      if (!handled) {
-        const restoredToken = restoreAmazonTokenFromUrl();
-        if (restoredToken) {
-          setLoadingKey("alexa");
-          setError(null);
-          await completeAlexaLogin(restoredToken);
-        } else if (getStoredAmazonToken()) {
-          markConnected("alexa");
-        }
+      if (parsed.error) {
+        clearPendingAlexaLink();
+        setError(parsed.errorDescription || parsed.error);
+        return true;
       }
+
+      if (parsed.accessToken) {
+        await completeAlexaLogin(parsed.accessToken);
+        cleanCurrentUrl();
+        return true;
+      }
+
+      if (parsed.code && parsed.state && getStoredAmazonToken()) {
+        if (
+          parsed.scope &&
+          !parsed.scope.split(/\s+/).includes("alexa::skills:account_linking")
+        ) {
+          throw new Error(
+            `Alexa returned the wrong scope (${parsed.scope}). The linking request must use alexa::skills:account_linking.`
+          );
+        }
+
+        await finalizeAlexaSkillLink(parsed.code, parsed.state);
+        cleanCurrentUrl();
+        return true;
+      }
+
+      return true;
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
+      return true;
     } finally {
-      setLoadingKey(null);
-      await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
-    }
-  };
-
-  let removeListener: (() => void) | null = null;
-
-  void boot();
-
-  if (isAmazonNativeRuntime()) {
-    void CapacitorApp.addListener("appUrlOpen", ({ url }) => {
-      if (!url) return;
-      void handleIncomingAuthUrl(url);
-    }).then((listener) => {
-      removeListener = () => {
-        void listener.remove();
-      };
-    });
-
-    void CapacitorApp.getLaunchUrl().then((result) => {
-      if (result?.url) {
-        void handleIncomingAuthUrl(result.url);
+      authInFlightRef.current = false;
+      if (mountedRef.current) {
+        setLoadingKey(null);
+        await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
       }
-    });
+    }
   }
 
-  return () => {
-    if (removeListener) removeListener();
-  };
-}, []);
+  useEffect(() => {
+    const boot = async () => {
+      try {
+        const handled = await handleIncomingAuthUrl(window.location.href);
+
+        if (!handled) {
+          const restoredToken = restoreAmazonTokenFromUrl();
+          if (restoredToken) {
+            setLoadingKey("alexa");
+            setError(null);
+            await completeAlexaLogin(restoredToken);
+          } else if (getStoredAmazonToken()) {
+            markConnected("alexa");
+          }
+        }
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Alexa connection failed.");
+      } finally {
+        setLoadingKey(null);
+        await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
+      }
+    };
+
+    let removeListener: (() => void) | null = null;
+
+    void boot();
+
+    if (isAmazonNativeRuntime()) {
+      void CapacitorApp.addListener("appUrlOpen", ({ url }) => {
+        if (!url) return;
+        void handleIncomingAuthUrl(url);
+      }).then((listener) => {
+        removeListener = () => {
+          void listener.remove();
+        };
+      });
+
+      void CapacitorApp.getLaunchUrl().then((result) => {
+        if (result?.url) {
+          void handleIncomingAuthUrl(result.url);
+        }
+      });
+    }
+
+    return () => {
+      if (removeListener) removeListener();
+    };
+  }, []);
 
   async function connectAlexa() {
     setError(null);
@@ -442,33 +446,7 @@ useEffect(() => {
     }
 
     try {
-      await ensureAmazonSdk();
-
-      const tokenResp = await new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
-        window.amazon?.Login?.authorize?.(
-          {
-            client_id: clientId,
-            scope: "profile",
-            response_type: "token",
-            redirect_uri: redirectUri,
-            popup: true,
-            state: `adhan_${Date.now()}`,
-          },
-          (res: AmazonAuthorizeResponse | null) => {
-            if (!res) {
-              reject(new Error("No response from Amazon login."));
-              return;
-            }
-
-            if (typeof res.error === "string") {
-              reject(new Error(String(res.error_description || res.error)));
-              return;
-            }
-
-            resolve(res);
-          }
-        );
-      });
+      const tokenResp = await connectAmazonInteractive(`adhan_${Date.now()}`);
 
       const accessToken: string | undefined = tokenResp?.access_token;
       if (!accessToken) {
@@ -485,43 +463,43 @@ useEffect(() => {
   }
 
   async function startAlexaSkillLinking() {
-  setError(null);
-  setInfo(null);
-  setLoadingKey("alexa");
+    setError(null);
+    setInfo(null);
+    setLoadingKey("alexa");
 
-  if (!getStoredAmazonToken()) {
-    setLoadingKey(null);
-    setError("Connect your Amazon account first.");
-    return;
-  }
-
-  try {
-    const redirectUri = currentAlexaLinkUrl();
-
-    const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/start", {
-      method: "POST",
-      body: JSON.stringify({ redirectUri }),
-    });
-
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => "");
-      throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+    if (!getStoredAmazonToken()) {
+      setLoadingKey(null);
+      setError("Connect your Amazon account first.");
+      return;
     }
 
-    const data = (await resp.json()) as AlexaLinkStartResponse;
+    try {
+      const redirectUri = currentAlexaLinkUrl();
 
-    storePendingAlexaLink({
-      state: data.state,
-      codeVerifier: data.codeVerifier,
-      redirectUri: data.redirectUri,
-      startedAt: Date.now(),
-    });
+      const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/start", {
+        method: "POST",
+        body: JSON.stringify({ redirectUri }),
+      });
 
-    window.location.assign(data.authorizationUrl);
-  } catch (e: unknown) {
-    setLoadingKey(null);
-    setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
-  }
+      if (!resp.ok) {
+        const msg = await resp.text().catch(() => "");
+        throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
+      }
+
+      const data = (await resp.json()) as AlexaLinkStartResponse;
+
+      storePendingAlexaLink({
+        state: data.state,
+        codeVerifier: data.codeVerifier,
+        redirectUri: data.redirectUri,
+        startedAt: Date.now(),
+      });
+
+      window.location.assign(data.authorizationUrl);
+    } catch (e: unknown) {
+      setLoadingKey(null);
+      setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
+    }
   }
 
   async function disconnectAlexa() {
@@ -622,7 +600,6 @@ useEffect(() => {
 
         <div className="mt-8 space-y-4">
           {platforms.map((platform) => {
-            const connected = isConnected(platform.key);
             const busy = loadingKey === platform.key;
             const serverConnected =
               platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
@@ -632,14 +609,15 @@ useEffect(() => {
             return (
               <div
                 key={platform.key}
-                className={`rounded-2xl border p-5 shadow-sm transition ${disabled
+                className={`rounded-2xl border p-5 shadow-sm transition ${
+                  disabled
                     ? "border-border/50 bg-card/60 opacity-70"
                     : linked
-                      ? "border-emerald-500/40 bg-emerald-500/5"
-                      : serverConnected
-                        ? "border-sky-500/40 bg-sky-500/5"
-                        : "border-border bg-card"
-                  }`}
+                    ? "border-emerald-500/40 bg-emerald-500/5"
+                    : serverConnected
+                    ? "border-sky-500/40 bg-sky-500/5"
+                    : "border-border bg-card"
+                }`}
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div className="flex items-start gap-4">
@@ -654,14 +632,21 @@ useEffect(() => {
                           {platform.badge}
                         </Badge>
                         {serverConnected && <Badge variant="outline">Amazon connected</Badge>}
-                        {linked && <Badge className="bg-emerald-600 hover:bg-emerald-600">Skill linked</Badge>}
+                        {linked && (
+                          <Badge className="bg-emerald-600 hover:bg-emerald-600">
+                            Skill linked
+                          </Badge>
+                        )}
                       </div>
 
                       <div className="text-sm text-muted-foreground">{platform.desc}</div>
 
                       {platform.key === "alexa" && serverStatus?.alexa?.displayName && (
                         <div className="text-sm text-muted-foreground">
-                          Connected as: <span className="font-medium text-foreground">{serverStatus.alexa.displayName}</span>
+                          Connected as:{" "}
+                          <span className="font-medium text-foreground">
+                            {serverStatus.alexa.displayName}
+                          </span>
                         </div>
                       )}
 
@@ -670,7 +655,12 @@ useEffect(() => {
                           <span>App login: {serverConnected ? "ready" : "not connected"}</span>
                           <span>•</span>
                           <span>
-                            Skill: {linked ? "linked" : alexaStatus?.enablementStatus || serverStatus?.alexa?.skillStatus || "not linked"}
+                            Skill:{" "}
+                            {linked
+                              ? "linked"
+                              : alexaStatus?.enablementStatus ||
+                                serverStatus?.alexa?.skillStatus ||
+                                "not linked"}
                           </span>
                           {alexaStatus?.invocationName && (
                             <>
@@ -694,7 +684,11 @@ useEffect(() => {
                           <Button variant="secondary" disabled>
                             Linked
                           </Button>
-                          <Button onClick={() => void handleDisconnect(platform.key)} disabled={busy} variant="outline">
+                          <Button
+                            onClick={() => void handleDisconnect(platform.key)}
+                            disabled={busy}
+                            variant="outline"
+                          >
                             {busy ? "Disconnecting…" : "Disconnect"}
                           </Button>
                         </>
@@ -703,7 +697,11 @@ useEffect(() => {
                           <Button onClick={() => void handleConnect(platform.key)} disabled={busy}>
                             {busy ? "Opening Alexa…" : "Enable Alexa skill"}
                           </Button>
-                          <Button onClick={() => void handleDisconnect(platform.key)} disabled={busy} variant="outline">
+                          <Button
+                            onClick={() => void handleDisconnect(platform.key)}
+                            disabled={busy}
+                            variant="outline"
+                          >
                             {busy ? "Disconnecting…" : "Disconnect"}
                           </Button>
                         </>
@@ -725,7 +723,10 @@ useEffect(() => {
           <div className="mt-2 space-y-1">
             <div>1. Connect Amazon so the app can save your settings and devices.</div>
             <div>2. Enable and link the Alexa skill from this same screen.</div>
-            <div>3. Step 5 and Settings will stay the source of truth for reciters, devices, and after-Adhan playback.</div>
+            <div>
+              3. Step 5 and Settings will stay the source of truth for reciters, devices,
+              and after-Adhan playback.
+            </div>
           </div>
         </div>
 
