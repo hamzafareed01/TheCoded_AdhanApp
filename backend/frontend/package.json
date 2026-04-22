@@ -52,7 +52,7 @@
     "sonner": "^2.0.3",
     "tailwind-merge": "*",
     "vaul": "^1.1.2",
-    "@capacitor/app": "^8.3.0"
+    "@capacitor/app": "^7.1.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.3.0",
