@@ -1,28 +1,67 @@
+import { Capacitor } from "@capacitor/core";
+
+const AMAZON_SDK_SRC = "https://assets.loginwithamazon.com/sdk/na/login1.js";
+
+type AmazonAuthorizeResponse = {
+  access_token?: string;
+  token_type?: string;
+  expires_in?: number | string;
+  scope?: string;
+  state?: string;
+  error?: string;
+  error_description?: string;
+};
+
+type AmazonAuthorizeOptions = {
+  scope?: string;
+  state?: string;
+  popup?: boolean;
+  responseType?: "token";
+};
+
+type AmazonLoginNamespace = {
+  setClientId: (clientId: string) => void;
+  authorize: (
+    options: Record<string, unknown>,
+    callback?: (response: AmazonAuthorizeResponse) => void
+  ) => void;
+  logout?: () => void;
+};
+
+type ParsedAuthReturn = {
+  url: URL;
+  path: string;
+  accessToken: string | null;
+  code: string | null;
+  state: string | null;
+  scope: string | null;
+  error: string | null;
+  errorDescription: string | null;
+};
+
 declare global {
   interface Window {
-    amazon?: any;
-    onAmazonLoginReady?: () => void;
+    amazon?: {
+      Login?: AmazonLoginNamespace;
+    };
   }
 }
 
-let sdkLoaded = false;
-let loadingPromise: Promise<void> | null = null;
+const PROD_STEP2_URL =
+  "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
 
-const AMAZON_CLIENT_ID_FALLBACK =
-  "amzn1.application-oa2-client.383c219cb1ca42fdbd844e17e11aa843";
+const AMAZON_RETURN_URL_FALLBACK = PROD_STEP2_URL;
 
-const AMAZON_RETURN_URL_FALLBACK =
-  "https://nice-ground-009684610-1.centralus.1.azurestaticapps.net/onboarding/step2";
+const ALLOWED_RETURN_ORIGINS = new Set([
+  "https://nice-ground-009684610.1.azurestaticapps.net",
+  "https://nice-ground-009684610-1.centralus.1.azurestaticapps.net",
+  "http://localhost:5173"
+]);
 
-function normalizeEnvString(value: unknown): string {
-  const v = String(value ?? "").trim();
-  if (!v) return "";
-  if (v === "undefined" || v === "null") return "";
-  return v;
-}
+let sdkLoadPromise: Promise<void> | null = null;
 
-function normalizeAbsoluteUrl(value: unknown): string {
-  const raw = normalizeEnvString(value);
+function normalizeUrl(value: string): string {
+  const raw = String(value || "").trim();
   if (!raw) return "";
 
   try {
@@ -34,120 +73,248 @@ function normalizeAbsoluteUrl(value: unknown): string {
   }
 }
 
-function normalizeRedirectUrl(value: unknown): string {
-  const absolute = normalizeAbsoluteUrl(value);
-  if (!absolute) return "";
+function normalizeOrigin(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
 
-  const url = new URL(absolute);
-  url.hash = "";
-  url.pathname = url.pathname.replace(/\/+$/, "") || "/";
-  return `${url.origin}${url.pathname}${url.search}`;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
 }
 
-function getBrowserDefaultReturnUrl(): string {
-  if (typeof window === "undefined") return AMAZON_RETURN_URL_FALLBACK;
-  return normalizeRedirectUrl(`${window.location.origin}/onboarding/step2`);
+function getEnv(name: string): string {
+  return String(import.meta.env?.[name] || "").trim();
+}
+
+function isNativeRuntime(): boolean {
+  try {
+    return !!Capacitor?.isNativePlatform?.();
+  } catch {
+    return false;
+  }
+}
+
+export function isAmazonNativeRuntime(): boolean {
+  return isNativeRuntime();
+}
+
+function getPreferredClientIdCandidates(): string[] {
+  return [
+    getEnv("VITE_AMAZON_APP_LINK_CLIENT_ID"),
+    getEnv("VITE_AMAZON_CLIENT_ID")
+  ].filter(Boolean);
 }
 
 export function getAmazonClientId(): string {
-  const envClientId = normalizeEnvString(
-    (import.meta as any).env?.VITE_AMAZON_CLIENT_ID ||
-      (import.meta as any).env?.VITE_LWA_CLIENT_ID
-  );
-
-  return envClientId || AMAZON_CLIENT_ID_FALLBACK;
+  const clientId = getPreferredClientIdCandidates()[0] || "";
+  if (!clientId) {
+    throw new Error(
+      "Amazon app-login client ID is missing. Set VITE_AMAZON_APP_LINK_CLIENT_ID or VITE_AMAZON_CLIENT_ID."
+    );
+  }
+  return clientId;
 }
 
 export function getAmazonReturnUrl(): string {
-  const envReturnUrl = normalizeRedirectUrl(
-    (import.meta as any).env?.VITE_AMAZON_RETURN_URL ||
-      (import.meta as any).env?.VITE_AMAZON_REDIRECT_URI
-  );
+  const explicit = normalizeUrl(getEnv("VITE_AMAZON_NATIVE_RETURN_URL")) ||
+    normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
+    normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"));
 
-  return envReturnUrl || getBrowserDefaultReturnUrl() || AMAZON_RETURN_URL_FALLBACK;
+  if (explicit) {
+    const origin = normalizeOrigin(explicit);
+    if (!ALLOWED_RETURN_ORIGINS.has(origin)) {
+      throw new Error(
+        `Amazon return URL origin is not allowed: ${origin || explicit}`
+      );
+    }
+    return explicit;
+  }
+
+  return AMAZON_RETURN_URL_FALLBACK;
 }
 
-export function ensureAmazonSdk(): Promise<void> {
-  if (sdkLoaded && window.amazon?.Login) {
-    return Promise.resolve();
+export function getAmazonScope(): string {
+  return "profile";
+}
+
+function ensureAmazonNamespace(): AmazonLoginNamespace {
+  const login = window.amazon?.Login;
+  if (!login) {
+    throw new Error("Amazon Login SDK loaded, but window.amazon.Login is unavailable.");
+  }
+  return login;
+}
+
+export async function loadAmazonSdk(): Promise<void> {
+  if (typeof window === "undefined") {
+    throw new Error("Amazon Login SDK can only load in the browser.");
   }
 
   if (window.amazon?.Login) {
-    const clientId = getAmazonClientId();
-    if (!clientId) {
-      return Promise.reject(new Error("Amazon Client ID is missing"));
-    }
-
-    window.amazon.Login.setClientId(clientId);
-    sdkLoaded = true;
-    return Promise.resolve();
+    window.amazon.Login.setClientId(getAmazonClientId());
+    return;
   }
 
-  if (loadingPromise) return loadingPromise;
+  if (sdkLoadPromise) {
+    await sdkLoadPromise;
+    return;
+  }
 
-  loadingPromise = new Promise<void>((resolve, reject) => {
-    let timeoutId: number | null = window.setTimeout(() => {
-      loadingPromise = null;
-      reject(new Error("Amazon SDK did not finish loading in time"));
-    }, 15000);
+  sdkLoadPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(
+      `script[src="${AMAZON_SDK_SRC}"]`
+    );
 
-    window.onAmazonLoginReady = function () {
+    if (existing) {
+      existing.addEventListener("load", () => {
+        try {
+          const login = ensureAmazonNamespace();
+          login.setClientId(getAmazonClientId());
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      existing.addEventListener("error", () => {
+        reject(new Error("Failed to load Amazon Login SDK."));
+      });
+
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = AMAZON_SDK_SRC;
+    script.async = true;
+
+    script.onload = () => {
       try {
-        if (!window.amazon?.Login) {
-          throw new Error("Amazon SDK did not initialise correctly");
-        }
-
-        const clientId = getAmazonClientId();
-        if (!clientId) {
-          throw new Error("Amazon Client ID is missing");
-        }
-
-        window.amazon.Login.setClientId(clientId);
-
-        sdkLoaded = true;
-        loadingPromise = null;
-        if (timeoutId !== null) {
-          window.clearTimeout(timeoutId);
-          timeoutId = null;
-        }
+        const login = ensureAmazonNamespace();
+        login.setClientId(getAmazonClientId());
         resolve();
       } catch (err) {
-        loadingPromise = null;
-        if (timeoutId !== null) {
-          window.clearTimeout(timeoutId);
-          timeoutId = null;
-        }
         reject(err);
       }
     };
 
-    const existing = document.getElementById("amazon-login-sdk") as HTMLScriptElement | null;
-    if (existing) {
-      if (window.amazon?.Login) {
-        window.onAmazonLoginReady?.();
-      }
-      return;
-    }
-
-    const root = document.getElementById("amazon-root") || document.body;
-    const script = document.createElement("script");
-    script.type = "text/javascript";
-    script.async = true;
-    script.id = "amazon-login-sdk";
-    script.src = "https://assets.loginwithamazon.com/sdk/na/login1.js";
-    script.onerror = (err) => {
-      loadingPromise = null;
-      if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      reject(err as any);
+    script.onerror = () => {
+      reject(new Error("Failed to load Amazon Login SDK."));
     };
 
-    root.appendChild(script);
+    document.head.appendChild(script);
   });
 
-  return loadingPromise;
+  await sdkLoadPromise;
 }
 
-export {};
+export const ensureAmazonSdk = loadAmazonSdk;
+
+export function buildAmazonAuthorizeOptions(
+  options: AmazonAuthorizeOptions = {}
+): Record<string, unknown> {
+  const popup = options.popup ?? !isNativeRuntime();
+  const returnUrl = getAmazonReturnUrl();
+
+  const authorizeOptions: Record<string, unknown> = {
+    client_id: getAmazonClientId(),
+    scope: options.scope || getAmazonScope(),
+    response_type: options.responseType || "token",
+    popup,
+    redirect_uri: returnUrl,
+    return_url: returnUrl
+  };
+
+  if (options.state) {
+    authorizeOptions.state = options.state;
+  }
+
+  if (!popup) {
+    authorizeOptions.next = returnUrl;
+  }
+
+  return authorizeOptions;
+}
+
+export async function authorizeWithAmazon(
+  options: AmazonAuthorizeOptions = {}
+): Promise<AmazonAuthorizeResponse> {
+  await loadAmazonSdk();
+
+  const login = ensureAmazonNamespace();
+  const authorizeOptions = buildAmazonAuthorizeOptions(options);
+
+  return new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
+    try {
+      login.authorize(authorizeOptions, (response: AmazonAuthorizeResponse) => {
+        if (!response) {
+          reject(new Error("Amazon authorization returned an empty response."));
+          return;
+        }
+
+        if (response.error) {
+          reject(
+            new Error(
+              response.error_description ||
+                response.error ||
+                "Amazon authorization failed."
+            )
+          );
+          return;
+        }
+
+        if (!response.access_token) {
+          reject(new Error("Amazon authorization did not return an access token."));
+          return;
+        }
+
+        resolve(response);
+      });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+}
+
+export async function connectAmazonInteractive(
+  state?: string
+): Promise<AmazonAuthorizeResponse> {
+  return authorizeWithAmazon({
+    state,
+    popup: !isNativeRuntime(),
+    responseType: "token",
+    scope: "profile"
+  });
+}
+
+export function logoutAmazon(): void {
+  try {
+    window.amazon?.Login?.logout?.();
+  } catch {
+    // no-op
+  }
+}
+
+export function parseAuthReturnUrl(rawUrl: string): ParsedAuthReturn | null {
+  try {
+    const url = new URL(rawUrl);
+    return {
+      url,
+      path: url.pathname,
+      accessToken:
+        url.hash ? new URLSearchParams(url.hash.replace(/^#/, "")).get("access_token") : null,
+      code: url.searchParams.get("code"),
+      state: url.searchParams.get("state"),
+      scope: url.searchParams.get("scope"),
+      error: url.searchParams.get("error"),
+      errorDescription: url.searchParams.get("error_description")
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function isStep2CallbackPath(path: string): boolean {
+  return path === "/onboarding/step2" || path === "/alexa/link";
+}
