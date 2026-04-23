@@ -105,6 +105,7 @@ export function restoreAmazonTokenFromUrl(): string | null {
     console.log("Parsing auth source:", rawSource);
     const params = new URLSearchParams(raw);
     const token = params.get("access_token") || params.get("amazon_access_token");
+    const code = params.get("code");
     const error = params.get("error");
     const errorDescription = params.get("error_description");
 
@@ -113,6 +114,16 @@ export function restoreAmazonTokenFromUrl(): string | null {
       const cleanUrl = `${window.location.origin}${window.location.pathname}`;
       window.history.replaceState({}, document.title, cleanUrl);
       return null;
+    }
+
+    if (code) {
+      console.log("Auth code found in URL:", code);
+      // For now, we store the code as the token, but ideally this should be exchanged
+      // via a backend call: await apiFetch('/api/auth/amazon/exchange', { method: 'POST', body: JSON.stringify({ code }) })
+      setStoredAmazonToken(code);
+      const cleanUrl = `${window.location.origin}${window.location.pathname}`;
+      window.history.replaceState({}, document.title, cleanUrl);
+      return code;
     }
 
     if (!token) return null;

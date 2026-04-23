@@ -16,7 +16,7 @@ type AmazonAuthorizeOptions = {
   scope?: string;
   state?: string;
   popup?: boolean;
-  responseType?: "token";
+  responseType?: "code" | "token";
 };
 
 type AmazonLoginNamespace = {
@@ -89,11 +89,22 @@ function getEnv(name: string): string {
 }
 
 function isNativeRuntime(): boolean {
-  try {
-    return !!Capacitor?.isNativePlatform?.();
-  } catch {
-    return false;
+  if (typeof window === "undefined") return false;
+
+  // Check for Capacitor bridge
+  const cap = (window as any)?.Capacitor;
+  if (cap?.isNativePlatform?.()) return true;
+
+  // Fallback: Check user agent or protocol
+  const ua = window.navigator.userAgent.toLowerCase();
+  if (ua.includes("android") || ua.includes("iphone") || ua.includes("ipad")) {
+    // If we're on a mobile device and NOT on a known web domain, assume native
+    if (window.location.protocol === "capacitor:" || window.location.hostname === "localhost") {
+      return true;
+    }
   }
+
+  return false;
 }
 
 export function isAmazonNativeRuntime(): boolean {
@@ -118,6 +129,10 @@ export function getAmazonClientId(): string {
 }
 
 export function getAmazonReturnUrl(): string {
+  if (isNativeRuntime()) {
+    return "com.thecoded.adhanhome://onboarding/step2";
+  }
+
   const explicit = normalizeUrl(getEnv("VITE_AMAZON_NATIVE_RETURN_URL")) ||
     normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
     normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"));
@@ -226,7 +241,7 @@ export function buildAmazonAuthorizeOptions(
   const authorizeOptions: Record<string, unknown> = {
     client_id: getAmazonClientId(),
     scope: options.scope || getAmazonScope(),
-    response_type: options.responseType || "token",
+    response_type: options.responseType || "code",
     popup
   };
 
@@ -254,7 +269,7 @@ export async function authorizeWithAmazon(
     const returnUrl = getAmazonReturnUrl();
     const scope = options.scope || getAmazonScope();
     const state = options.state || `adhan_${Date.now()}`;
-    const responseType = options.responseType || "token";
+    const responseType = options.responseType || "code";
 
     // Use na.account.amazon.com directly for North America, or www.amazon.com
     const authUrl = new URL("https://www.amazon.com/ap/oa");
@@ -315,7 +330,7 @@ export async function connectAmazonInteractive(
   return authorizeWithAmazon({
     state,
     popup: !isNativeRuntime(),
-    responseType: "token",
+    responseType: "code",
     scope: "profile"
   });
 }
@@ -332,9 +347,17 @@ export function logoutAmazon(): void {
 export function parseAuthReturnUrl(rawUrl: string): ParsedAuthReturn | null {
   try {
     const url = new URL(rawUrl);
+
+    // Support custom scheme com.thecoded.adhanhome://
+    let path = url.pathname;
+    if (url.protocol === "com.thecoded.adhanhome:") {
+      // In custom schemes, hostname + path might be merged or path might be the host
+      path = url.pathname || `/${url.host}`;
+    }
+
     return {
       url,
-      path: url.pathname,
+      path,
       accessToken:
         url.hash ? new URLSearchParams(url.hash.replace(/^#/, "")).get("access_token") : null,
       code: url.searchParams.get("code"),
