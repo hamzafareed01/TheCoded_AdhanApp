@@ -221,9 +221,7 @@ export function buildAmazonAuthorizeOptions(
     client_id: getAmazonClientId(),
     scope: options.scope || getAmazonScope(),
     response_type: options.responseType || "token",
-    popup,
-    redirect_uri: returnUrl,
-    return_url: returnUrl
+    popup
   };
 
   if (options.state) {
@@ -240,6 +238,33 @@ export function buildAmazonAuthorizeOptions(
 export async function authorizeWithAmazon(
   options: AmazonAuthorizeOptions = {}
 ): Promise<AmazonAuthorizeResponse> {
+  const isNative = isNativeRuntime();
+  const usePopup = options.popup ?? !isNative;
+
+  // For native platforms, avoid the JS SDK's 'authorize' method which can cause WebView crashes
+  // or issues with window management. Instead, use a direct window navigation.
+  if (isNative && !usePopup) {
+    const clientId = getAmazonClientId();
+    const returnUrl = getAmazonReturnUrl();
+    const scope = options.scope || getAmazonScope();
+    const state = options.state || `adhan_${Date.now()}`;
+    const responseType = options.responseType || "token";
+
+    // Use na.account.amazon.com directly for North America, or www.amazon.com
+    const authUrl = new URL("https://www.amazon.com/ap/oa");
+    authUrl.searchParams.set("client_id", clientId);
+    authUrl.searchParams.set("scope", scope);
+    authUrl.searchParams.set("response_type", responseType);
+    authUrl.searchParams.set("redirect_uri", returnUrl);
+    authUrl.searchParams.set("state", state);
+
+    console.log("Navigating to Amazon Auth URL:", authUrl.toString());
+    window.location.assign(authUrl.toString());
+
+    // Return a promise that never resolves as the page is navigating away
+    return new Promise<AmazonAuthorizeResponse>(() => {});
+  }
+
   await loadAmazonSdk();
 
   const login = ensureAmazonNamespace();
