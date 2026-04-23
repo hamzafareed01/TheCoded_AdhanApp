@@ -102,11 +102,14 @@ export function restoreAmazonTokenFromUrl(): string | null {
     const raw = String(rawSource || "").replace(/^#/, "").replace(/^\?/, "");
     if (!raw) return null;
 
+    console.log("Parsing auth source:", rawSource);
     const params = new URLSearchParams(raw);
     const token = params.get("access_token") || params.get("amazon_access_token");
     const error = params.get("error");
+    const errorDescription = params.get("error_description");
 
     if (error) {
+      console.error("Auth error in URL:", error, errorDescription);
       const cleanUrl = `${window.location.origin}${window.location.pathname}`;
       window.history.replaceState({}, document.title, cleanUrl);
       return null;
@@ -114,6 +117,7 @@ export function restoreAmazonTokenFromUrl(): string | null {
 
     if (!token) return null;
 
+    console.log("Token found in URL, storing...");
     setStoredAmazonToken(token);
     const cleanUrl = `${window.location.origin}${window.location.pathname}`;
     window.history.replaceState({}, document.title, cleanUrl);

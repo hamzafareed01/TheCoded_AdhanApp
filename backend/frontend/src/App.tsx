@@ -40,9 +40,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    console.log("App mounted. Current URL:", window.location.href);
     restoreAmazonTokenFromUrl();
     void loadUser();
     return subscribeToAmazonAuthChanges(() => {
+      console.log("Amazon auth changed. Refreshing user...");
       restoreAmazonTokenFromUrl();
       void loadUser();
     });
