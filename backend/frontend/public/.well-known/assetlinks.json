@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.thecoded.adhanhome",
+      "sha256_cert_fingerprints": [
+        "1D:F2:3A:4E:9F:50:66:81:64:18:2D:E2:4B:9B:C1:54:14:14:46:13:D2:C3:57:38:64:C2:26:A6:94:07:95:C7"
+      ]
+    }
+  }
+]
