@@ -25,26 +25,23 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-<intent-filter android:autoVerify="true">
-    <action android:name="android.intent.action.VIEW" />
-    <category android:name="android.intent.category.DEFAULT" />
-    <category android:name="android.intent.category.BROWSABLE" />
-    <data android:scheme="https" android:host="nice-ground-009684610.1.azurestaticapps.net" android:pathPrefix="/onboarding/step2" />
-</intent-filter>
+            <!-- Custom URI Scheme for OAuth Redirects -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.thecoded.adhanhome" />
+            </intent-filter>
 
-<intent-filter android:autoVerify="true">
-    <action android:name="android.intent.action.VIEW" />
-    <category android:name="android.intent.category.DEFAULT" />
-    <category android:name="android.intent.category.BROWSABLE" />
-    <data android:scheme="https" android:host="nice-ground-009684610.1.azurestaticapps.net" android:pathPrefix="/alexa/link" />
-</intent-filter>
-
-<intent-filter android:autoVerify="true">
-    <action android:name="android.intent.action.VIEW" />
-    <category android:name="android.intent.category.DEFAULT" />
-    <category android:name="android.intent.category.BROWSABLE" />
-    <data android:scheme="https" android:host="nice-ground-009684610-1.centralus.1.azurestaticapps.net" android:pathPrefix="/onboarding/step2" />
-</intent-filter>
+            <!-- Android App Links for Web URLs -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="nice-ground-009684610.1.azurestaticapps.net" android:pathPrefix="/onboarding/step2" />
+                <data android:scheme="https" android:host="nice-ground-009684610.1.azurestaticapps.net" android:pathPrefix="/alexa/link" />
+                <data android:scheme="https" android:host="nice-ground-009684610-1.centralus.1.azurestaticapps.net" android:pathPrefix="/onboarding/step2" />
+            </intent-filter>
 
         </activity>
 
