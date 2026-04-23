@@ -152,6 +152,12 @@ export async function loadAmazonSdk(): Promise<void> {
     throw new Error("Amazon Login SDK can only load in the browser.");
   }
 
+  // CRITICAL: Never load the JS SDK on native platforms. It causes SIGILL renderer crashes.
+  if (isNativeRuntime()) {
+    console.warn("Amazon Login SDK skipped on native platform to prevent crashes.");
+    return;
+  }
+
   if (window.amazon?.Login) {
     window.amazon.Login.setClientId(getAmazonClientId());
     return;
@@ -315,6 +321,7 @@ export async function connectAmazonInteractive(
 }
 
 export function logoutAmazon(): void {
+  if (isNativeRuntime()) return;
   try {
     window.amazon?.Login?.logout?.();
   } catch {
