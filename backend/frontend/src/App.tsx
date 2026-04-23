@@ -41,8 +41,16 @@ export default function App() {
 
   useEffect(() => {
     console.log("App mounted. Current URL:", window.location.href);
-    restoreAmazonTokenFromUrl();
+
+    // If we have a hash with an access token, process it and clean it immediately
+    // to prevent React Router from choking on the remote-looking URL.
+    const token = restoreAmazonTokenFromUrl();
+    if (token) {
+      console.log("Token restored on mount.");
+    }
+
     void loadUser();
+
     return subscribeToAmazonAuthChanges(() => {
       console.log("Amazon auth changed. Refreshing user...");
       restoreAmazonTokenFromUrl();
