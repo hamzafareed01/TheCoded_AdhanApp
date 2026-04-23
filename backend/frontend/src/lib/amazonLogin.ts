@@ -265,6 +265,7 @@ export async function authorizeWithAmazon(
     return new Promise<AmazonAuthorizeResponse>(() => {});
   }
 
+  // Only load the SDK if we are on Web/Popup flow to avoid crashes on Native
   await loadAmazonSdk();
 
   const login = ensureAmazonNamespace();
