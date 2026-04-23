@@ -130,7 +130,7 @@ export function getAmazonClientId(): string {
 
 export function getAmazonReturnUrl(): string {
   if (isNativeRuntime()) {
-    return "com.thecoded.adhanhome://onboarding/step2";
+    return "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
   }
 
   const explicit = normalizeUrl(getEnv("VITE_AMAZON_NATIVE_RETURN_URL")) ||
@@ -348,10 +348,9 @@ export function parseAuthReturnUrl(rawUrl: string): ParsedAuthReturn | null {
   try {
     const url = new URL(rawUrl);
 
-    // Support custom scheme com.thecoded.adhanhome://
+    // Support custom scheme or App Link
     let path = url.pathname;
-    if (url.protocol === "com.thecoded.adhanhome:") {
-      // In custom schemes, hostname + path might be merged or path might be the host
+    if (url.protocol === "com.thecoded.adhanhome:" || url.host === "nice-ground-009684610.1.azurestaticapps.net") {
       path = url.pathname || `/${url.host}`;
     }
 
