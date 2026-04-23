@@ -30,7 +30,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.thecoded.adhanhome" />
+                <data android:scheme="nice-ground-009684610.1.azurestaticapps.net" />
             </intent-filter>
 
             <!-- Android App Links for Web URLs -->
