@@ -1,4 +1,4 @@
-import { Capacitor } from "@capacitor/core";
+// Capacitor/native platform support removed — web/PWA only
 
 const AMAZON_SDK_SRC = "https://assets.loginwithamazon.com/sdk/na/login1.js";
 
@@ -88,61 +88,38 @@ function getEnv(name: string): string {
   return String(import.meta.env?.[name] || "").trim();
 }
 
+// No native runtime in web-only build
 function isNativeRuntime(): boolean {
-  if (typeof window === "undefined") return false;
-
-  // Check for Capacitor bridge
-  const cap = (window as any)?.Capacitor;
-  if (cap?.isNativePlatform?.()) return true;
-
-  // Fallback: Check user agent or protocol
-  const ua = window.navigator.userAgent.toLowerCase();
-  if (ua.includes("android") || ua.includes("iphone") || ua.includes("ipad")) {
-    // If we're on a mobile device and NOT on a known web domain, assume native
-    if (window.location.protocol === "capacitor:" || window.location.hostname === "localhost") {
-      return true;
-    }
-  }
-
   return false;
 }
 
 export function isAmazonNativeRuntime(): boolean {
-  return isNativeRuntime();
+  return false;
 }
 
 function getPreferredClientIdCandidates(): string[] {
-  return [
-    getEnv("VITE_AMAZON_APP_LINK_CLIENT_ID"),
-    getEnv("VITE_AMAZON_CLIENT_ID")
-  ].filter(Boolean);
+  return [getEnv("VITE_AMAZON_CLIENT_ID")].filter(Boolean);
 }
 
 export function getAmazonClientId(): string {
   const clientId = getPreferredClientIdCandidates()[0] || "";
   if (!clientId) {
     throw new Error(
-      "Amazon app-login client ID is missing. Set VITE_AMAZON_APP_LINK_CLIENT_ID or VITE_AMAZON_CLIENT_ID."
+      "Amazon client ID is missing. Set VITE_AMAZON_CLIENT_ID."
     );
   }
   return clientId;
 }
 
 export function getAmazonReturnUrl(): string {
-  if (isNativeRuntime()) {
-    return "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
-  }
-
-  const explicit = normalizeUrl(getEnv("VITE_AMAZON_NATIVE_RETURN_URL")) ||
+  const explicit =
     normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
     normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"));
 
   if (explicit) {
     const origin = normalizeOrigin(explicit);
     if (!ALLOWED_RETURN_ORIGINS.has(origin)) {
-      throw new Error(
-        `Amazon return URL origin is not allowed: ${origin || explicit}`
-      );
+      throw new Error(`Amazon return URL origin is not allowed: ${origin || explicit}`);
     }
     return explicit;
   }
@@ -167,12 +144,6 @@ export async function loadAmazonSdk(): Promise<void> {
     throw new Error("Amazon Login SDK can only load in the browser.");
   }
 
-  // CRITICAL: Never load the JS SDK on native platforms. It causes SIGILL renderer crashes.
-  if (isNativeRuntime()) {
-    console.warn("Amazon Login SDK skipped on native platform to prevent crashes.");
-    return;
-  }
-
   if (window.amazon?.Login) {
     window.amazon.Login.setClientId(getAmazonClientId());
     return;
@@ -184,9 +155,7 @@ export async function loadAmazonSdk(): Promise<void> {
   }
 
   sdkLoadPromise = new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[src="${AMAZON_SDK_SRC}"]`
-    );
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${AMAZON_SDK_SRC}"]`);
 
     if (existing) {
       existing.addEventListener("load", () => {
@@ -259,34 +228,6 @@ export function buildAmazonAuthorizeOptions(
 export async function authorizeWithAmazon(
   options: AmazonAuthorizeOptions = {}
 ): Promise<AmazonAuthorizeResponse> {
-  const isNative = isNativeRuntime();
-  const usePopup = options.popup ?? !isNative;
-
-  // For native platforms, avoid the JS SDK's 'authorize' method which can cause WebView crashes
-  // or issues with window management. Instead, use a direct window navigation.
-  if (isNative && !usePopup) {
-    const clientId = getAmazonClientId();
-    const returnUrl = getAmazonReturnUrl();
-    const scope = options.scope || getAmazonScope();
-    const state = options.state || `adhan_${Date.now()}`;
-    const responseType = options.responseType || "code";
-
-    // Use na.account.amazon.com directly for North America, or www.amazon.com
-    const authUrl = new URL("https://www.amazon.com/ap/oa");
-    authUrl.searchParams.set("client_id", clientId);
-    authUrl.searchParams.set("scope", scope);
-    authUrl.searchParams.set("response_type", responseType);
-    authUrl.searchParams.set("redirect_uri", returnUrl);
-    authUrl.searchParams.set("state", state);
-
-    console.log("Navigating to Amazon Auth URL:", authUrl.toString());
-    window.location.assign(authUrl.toString());
-
-    // Return a promise that never resolves as the page is navigating away
-    return new Promise<AmazonAuthorizeResponse>(() => {});
-  }
-
-  // Only load the SDK if we are on Web/Popup flow to avoid crashes on Native
   await loadAmazonSdk();
 
   const login = ensureAmazonNamespace();
@@ -345,31 +286,55 @@ export function logoutAmazon(): void {
 }
 
 export function parseAuthReturnUrl(rawUrl: string): ParsedAuthReturn | null {
+  console.log("parseAuthReturnUrl: Processing URL:", rawUrl);
   try {
     const url = new URL(rawUrl);
 
     // Support custom scheme or App Link
     let path = url.pathname;
-    if (url.protocol === "com.thecoded.adhanhome:" || url.host === "nice-ground-009684610.1.azurestaticapps.net") {
-      path = url.pathname || `/${url.host}`;
+    if (url.protocol === "com.thecoded.adhanhome:") {
+      // For com.thecoded.adhanhome://onboarding/step2
+      // URL constructor: host = "onboarding", pathname = "/step2"
+      if (url.host && url.host !== "localhost") {
+        path = "/" + url.host + url.pathname;
+      }
     }
+
+    // Normalize path: remove trailing slashes and ensure leading slash
+    path = path.replace(/\/+$/, "");
+    if (!path.startsWith("/")) {
+      path = "/" + path;
+    }
+
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+    const accessToken = hashParams.get("access_token");
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+
+    console.log("parseAuthReturnUrl: Parsed components:", {
+      path,
+      hasAccessToken: !!accessToken,
+      hasCode: !!code,
+      state
+    });
 
     return {
       url,
       path,
-      accessToken:
-        url.hash ? new URLSearchParams(url.hash.replace(/^#/, "")).get("access_token") : null,
-      code: url.searchParams.get("code"),
-      state: url.searchParams.get("state"),
+      accessToken,
+      code,
+      state,
       scope: url.searchParams.get("scope"),
       error: url.searchParams.get("error"),
       errorDescription: url.searchParams.get("error_description")
     };
-  } catch {
+  } catch (err) {
+    console.error("parseAuthReturnUrl: Failed to parse URL:", err);
     return null;
   }
 }
 
 export function isStep2CallbackPath(path: string): boolean {
-  return path === "/onboarding/step2" || path === "/alexa/link";
+  const normalized = path.replace(/\/+$/, "");
+  return normalized === "/onboarding/step2" || normalized === "/alexa/link";
 }
