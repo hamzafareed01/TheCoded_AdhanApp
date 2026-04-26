@@ -1,4 +1,4 @@
-import { App as CapacitorApp } from "@capacitor/app";
+// Capacitor/native platform support removed — web/PWA only
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -127,7 +127,11 @@ function cleanCurrentUrl() {
 
 function currentAlexaLinkUrl(): string {
   try {
-    return getAmazonReturnUrl();
+    const url = getAmazonReturnUrl();
+    if (url.startsWith("com.thecoded.adhanhome://")) {
+      return "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
+    }
+    return url;
   } catch {
     return "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
   }
@@ -254,10 +258,22 @@ export default function Step2ConnectAccounts({
     }
   }
 
-  async function completeAlexaLogin(accessToken: string) {
+  async function completeAlexaLogin(accessToken: string, code?: string) {
+    const redirectUri = getAmazonReturnUrl();
+    console.log("[AlexaLogin] completeAlexaLogin details:", {
+      hasAccessToken: !!accessToken,
+      accessTokenLength: accessToken?.length,
+      hasCode: !!code,
+      codeSnippet: code ? `${code.substring(0, 10)}...` : null,
+      redirectUri,
+    });
+
+    const body = { accessToken, code, redirectUri };
+    console.log("[AlexaLogin] Sending POST to /api/integrations/alexa/login with body keys:", Object.keys(body));
+
     const linkRes = await apiFetchWithAmazonRepair("/api/integrations/alexa/login", {
       method: "POST",
-      body: JSON.stringify({ accessToken }),
+      body: JSON.stringify(body),
     });
 
     if (!linkRes.ok) {
@@ -322,8 +338,10 @@ export default function Step2ConnectAccounts({
   }
 
   async function handleIncomingAuthUrl(rawUrl: string): Promise<boolean> {
+    console.log("handleIncomingAuthUrl: Incoming URL:", rawUrl);
     const parsed = parseAuthReturnUrl(rawUrl);
     if (!parsed || !isStep2CallbackPath(parsed.path)) {
+      console.log("handleIncomingAuthUrl: Not a Step 2 callback path or failed to parse.");
       return false;
     }
 
@@ -344,6 +362,12 @@ export default function Step2ConnectAccounts({
 
       if (parsed.accessToken) {
         await completeAlexaLogin(parsed.accessToken);
+        cleanCurrentUrl();
+        return true;
+      }
+
+      if (parsed.code && !getStoredAmazonToken()) {
+        await completeAlexaLogin("", parsed.code);
         cleanCurrentUrl();
         return true;
       }
@@ -399,30 +423,8 @@ export default function Step2ConnectAccounts({
       }
     };
 
-    let removeListener: (() => void) | null = null;
-
     void boot();
-
-    if (isAmazonNativeRuntime()) {
-      void CapacitorApp.addListener("appUrlOpen", ({ url }) => {
-        if (!url) return;
-        void handleIncomingAuthUrl(url);
-      }).then((listener) => {
-        removeListener = () => {
-          void listener.remove();
-        };
-      });
-
-      void CapacitorApp.getLaunchUrl().then((result) => {
-        if (result?.url) {
-          void handleIncomingAuthUrl(result.url);
-        }
-      });
-    }
-
-    return () => {
-      if (removeListener) removeListener();
-    };
+    return () => {};
   }, []);
 
   async function connectAlexa() {
