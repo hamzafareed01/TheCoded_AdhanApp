@@ -33,16 +33,7 @@ const {
   buildStateForEndpoint,
   handleSmartHomeDirective,
   loadSmartHomeContext,
-  buildSmartHomeSummary,
 } = require("./services/alexaSmartHome");
-const {
-  syncAlexaCustomerEndpoints,
-  listAlexaCustomerEndpoints,
-  getSelectedAlexaTargetEndpointIds,
-  replaceSelectedAlexaTargetEndpointIds,
-  getPrayerTargetEndpointMap,
-  replacePrayerTargetEndpointMap,
-} = require("./services/alexaPlaybackTargets");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -313,73 +304,6 @@ function getAmazonTokenFromRequest(req) {
   );
 }
 
-function getAppSessionSecret() {
-  return String(process.env.APP_SESSION_SECRET || "").trim();
-}
-
-function getAppSessionTtlMs() {
-  return Math.max(
-    60_000,
-    Number(process.env.APP_SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000) ||
-      30 * 24 * 60 * 60 * 1000
-  );
-}
-
-function createAppSessionToken(payload) {
-  const secret = getAppSessionSecret();
-  if (!secret) return null;
-
-  const body = {
-    userId: payload.userId,
-    userKey: payload.amazonUserId,
-    exp: Date.now() + getAppSessionTtlMs(),
-    iat: Date.now(),
-  };
-
-  const encoded = base64UrlEncode(JSON.stringify(body));
-  const signature = crypto
-    .createHmac("sha256", secret)
-    .update(encoded)
-    .digest("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-
-  return `${APP_SESSION_PREFIX}${encoded}.${signature}`;
-}
-
-function verifyAppSessionToken(token) {
-  const secret = getAppSessionSecret();
-  const raw = String(token || "").trim();
-  if (!secret || !raw.startsWith(APP_SESSION_PREFIX)) return null;
-
-  const value = raw.slice(APP_SESSION_PREFIX.length);
-  const splitAt = value.lastIndexOf(".");
-  if (splitAt <= 0) return null;
-
-  const encoded = value.slice(0, splitAt);
-  const signature = value.slice(splitAt + 1);
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(encoded)
-    .digest("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-
-  if (signature !== expected) return null;
-
-  try {
-    const payload = JSON.parse(base64UrlDecode(encoded));
-    if (!payload?.userKey || !payload?.exp || Number(payload.exp) <= Date.now()) {
-      return null;
-    }
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
 function cleanupExpiredTokenCache() {
   const now = Date.now();
   for (const [token, value] of tokenCache.entries()) {
@@ -422,6 +346,7 @@ function normalizeTimeString(value, fallback) {
   return "22:00:00";
 }
 
+
 function toSqlTime(value, fallback = "00:00:00") {
   const normalized = normalizeTimeString(value, fallback);
   const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})$/);
@@ -448,8 +373,10 @@ function toSqlTime(value, fallback = "00:00:00") {
     throw new Error(`Invalid time value: ${normalized}`);
   }
 
-  return new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
+  const d = new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
+  return d;
 }
+
 
 function getRegionCode(value) {
   const raw = String(value || "").trim();
@@ -662,7 +589,6 @@ const DEFAULT_ALEXA_API_ENDPOINTS = [
 ];
 const APP_LINK_STATE_TTL_MS = 10 * 60 * 1000;
 const ALEXA_APP_LINK_SCOPE = "alexa::skills:account_linking";
-const APP_SESSION_PREFIX = "adhapp_";
 
 function getAlexaSkillId() {
   return String(
@@ -1284,22 +1210,9 @@ async function requireAmazonAuth(req, res, next) {
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
 
-    const appSession = verifyAppSessionToken(token);
-    if (appSession?.userKey) {
-      req.amazonProfile = {
-        user_id: appSession.userKey,
-        email: null,
-        name: null,
-      };
-      req.amazonToken = token;
-      req.isAppSession = true;
-      return next();
-    }
-
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
-    req.isAppSession = false;
     next();
   } catch (e) {
     const status = e.status || 401;
@@ -1500,15 +1413,10 @@ async function getUserProfileAndPrayersByUserId(pool, userId) {
       ORDER BY prayer_name
     `);
 
-  const targetEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
-  const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
-
   return {
     userId,
     profile: profileResult.recordset[0] || {},
     prayers: prayerResult.recordset || [],
-    targetEndpointIds,
-    prayerTargetEndpointMap,
   };
 }
 
@@ -1879,7 +1787,7 @@ function computeQiblahBearing(lat, lon) {
 // -----------------------------
 // User settings shape
 // -----------------------------
-function buildUserSettingsPayload(amazonUserId, profile, prayerRows, targetEndpointIds = [], prayerTargetEndpointMap = {}) {
+function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
   const rows = Array.isArray(prayerRows) ? prayerRows : [];
 
   const firstQuietRow =
@@ -1959,17 +1867,6 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows, targetEndpo
     useMosqueLocation: !!profile.use_mosque_location,
     accountEnabled: !!profile.account_enabled,
     selectedAlexaDeviceIds: parseStringArray(profile.selected_alexa_device_ids_json),
-    selectedAlexaTargetEndpointIds: Array.isArray(targetEndpointIds) ? targetEndpointIds : [],
-    perPrayerTargetEndpointIds: prayerTargetEndpointMap && typeof prayerTargetEndpointMap === 'object' ? prayerTargetEndpointMap : {},
-    quietDown: {
-      enabled: !!profile.quiet_down_enabled,
-      strategy: String(profile.quiet_down_strategy || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower',
-      targetVolumePct: Math.min(80, Math.max(5, Number(profile.quiet_down_target_volume_pct || 20) || 20)),
-      restoreAfter: profile.quiet_down_restore !== false,
-      includeFireTv: !!profile.quiet_down_include_fire_tv,
-      mode: 'smart_home_ready',
-      note: 'Playback targets are the main source of truth now. Quiet-down policy is stored in AdhanCast and read by the Smart Home skill when supported.',
-    },
     quietHours,
     globalOffsets: {
       fajr: profile.offset_fajr || 0,
@@ -2295,19 +2192,9 @@ app.post(
         WHERE user_id = @user_id
       `);
 
-    const sessionToken = createAppSessionToken({
-      userId,
-      amazonUserId: profile.user_id,
-    });
-    const sessionExpiresAt = sessionToken
-      ? new Date(Date.now() + getAppSessionTtlMs()).toISOString()
-      : null;
-
     res.json({
       ok: true,
       userKey: profile.user_id,
-      sessionToken,
-      sessionExpiresAt,
       alexa: {
         connected: true,
         linkedAt: new Date().toISOString(),
@@ -2828,10 +2715,8 @@ app.get(
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool = await getPool();
-    await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
-    await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
-    const ctx = await loadSmartHomeContext(pool, req.skillAuth.userId);
-    res.json({ endpoints: buildDiscoveryEndpoints(ctx.profile, ctx.devices, ctx.playbackEndpoints, ctx.selectedEndpointIds) });
+    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ endpoints: buildDiscoveryEndpoints(profile, devices) });
   })
 );
 
@@ -2845,8 +2730,8 @@ app.get(
     }
 
     const pool = await getPool();
-    const ctx = await loadSmartHomeContext(pool, req.skillAuth.userId);
-    res.json({ properties: buildStateForEndpoint(ctx.profile, ctx.devices, endpointId, ctx.playbackEndpoints, ctx.selectedEndpointIds) });
+    const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
+    res.json({ properties: buildStateForEndpoint(profile, devices, endpointId) });
   })
 );
 
@@ -2870,23 +2755,6 @@ app.get(
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool = await getPool();
-    const requestId = req.query?.requestId ? String(req.query.requestId) : null;
-    const deviceId = req.query?.deviceId ? String(req.query.deviceId) : null;
-    const alexaUserId = req.query?.alexaUserId ? String(req.query.alexaUserId) : null;
-
-    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
-      userId: req.skillAuth.userId,
-      tokenId: req.skillAuth.tokenId,
-      deviceId,
-      alexaUserId,
-      requestId,
-      seenSource: "skill",
-    });
-
-    if (registeredDevice) {
-      await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
-    }
-
     const { profile, prayers } = await getUserProfileAndPrayersByUserId(
       pool,
       req.skillAuth.userId
@@ -2894,22 +2762,8 @@ app.get(
 
     const result = await computePrayerTimesForProfile(profile, prayers, new Date());
 
-    if (registeredDevice) {
-      await logAlexaDispatch(pool, {
-        userId: req.skillAuth.userId,
-        requestId,
-        prayerName: null,
-        deviceId,
-        triggerSource: "skill",
-        status: "device_seen",
-        message: `Registered Alexa device ${registeredDevice.id}`,
-        payload: { alexaUserId, deviceName: registeredDevice.name },
-      });
-    }
-
     res.json({
       ...result,
-      registeredDevice,
       userContext: {
         userId: req.skillAuth.userId,
         sect: profile.sect || "SUNNI",
@@ -2926,44 +2780,6 @@ app.get(
 );
 
 app.post(
-  "/api/alexa/skill/device-seen",
-  requireAlexaSkillAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const requestId = req.body?.requestId ? String(req.body.requestId) : null;
-    const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
-    const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
-    const locale = req.body?.locale ? String(req.body.locale) : null;
-
-    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
-      userId: req.skillAuth.userId,
-      tokenId: req.skillAuth.tokenId,
-      deviceId,
-      alexaUserId,
-      requestId,
-      seenSource: "skill",
-      deviceName: req.body?.deviceName ? String(req.body.deviceName) : null,
-    });
-
-    if (registeredDevice) {
-      await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
-      await logAlexaDispatch(pool, {
-        userId: req.skillAuth.userId,
-        requestId,
-        prayerName: null,
-        deviceId,
-        triggerSource: "skill",
-        status: "device_seen",
-        message: `Registered Alexa device ${registeredDevice.id}`,
-        payload: { alexaUserId, locale, deviceName: registeredDevice.name },
-      });
-    }
-
-    res.json({ ok: true, device: registeredDevice });
-  })
-);
-
-app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
@@ -2973,17 +2789,8 @@ app.post(
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
     const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
 
-    const registeredDevice = await registerAlexaSkillDeviceSeen(pool, {
-      userId: req.skillAuth.userId,
-      tokenId: req.skillAuth.tokenId,
-      deviceId,
-      alexaUserId,
-      requestId,
-      seenSource: "skill",
-    });
-
-    if (registeredDevice) {
-      await syncAlexaCustomerEndpoints(pool, req.skillAuth.userId);
+    if (alexaUserId) {
+      await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
     }
 
     try {
@@ -2991,7 +2798,6 @@ app.post(
         userId: req.skillAuth.userId,
         prayerName,
         req,
-        deviceId,
       });
 
       await logAlexaDispatch(pool, {
@@ -3006,11 +2812,10 @@ app.post(
           reciterId: plan.reciterId,
           afterAdhan: plan.afterAdhan,
           userContext: plan.userContext,
-          registeredDevice,
         },
       });
 
-      res.json({ ...plan, registeredDevice });
+      res.json(plan);
     } catch (err) {
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
@@ -3295,14 +3100,8 @@ app.get(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
 
-    const { profile, prayers, targetEndpointIds, prayerTargetEndpointMap } = await getUserProfileAndPrayers(pool, amazonUserId);
-    const settings = buildUserSettingsPayload(
-      amazonUserId,
-      profile,
-      prayers,
-      targetEndpointIds,
-      prayerTargetEndpointMap
-    );
+    const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
+    const settings = buildUserSettingsPayload(amazonUserId, profile, prayers);
 
     res.json({
       userKey: amazonUserId,
@@ -3368,35 +3167,6 @@ async function handleSaveUserSettings(req, res) {
   const selectedAlexaDeviceIds = hasSelectedAlexaDeviceIds
     ? parseStringArray(body.selectedAlexaDeviceIds ?? body.selectedDeviceIds)
     : undefined;
-
-  const hasSelectedAlexaTargetEndpointIds =
-    hasOwn(body, "selectedAlexaTargetEndpointIds") || hasOwn(body, "selectedTargetEndpointIds");
-
-  const selectedAlexaTargetEndpointIds = hasSelectedAlexaTargetEndpointIds
-    ? parseStringArray(body.selectedAlexaTargetEndpointIds ?? body.selectedTargetEndpointIds)
-    : undefined;
-
-  const rawPerPrayerTargetEndpointIds = isObject(body.perPrayerTargetEndpointIds)
-    ? body.perPrayerTargetEndpointIds
-    : isObject(body.prayerTargetEndpointIds)
-    ? body.prayerTargetEndpointIds
-    : null;
-  const hasPerPrayerTargetEndpointIds = !!rawPerPrayerTargetEndpointIds;
-  const quietDownPolicy = isObject(body.quietDown) ? body.quietDown : isObject(body.quietDownPolicy) ? body.quietDownPolicy : null;
-  const hasQuietDownPolicy = !!quietDownPolicy;
-  const quietDownEnabled = hasQuietDownPolicy ? quietDownPolicy.enabled === true : undefined;
-  const quietDownStrategy = hasQuietDownPolicy && String(quietDownPolicy.strategy || '').trim().toLowerCase() === 'mute' ? 'mute' : 'lower';
-  const quietDownTargetVolumePct = hasQuietDownPolicy ? Math.min(80, Math.max(5, Math.trunc(Number(quietDownPolicy.targetVolumePct ?? 20) || 20))) : undefined;
-  const quietDownRestore = hasQuietDownPolicy ? quietDownPolicy.restoreAfter !== false : undefined;
-  const quietDownIncludeFireTv = hasQuietDownPolicy ? quietDownPolicy.includeFireTv === true : undefined;
-  const quietDownPolicyJson = hasQuietDownPolicy ? JSON.stringify({
-    enabled: !!quietDownEnabled,
-    mode: quietDownStrategy === 'mute' ? 'mute' : 'volume',
-    volume: quietDownTargetVolumePct,
-    restoreAfterAdhan: quietDownRestore !== false,
-    applyToSelectedDevices: true,
-    includeFireTv: !!quietDownIncludeFireTv,
-  }) : null;
 
   const offsets = parseOffsetsFromBody(body, {
     fajr: currentProfile.offset_fajr || 0,
@@ -3502,13 +3272,6 @@ async function handleSaveUserSettings(req, res) {
     sql.Float,
     hasMosqueLng ? parseOptionalNumber(body.mosqueLng) ?? null : null
   );
-  profileReq.input('set_quiet_down_policy', sql.Bit, hasQuietDownPolicy ? 1 : 0);
-  profileReq.input('quiet_down_enabled', sql.Bit, hasQuietDownPolicy ? (quietDownEnabled ? 1 : 0) : null);
-  profileReq.input('quiet_down_strategy', sql.NVarChar(16), hasQuietDownPolicy ? quietDownStrategy : null);
-  profileReq.input('quiet_down_target_volume_pct', sql.Int, hasQuietDownPolicy ? quietDownTargetVolumePct : null);
-  profileReq.input('quiet_down_restore', sql.Bit, hasQuietDownPolicy ? (quietDownRestore ? 1 : 0) : null);
-  profileReq.input('quiet_down_include_fire_tv', sql.Bit, hasQuietDownPolicy ? (quietDownIncludeFireTv ? 1 : 0) : null);
-  profileReq.input('quiet_down_policy_json', sql.NVarChar(sql.MAX), quietDownPolicyJson);
 
   await profileReq.query(`
     UPDATE dbo.user_profiles
@@ -3530,12 +3293,6 @@ async function handleSaveUserSettings(req, res) {
       mosque_lat = CASE WHEN @set_mosque_lat = 1 THEN @mosque_lat ELSE mosque_lat END,
       mosque_lng = CASE WHEN @set_mosque_lng = 1 THEN @mosque_lng ELSE mosque_lng END,
       selected_alexa_device_ids_json = CASE WHEN @set_selected_alexa_device_ids_json = 1 THEN @selected_alexa_device_ids_json ELSE selected_alexa_device_ids_json END,
-      quiet_down_enabled = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_enabled ELSE quiet_down_enabled END,
-      quiet_down_strategy = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_strategy ELSE quiet_down_strategy END,
-      quiet_down_target_volume_pct = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_target_volume_pct ELSE quiet_down_target_volume_pct END,
-      quiet_down_restore = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_restore ELSE quiet_down_restore END,
-      quiet_down_include_fire_tv = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_include_fire_tv ELSE quiet_down_include_fire_tv END,
-      quiet_down_policy_json = CASE WHEN @set_quiet_down_policy = 1 THEN @quiet_down_policy_json ELSE quiet_down_policy_json END,
       account_enabled = COALESCE(@account_enabled, account_enabled),
       offset_fajr = @off_fajr,
       offset_dhuhr = @off_dhuhr,
@@ -3545,22 +3302,6 @@ async function handleSaveUserSettings(req, res) {
       updated_at = SYSUTCDATETIME()
     WHERE user_id = @user_id
   `);
-
-  if (hasSelectedAlexaTargetEndpointIds || hasPerPrayerTargetEndpointIds) {
-    await syncAlexaCustomerEndpoints(pool, userId);
-  }
-
-  if (hasSelectedAlexaTargetEndpointIds) {
-    await replaceSelectedAlexaTargetEndpointIds(
-      pool,
-      userId,
-      selectedAlexaTargetEndpointIds || []
-    );
-  }
-
-  if (hasPerPrayerTargetEndpointIds) {
-    await replacePrayerTargetEndpointMap(pool, userId, rawPerPrayerTargetEndpointIds || {});
-  }
 
   const quietHours = body.quietHours;
   if (isObject(quietHours)) {
@@ -3708,9 +3449,7 @@ async function handleSaveUserSettings(req, res) {
   const settings = buildUserSettingsPayload(
     amazonUserId,
     refreshed.profile,
-    refreshed.prayers,
-    refreshed.targetEndpointIds,
-    refreshed.prayerTargetEndpointMap
+    refreshed.prayers
   );
 
   res.json({
@@ -3866,8 +3605,6 @@ app.get(
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
 
-    await syncAlexaCustomerEndpoints(pool, userId);
-
     const result = await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
@@ -3911,76 +3648,7 @@ app.post(
           VALUES (@user_id, 'alexa', @device_id, @device_name);
       `);
 
-    const endpoints = await syncAlexaCustomerEndpoints(pool, userId);
-    res.json({ ok: true, endpoints });
-  })
-);
-
-app.get(
-  "/api/alexa/endpoints",
-  requireAmazonAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const amazonUserId = req.amazonProfile.user_id;
-    const userId = await ensureUser(pool, amazonUserId);
-
-    const endpoints = await syncAlexaCustomerEndpoints(pool, userId);
-    const selectedEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
-    const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
-
-    res.json({
-      endpoints,
-      selectedEndpointIds,
-      prayerTargetEndpointMap,
-      source: 'customer_endpoint_registry',
-      message: endpoints.length
-        ? 'These are AdhanCast playback targets built from recently seen Alexa devices, household groups, and room presets.'
-        : 'No playback targets are available yet. Use the skill once on each Echo or Fire TV you want to target, then refresh this page.',
-    });
-  })
-);
-
-app.post(
-  "/api/alexa/endpoints/selections",
-  requireAmazonAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const amazonUserId = req.amazonProfile.user_id;
-    const userId = await ensureUser(pool, amazonUserId);
-    const endpointIds = parseStringArray(req.body?.endpointIds || req.body?.selectedEndpointIds);
-
-    await syncAlexaCustomerEndpoints(pool, userId);
-    const selectedEndpointIds = await replaceSelectedAlexaTargetEndpointIds(pool, userId, endpointIds);
-    const endpoints = await listAlexaCustomerEndpoints(pool, userId);
-
-    res.json({ ok: true, selectedEndpointIds, endpoints });
-  })
-);
-
-app.get(
-  "/api/alexa/endpoints/summary",
-  requireAmazonAuth,
-  asyncHandler(async (req, res) => {
-    const pool = await getPool();
-    const amazonUserId = req.amazonProfile.user_id;
-    const userId = await ensureUser(pool, amazonUserId);
-    const endpoints = await syncAlexaCustomerEndpoints(pool, userId);
-    const selectedEndpointIds = await getSelectedAlexaTargetEndpointIds(pool, userId);
-    const prayerTargetEndpointMap = await getPrayerTargetEndpointMap(pool, userId);
-    const devices = endpoints.filter((item) => item.endpointKind === 'device');
-    const groups = endpoints.filter((item) => item.endpointKind === 'group');
-    const perPrayerSelectedCount = Object.values(prayerTargetEndpointMap).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
-    res.json({
-      summary: {
-        playbackTargetCount: endpoints.length,
-        selectedPlaybackTargetCount: selectedEndpointIds.length,
-        perPrayerPlaybackTargetCount: perPrayerSelectedCount,
-        physicalDeviceTargetCount: devices.length,
-        logicalGroupCount: groups.length,
-        fireTvTargetCount: endpoints.filter((item) => item.supportsFireTv).length,
-      },
-      prayerTargetEndpointMap,
-    });
+    res.json({ ok: true });
   })
 );
 
