@@ -7,7 +7,6 @@ import { Badge } from "../ui/badge";
 import { CheckCircle2 } from "lucide-react";
 import { AlexaIcon, GoogleIcon } from "../shared/BrandIcons";
 
-// Define the shape of the onboarding data
 type OnboardingData = {
   selectedPlatforms?: string[];
   [key: string]: unknown;

@@ -71,8 +71,6 @@ type UserSettings = {
   mosqueLat?: number | null;
   mosqueLng?: number | null;
   selectedAlexaDeviceIds?: string[];
-  selectedAlexaTargetEndpointIds?: string[];
-  perPrayerTargetEndpointIds?: Partial<Record<PrayerName, string[]>>;
   quietDown: QuietDownPolicy;
   accountEnabled: boolean;
   globalOffsets: Offsets;
@@ -102,16 +100,6 @@ type SurahItem = {
 type Device = {
   id: string;
   name: string;
-};
-
-type PlaybackEndpoint = {
-  endpointId: string;
-  friendlyName: string;
-  endpointKind?: string;
-  deviceFamily?: string;
-  deviceId?: string | null;
-  supportsAudio?: boolean;
-  supportsFireTv?: boolean;
 };
 
 type SchedulePayload = {
@@ -363,20 +351,6 @@ function normalizeSettings(payload: unknown): UserSettings {
           (id): id is string => typeof id === "string" && id.trim().length > 0
         )
       : [],
-    selectedAlexaTargetEndpointIds: Array.isArray((src as JsonRecord).selectedAlexaTargetEndpointIds)
-      ? ((src as JsonRecord).selectedAlexaTargetEndpointIds as unknown[]).filter(
-          (id): id is string => typeof id === "string" && id.trim().length > 0
-        )
-      : [],
-    perPrayerTargetEndpointIds: PRAYERS.reduce((acc, prayerName) => {
-      const raw = isRecord((src as JsonRecord).perPrayerTargetEndpointIds)
-        ? (src as JsonRecord).perPrayerTargetEndpointIds[prayerName]
-        : undefined;
-      acc[prayerName] = Array.isArray(raw)
-        ? raw.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-        : [];
-      return acc;
-    }, {} as Partial<Record<PrayerName, string[]>>),
     quietDown: normalizeQuietDown(src.quietDown ?? src.quietDownPolicy),
     accountEnabled:
       asBoolean(src.accountEnabled) ??
@@ -464,27 +438,6 @@ function normalizeDevices(payload: unknown): Device[] {
       name: asString(item.name) ?? "",
     }))
     .filter((item) => item.id && item.name);
-}
-
-function normalizePlaybackEndpoints(payload: unknown): PlaybackEndpoint[] {
-  const list = Array.isArray(payload)
-    ? payload
-    : isRecord(payload) && Array.isArray(payload.endpoints)
-    ? payload.endpoints
-    : [];
-
-  return list
-    .filter((item): item is JsonRecord => isRecord(item))
-    .map((item) => ({
-      endpointId: asString(item.endpointId) ?? "",
-      friendlyName: asString(item.friendlyName) ?? "",
-      endpointKind: asString(item.endpointKind) ?? undefined,
-      deviceFamily: asString(item.deviceFamily) ?? undefined,
-      deviceId: asString(item.deviceId),
-      supportsAudio: asBoolean(item.supportsAudio) ?? undefined,
-      supportsFireTv: asBoolean(item.supportsFireTv) ?? undefined,
-    }))
-    .filter((item) => item.endpointId && item.friendlyName);
 }
 
 function normalizeSchedules(payload: unknown): Schedule[] {
@@ -581,7 +534,6 @@ export default function Settings({
   const [duas, setDuas] = useState<DuaItem[]>([]);
   const [surahs, setSurahs] = useState<SurahItem[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [playbackEndpoints, setPlaybackEndpoints] = useState<PlaybackEndpoint[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
 
   const [saving, setSaving] = useState(false);
@@ -630,14 +582,13 @@ export default function Settings({
           return;
         }
 
-        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes, endpointsRes] =
+        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
           await Promise.all([
             apiFetch("/api/user/settings"),
             apiFetch("/api/library/reciters?type=adhan"),
             apiFetch("/api/duas"),
             apiFetch("/api/quran/surahs"),
             apiFetch("/api/alexa/devices"),
-            apiFetch("/api/alexa/endpoints"),
           ]);
 
         if (!settingsRes.ok) {
@@ -672,11 +623,6 @@ export default function Settings({
         if (devicesRes.ok) {
           const devicesJson = await devicesRes.json();
           setDevices(normalizeDevices(devicesJson));
-        }
-
-        if (endpointsRes.ok) {
-          const endpointsJson = await endpointsRes.json();
-          setPlaybackEndpoints(normalizePlaybackEndpoints(endpointsJson));
         }
 
         await loadSchedules();
@@ -721,16 +667,6 @@ export default function Settings({
       }
 
       return { ...prev, [key]: value };
-    });
-  };
-
-
-  const updatePrayerTargetSelection = (prayerName: PrayerName, endpointId: string) => {
-    setSettings((prev) => {
-      if (!prev) return prev;
-      const next = { ...(prev.perPrayerTargetEndpointIds ?? {}) } as Partial<Record<PrayerName, string[]>>;
-      next[prayerName] = endpointId && endpointId !== NONE_VALUE ? [endpointId] : [];
-      return { ...prev, perPrayerTargetEndpointIds: next };
     });
   };
 
@@ -831,8 +767,6 @@ export default function Settings({
         longitude: syncedSettings.longitude,
         useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
-        selectedAlexaTargetEndpointIds: syncedSettings.selectedAlexaTargetEndpointIds ?? [],
-        perPrayerTargetEndpointIds: syncedSettings.perPrayerTargetEndpointIds ?? {},
         selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
         quietDown: syncedSettings.quietDown,
         globalOffsets: sanitizedGlobalOffsets,
@@ -880,8 +814,6 @@ export default function Settings({
         },
         accountEnabled: syncedSettings.accountEnabled,
         devices: syncedSettings.selectedAlexaDeviceIds ?? [],
-        selectedAlexaTargetEndpointIds: syncedSettings.selectedAlexaTargetEndpointIds ?? [],
-        perPrayerTargetEndpointIds: syncedSettings.perPrayerTargetEndpointIds ?? {},
         prayerConfigs: syncedSettings.prayerConfigs,
       });
 
@@ -1169,45 +1101,6 @@ export default function Settings({
                         }
                       />
                     </div>
-                  </div>
-
-                  <div className="border-t border-slate-800 pt-6">
-                    <h3 className="text-white text-lg mb-3">Playback targets</h3>
-                    {playbackEndpoints.length === 0 ? (
-                      <div className="rounded-lg border border-slate-700 px-4 py-3 text-sm text-slate-400">
-                        No playback targets are available yet. Use the skill once on each Echo or Fire TV you want AdhanCast to recognize, then refresh.
-                      </div>
-                    ) : (
-                      <div className="space-y-3 mb-4">
-                        {playbackEndpoints.map((endpoint) => {
-                          const checked = (settings.selectedAlexaTargetEndpointIds ?? []).includes(endpoint.endpointId);
-                          return (
-                            <label
-                              key={endpoint.endpointId}
-                              className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 cursor-pointer ${
-                                checked
-                                  ? "border-emerald-500/50 bg-emerald-500/10"
-                                  : "border-slate-700"
-                              }`}
-                            >
-                              <div>
-                                <div className="text-slate-100">{endpoint.friendlyName}</div>
-                                <div className="text-xs text-slate-400">{endpoint.endpointKind === "group" ? "Logical household playback target" : "Device-backed playback target"}</div>
-                              </div>
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(value: boolean | "indeterminate") =>
-                                  toggleSelectedEndpoint(endpoint.endpointId, value === true)
-                                }
-                              />
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                    <p className="text-xs text-slate-400 mt-3 mb-6">
-                      Playback targets are the new source of truth. Recently seen Alexa devices are still shown below for diagnostics and fallback matching.
-                    </p>
                   </div>
 
                   <div className="border-t border-slate-800 pt-6">
@@ -1570,29 +1463,6 @@ export default function Settings({
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-800">
-                      <div className="space-y-2">
-                        <Label className="text-slate-200">Playback target</Label>
-                        <Select
-                          value={(settings.perPrayerTargetEndpointIds?.[pc.prayerName]?.[0] ?? NONE_VALUE)}
-                          onValueChange={(v: string) => updatePrayerTargetSelection(pc.prayerName, v)}
-                        >
-                          <SelectTrigger className="bg-slate-900 border-slate-700 text-slate-100">
-                            <SelectValue placeholder="Use default playback targets" />
-                          </SelectTrigger>
-                          <SelectContent className="bg-slate-900 border-slate-700 max-h-80">
-                            <SelectItem value={NONE_VALUE}>Use default playback targets</SelectItem>
-                            {playbackEndpoints.map((endpoint) => (
-                              <SelectItem key={endpoint.endpointId} value={endpoint.endpointId}>
-                                {endpoint.friendlyName}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-slate-500">
-                          Override the default target for this prayer only. Leave on default to use the main playback targets above.
-                        </p>
-                      </div>
-
                       <div className="space-y-2">
                         <Label className="text-slate-200">Adhan reciter</Label>
                         <Select

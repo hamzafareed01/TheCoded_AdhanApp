@@ -462,7 +462,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const [deviceCount, setDeviceCount] = useState(0);
-  const [playbackTargetCount, setPlaybackTargetCount] = useState(0);
   const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
   const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
   const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
@@ -497,10 +496,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
 
       try {
         setSettingsError(null);
-        const [settingsRes, devicesRes, endpointsRes] = await Promise.all([
+        const [settingsRes, devicesRes] = await Promise.all([
           apiFetchWithAmazonRepair("/api/user/settings"),
           apiFetchWithAmazonRepair("/api/alexa/devices"),
-          apiFetchWithAmazonRepair("/api/alexa/endpoints/summary"),
         ]);
 
         if (!settingsRes.ok) {
@@ -519,14 +517,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         } else {
           setDeviceCount(0);
         }
-
-        if (endpointsRes.ok) {
-          const endpointPayload = await endpointsRes.json().catch(() => null);
-          const count = Number(endpointPayload?.summary?.playbackTargetCount || 0);
-          setPlaybackTargetCount(Number.isFinite(count) ? count : 0);
-        } else {
-          setPlaybackTargetCount(0);
-        }
       } catch (err) {
         console.error("Failed to load settings/devices:", err);
         setSettingsError(
@@ -536,7 +526,6 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         );
         setUserSettings(null);
         setDeviceCount(0);
-        setPlaybackTargetCount(0);
       }
     }
 
@@ -871,7 +860,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               {calcLabel}
             </Badge>
             <Badge className="bg-slate-800 text-slate-200 border border-slate-700">
-              {playbackTargetCount || deviceCount} Alexa target{(playbackTargetCount || deviceCount) === 1 ? "" : "s"}
+              {deviceCount} Alexa device{deviceCount === 1 ? "" : "s"}
             </Badge>
           </div>
 
@@ -1029,7 +1018,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   ))}
                 </div>
               )}
-              <p className="text-slate-400 text-sm mb-4">{playbackTargetCount || deviceCount} playback target(s) available</p>
+              <p className="text-slate-400 text-sm mb-4">{deviceCount} linked Alexa device(s) available</p>
               <Button
                 variant="outline"
                 size="sm"
