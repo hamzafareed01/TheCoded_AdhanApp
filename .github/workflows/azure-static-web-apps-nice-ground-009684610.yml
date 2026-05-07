@@ -1,5 +1,5 @@
 name: Azure Static Web Apps CI/CD
-
+ 
 on:
   push:
     branches:
@@ -14,34 +14,36 @@ on:
     paths:
       - "backend/frontend/**"
       - ".github/workflows/azure-static-web-apps-nice-ground-009684610.yml"
-
+ 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
+ 
 jobs:
   build_and_deploy_job:
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
     name: Build and Deploy Job
-
+ 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: false
-
+ 
       - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
-
-      - name: Pin npm to 9.x to avoid CI crash bug
+ 
+      - name: Pin npm to 9.x
         run: npm install -g npm@9
-
-      - name: Install dependencies
+ 
+      - name: Delete lockfile and reinstall from public registry
         working-directory: backend/frontend
-        run: npm install --legacy-peer-deps
-
+        run: |
+          rm -f package-lock.json
+          npm install --legacy-peer-deps --registry https://registry.npmjs.org
+ 
       - name: Build frontend
         working-directory: backend/frontend
         env:
@@ -49,7 +51,7 @@ jobs:
           VITE_AMAZON_RETURN_URL: ${{ secrets.VITE_AMAZON_RETURN_URL }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         run: npm run build
-
+ 
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
@@ -60,7 +62,7 @@ jobs:
           api_location: ""
           output_location: "build"
           skip_app_build: true
-
+ 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
