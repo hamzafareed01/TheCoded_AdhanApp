@@ -1,3 +1,6 @@
+import { App as CapacitorApp } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
+import { Capacitor } from "@capacitor/core";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -15,7 +18,6 @@ import {
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 import {
-  ensureAmazonSdk,
   getAmazonClientId,
   getAmazonReturnUrl,
 } from "../../lib/amazonLogin";
@@ -88,6 +90,105 @@ const LS_CONNECTED = "adhan_connected_platforms";
 const LS_TOKENS = "adhan_tokens";
 const LS_ALEXA_LINK_PENDING = "adhan_alexa_link_pending";
 
+const AMAZON_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
+const AMAZON_LOGIN_STATE_PREFIX = "adhancast_amazon_login_";
+const NATIVE_LOGIN_STATE_PREFIX = "adhancast_native_login_";
+const NATIVE_AUTH_CALLBACK_URL = "com.thecoded.adhanhome://auth";
+const APP_SESSION_PREFIX = "adhapp_";
+
+function isNativeRuntime(): boolean {
+  try {
+    return !!Capacitor?.isNativePlatform?.();
+  } catch {
+    return false;
+  }
+}
+
+function parseAuthParamsFromCurrentUrl() {
+  if (typeof window === "undefined") {
+    return {
+      accessToken: null,
+      code: null,
+      state: null,
+      scope: null,
+      error: null,
+      errorDescription: null,
+    };
+  }
+
+  const searchParams = new URLSearchParams(window.location.search || "");
+  const hashParams = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+
+  return {
+    accessToken:
+      hashParams.get("access_token") ||
+      searchParams.get("access_token") ||
+      searchParams.get("amazon_access_token"),
+    code: searchParams.get("code") || hashParams.get("code"),
+    state: searchParams.get("state") || hashParams.get("state"),
+    scope: searchParams.get("scope") || hashParams.get("scope"),
+    error: searchParams.get("error") || hashParams.get("error"),
+    errorDescription:
+      searchParams.get("error_description") || hashParams.get("error_description"),
+  };
+}
+
+function buildAmazonLoginUrl(state: string): string {
+  const url = new URL(AMAZON_AUTHORIZE_URL);
+  url.searchParams.set("client_id", getAmazonClientId());
+  url.searchParams.set("scope", "profile");
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("redirect_uri", getAmazonReturnUrl());
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
+function buildNativeAppCallbackUrl(params: {
+  sessionToken?: string | null;
+  userKey?: string | null;
+  error?: string | null;
+}) {
+  const url = new URL(NATIVE_AUTH_CALLBACK_URL);
+
+  if (params.sessionToken) {
+    const sessionToken = params.sessionToken.trim();
+    if (!sessionToken.startsWith(APP_SESSION_PREFIX)) {
+      throw new Error("Cannot relay an invalid AdhanCast session token to Android.");
+    }
+    url.searchParams.set("session_token", sessionToken);
+  }
+
+  if (params.userKey) {
+    url.searchParams.set("user_key", params.userKey);
+  }
+
+  if (params.error) {
+    url.searchParams.set("error", params.error);
+  }
+
+  return url.toString();
+}
+
+function parseNativeAppCallbackUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+
+    if (url.protocol !== "com.thecoded.adhanhome:" || url.host !== "auth") {
+      return null;
+    }
+
+    return {
+      sessionToken: url.searchParams.get("session_token"),
+      userKey: url.searchParams.get("user_key"),
+      code: url.searchParams.get("code"),
+      state: url.searchParams.get("state"),
+      error: url.searchParams.get("error") || url.searchParams.get("error_description"),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -125,8 +226,7 @@ function cleanCurrentUrl() {
 }
 
 function currentAlexaLinkUrl(): string {
-  if (typeof window === "undefined") return "";
-  return `${window.location.origin}/onboarding/step2`;
+  return getAmazonReturnUrl();
 }
 
 export default function Step2ConnectAccounts({
@@ -240,7 +340,9 @@ export default function Step2ConnectAccounts({
     }
   }
 
-  async function completeAlexaLogin(accessToken: string) {
+  async function completeAlexaLogin(
+    accessToken: string
+  ): Promise<{ data: IntegrationStatus; durableToken: string }> {
     const linkRes = await apiFetchWithAmazonRepair("/api/integrations/alexa/login", {
       method: "POST",
       body: JSON.stringify({ accessToken }),
@@ -251,7 +353,9 @@ export default function Step2ConnectAccounts({
       throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
     }
 
-    const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus;
+    const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus & {
+      accessToken?: string | null;
+    };
     const durableToken =
       typeof data?.sessionToken === "string" && data.sessionToken.trim()
         ? data.sessionToken.trim()
@@ -265,6 +369,97 @@ export default function Step2ConnectAccounts({
 
     void refreshServerStatus();
     void refreshAlexaLinkStatus();
+
+    return { data, durableToken };
+  }
+
+  async function completeAlexaLoginWithCode(
+    code: string
+  ): Promise<{ data: IntegrationStatus; durableToken: string }> {
+    const linkRes = await apiFetchWithAmazonRepair("/api/integrations/alexa/login-code", {
+      method: "POST",
+      body: JSON.stringify({
+        code,
+        redirectUri: getAmazonReturnUrl(),
+      }),
+    });
+
+    if (!linkRes.ok) {
+      const msg = await linkRes.text().catch(() => "");
+      throw new Error(`Backend code exchange failed (${linkRes.status}). ${msg}`.trim());
+    }
+
+    const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus & {
+      accessToken?: string | null;
+    };
+
+    const durableToken =
+      typeof data?.sessionToken === "string" && data.sessionToken.trim()
+        ? data.sessionToken.trim()
+        : "";
+
+    if (!durableToken) {
+      throw new Error("Backend did not return an AdhanCast session token.");
+    }
+
+    if (!durableToken.startsWith(APP_SESSION_PREFIX)) {
+      throw new Error("Backend returned an invalid AdhanCast session token.");
+    }
+
+    setStoredAmazonToken(durableToken);
+    setTokens((prev) => ({ ...prev, alexa: durableToken }));
+    markConnected("alexa");
+    setServerStatus(data);
+    setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
+
+    void refreshServerStatus();
+    void refreshAlexaLinkStatus();
+
+    return { data, durableToken };
+  }
+
+  async function handleNativeAppCallback(rawUrl: string): Promise<boolean> {
+    const parsed = parseNativeAppCallbackUrl(rawUrl);
+    if (!parsed) return false;
+
+    try {
+      await Browser.close();
+    } catch {
+      // Browser may already be closed.
+    }
+
+    if (parsed.error) {
+      setError(parsed.error);
+      setLoadingKey(null);
+      return true;
+    }
+
+    if (parsed.code) {
+      setError("Android login returned an authorization code instead of a session token. Rebuild/deploy the Step 2 web callback so it exchanges the code first.");
+      setLoadingKey(null);
+      return true;
+    }
+
+    if (!parsed.sessionToken) {
+      setError("Android login returned without a session token.");
+      setLoadingKey(null);
+      return true;
+    }
+
+    if (!parsed.sessionToken.startsWith(APP_SESSION_PREFIX)) {
+      setError("Android login returned an invalid AdhanCast session token.");
+      setLoadingKey(null);
+      return true;
+    }
+
+    setStoredAmazonToken(parsed.sessionToken);
+    setTokens((prev) => ({ ...prev, alexa: parsed.sessionToken || "" }));
+    markConnected("alexa");
+    setInfo("Amazon account connected in the Android app.");
+    setLoadingKey(null);
+
+    await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
+    return true;
   }
 
   async function finalizeAlexaSkillLink(code: string, state: string) {
@@ -309,40 +504,83 @@ export default function Step2ConnectAccounts({
 
   useEffect(() => {
     const boot = async () => {
-      const restoredToken = restoreAmazonTokenFromUrl();
-      const params = new URLSearchParams(window.location.search || "");
-      const returnedCode = params.get("code");
-      const returnedState = params.get("state");
-      const returnedScope = params.get("scope");
-      const returnedError = params.get("error");
-      const returnedErrorDescription = params.get("error_description");
+      const authParams = parseAuthParamsFromCurrentUrl();
+      const pendingAlexaLink = readPendingAlexaLink();
 
       try {
+        if (authParams.error) {
+          cleanCurrentUrl();
+
+          if (authParams.state?.startsWith(NATIVE_LOGIN_STATE_PREFIX)) {
+            window.location.replace(
+              buildNativeAppCallbackUrl({
+                error: authParams.errorDescription || authParams.error,
+              })
+            );
+            return;
+          }
+
+          if (pendingAlexaLink?.state === authParams.state) {
+            clearPendingAlexaLink();
+          }
+
+          setError(authParams.errorDescription || authParams.error);
+          return;
+        }
+
+        if (authParams.code && authParams.state?.startsWith(NATIVE_LOGIN_STATE_PREFIX)) {
+          setLoadingKey("alexa");
+          setError(null);
+          const result = await completeAlexaLoginWithCode(authParams.code);
+          window.location.replace(
+            buildNativeAppCallbackUrl({
+              sessionToken: result.durableToken,
+              userKey: result.data.userKey || null,
+            })
+          );
+          return;
+        }
+
+        if (authParams.code && authParams.state?.startsWith(AMAZON_LOGIN_STATE_PREFIX)) {
+          setLoadingKey("alexa");
+          setError(null);
+          await completeAlexaLoginWithCode(authParams.code);
+          cleanCurrentUrl();
+          return;
+        }
+
+        if (authParams.code && pendingAlexaLink?.state === authParams.state) {
+          if (
+            authParams.scope &&
+            !authParams.scope.split(/\s+/).includes("alexa::skills:account_linking")
+          ) {
+            throw new Error(
+              `Alexa returned the wrong scope (${authParams.scope}). The linking request must use alexa::skills:account_linking.`
+            );
+          }
+
+          setLoadingKey("alexa");
+          setError(null);
+          await finalizeAlexaSkillLink(authParams.code, authParams.state || "");
+          return;
+        }
+
+        if (authParams.accessToken) {
+          setLoadingKey("alexa");
+          setError(null);
+          await completeAlexaLogin(authParams.accessToken);
+          cleanCurrentUrl();
+          return;
+        }
+
+        const restoredToken = restoreAmazonTokenFromUrl();
         if (restoredToken) {
           setLoadingKey("alexa");
           setError(null);
           await completeAlexaLogin(restoredToken);
         } else if (getStoredAmazonToken()) {
           markConnected("alexa");
-        }
-
-        if (returnedError) {
-          clearPendingAlexaLink();
-          cleanCurrentUrl();
-          setError(returnedErrorDescription || returnedError);
-        } else if (returnedCode && returnedState && getStoredAmazonToken()) {
-          if (
-            returnedScope &&
-            !returnedScope.split(/\s+/).includes("alexa::skills:account_linking")
-          ) {
-            throw new Error(
-              `Alexa returned the wrong scope (${returnedScope}). The linking request must use alexa::skills:account_linking.`
-            );
-          }
-
-          setLoadingKey("alexa");
-          setError(null);
-          await finalizeAlexaSkillLink(returnedCode, returnedState);
+          await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
         }
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Alexa connection failed.");
@@ -355,66 +593,54 @@ export default function Step2ConnectAccounts({
     void boot();
   }, []);
 
+  useEffect(() => {
+    if (!isNativeRuntime()) return;
+
+    let removeListener: (() => void) | null = null;
+
+    void CapacitorApp.addListener("appUrlOpen", ({ url }) => {
+      if (!url) return;
+      void handleNativeAppCallback(url);
+    }).then((listener) => {
+      removeListener = () => {
+        void listener.remove();
+      };
+    });
+
+    void CapacitorApp.getLaunchUrl().then((result) => {
+      if (result?.url) {
+        void handleNativeAppCallback(result.url);
+      }
+    });
+
+    return () => {
+      if (removeListener) removeListener();
+    };
+  }, []);
+
   async function connectAlexa() {
     setError(null);
     setInfo(null);
     setLoadingKey("alexa");
 
-    const clientId = getAmazonClientId();
-    const redirectUri = getAmazonReturnUrl();
-
-    if (!clientId || clientId === "undefined") {
-      setLoadingKey(null);
-      setError("Amazon Client ID is missing in the frontend build.");
-      return;
-    }
-
-    if (!redirectUri || redirectUri === "undefined") {
-      setLoadingKey(null);
-      setError("Amazon Return URL is missing in the frontend build.");
-      return;
-    }
-
     try {
-      await ensureAmazonSdk();
+      const state = `${isNativeRuntime() ? NATIVE_LOGIN_STATE_PREFIX : AMAZON_LOGIN_STATE_PREFIX}${Date.now()}`;
+      const authorizationUrl = buildAmazonLoginUrl(state);
 
-      const tokenResp = await new Promise<AmazonAuthorizeResponse>((resolve, reject) => {
-        window.amazon?.Login?.authorize?.(
-          {
-            client_id: clientId,
-            scope: "profile",
-            response_type: "token",
-            redirect_uri: redirectUri,
-            popup: true,
-            state: `adhan_${Date.now()}`,
-          },
-          (res: AmazonAuthorizeResponse | null) => {
-            if (!res) {
-              reject(new Error("No response from Amazon login."));
-              return;
-            }
-
-            if (typeof res.error === "string") {
-              reject(new Error(String(res.error_description || res.error)));
-              return;
-            }
-
-            resolve(res);
-          }
-        );
-      });
-
-      const accessToken: string | undefined = tokenResp?.access_token;
-      if (!accessToken) {
-        throw new Error("Amazon did not return an access token.");
+      if (isNativeRuntime()) {
+        setInfo("Opening Amazon sign-in. After approval, AdhanCast will return to the app automatically.");
+        await Browser.open({
+          url: authorizationUrl,
+          presentationStyle: "fullscreen",
+        });
+        setLoadingKey(null);
+        return;
       }
 
-      await completeAlexaLogin(accessToken);
-      setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
+      window.location.assign(authorizationUrl);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Alexa connection failed.");
-    } finally {
       setLoadingKey(null);
+      setError(e instanceof Error ? e.message : "Alexa connection failed.");
     }
   }
 

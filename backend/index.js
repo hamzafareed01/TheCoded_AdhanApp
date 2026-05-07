@@ -949,6 +949,139 @@ async function exchangeAmazonWebAuthorizationCodeForTokens(params) {
   };
 }
 
+function getAmazonLoginConfig() {
+  const clientId = String(
+    process.env.AMAZON_LOGIN_CLIENT_ID ||
+      process.env.AMAZON_LWA_CLIENT_ID ||
+      process.env.LOGIN_WITH_AMAZON_CLIENT_ID ||
+      process.env.VITE_AMAZON_CLIENT_ID ||
+      // Legacy compatibility only: older deployments used the same LWA profile
+      // for Step 2 profile login and Alexa skill OAuth. Never fall back to
+      // ALEXA_APP_LINK_* here because that client commonly belongs to a
+      // different app-to-app linking profile.
+      process.env.ALEXA_OAUTH_CLIENT_ID ||
+      process.env.ALEXA_SKILL_CLIENT_ID ||
+      ""
+  ).trim();
+
+  const clientSecret = String(
+    process.env.AMAZON_LOGIN_CLIENT_SECRET ||
+      process.env.AMAZON_LWA_CLIENT_SECRET ||
+      process.env.LOGIN_WITH_AMAZON_CLIENT_SECRET ||
+      process.env.ALEXA_OAUTH_CLIENT_SECRET ||
+      process.env.ALEXA_SKILL_CLIENT_SECRET ||
+      ""
+  ).trim();
+
+  return {
+    configured: !!clientId && !!clientSecret,
+    clientId,
+    clientSecret,
+  };
+}
+
+function getAllowedAmazonLoginRedirectUris() {
+  const configured = [
+    process.env.AMAZON_LOGIN_REDIRECT_URIS,
+    process.env.AMAZON_LWA_REDIRECT_URIS,
+    process.env.LOGIN_WITH_AMAZON_REDIRECT_URIS,
+    process.env.AMAZON_LOGIN_REDIRECT_URI,
+    process.env.AMAZON_LWA_REDIRECT_URI,
+    process.env.LOGIN_WITH_AMAZON_REDIRECT_URI,
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(","))
+    .map(normalizeFullRedirectUri)
+    .filter(Boolean);
+
+  if (configured.length > 0) {
+    return dedupeStrings(configured);
+  }
+
+  return dedupeStrings([
+    process.env.VITE_AMAZON_RETURN_URL,
+    process.env.VITE_AMAZON_REDIRECT_URI,
+    "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2",
+    "https://nice-ground-009684610-1.centralus.1.azurestaticapps.net/onboarding/step2",
+    "http://localhost:5173/onboarding/step2",
+  ].map(normalizeFullRedirectUri).filter(Boolean));
+}
+
+function validateAmazonLoginRedirectUri(value) {
+  const normalized = normalizeFullRedirectUri(value);
+  const allowed = getAllowedAmazonLoginRedirectUris();
+
+  if (!normalized) {
+    const err = new Error("Missing redirectUri for Amazon Login code exchange.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!allowed.includes(normalized)) {
+    const err = new Error(
+      `redirectUri is not allowed for Amazon Login code exchange. Received: ${value}. Allowed: ${allowed.join(", ")}`
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  return normalized;
+}
+
+async function exchangeAmazonLoginAuthorizationCodeForTokens(params) {
+  const { code } = params;
+  const redirectUri = validateAmazonLoginRedirectUri(params.redirectUri);
+  const login = getAmazonLoginConfig();
+
+  if (!login.configured) {
+    const err = new Error(
+      "Amazon Login code exchange credentials are not configured. Set AMAZON_LOGIN_CLIENT_ID and AMAZON_LOGIN_CLIENT_SECRET on the backend for the Step 2 Login with Amazon web client."
+    );
+    err.status = 500;
+    throw err;
+  }
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "authorization_code");
+  body.set("code", String(code || ""));
+  body.set("redirect_uri", redirectUri);
+  body.set("client_id", login.clientId);
+
+  const basic = Buffer.from(`${login.clientId}:${login.clientSecret}`).toString("base64");
+  const resp = await fetchWithTimeout(
+    AMAZON_OAUTH_TOKEN_URL,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: body.toString(),
+    },
+    20000
+  );
+
+  const data = await resp.json().catch(async () => ({
+    error: await resp.text().catch(() => "Token exchange failed."),
+  }));
+
+  if (!resp.ok || !data?.access_token) {
+    const err = new Error(
+      `Amazon Login code exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"}`
+    );
+    err.status = 502;
+    throw err;
+  }
+
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || null,
+    scope: String(data.scope || "").trim(),
+    expiresIn: Number(data.expires_in || 3600) || 3600,
+  };
+}
+
 async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
   const appLink = getAlexaAppLinkConfig();
   if (!appLink.configured || !existingRecord?.amazonRefreshToken) return existingRecord;
@@ -1160,6 +1293,110 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = UPSTREAM_TIMEOUT_
 // -----------------------------
 // Auth helpers
 // -----------------------------
+const APP_SESSION_PREFIX = "adhapp_";
+const DEFAULT_APP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function getAppSessionSecret() {
+  return String(
+    process.env.APP_SESSION_SECRET ||
+      process.env.ADHANCAST_SESSION_SECRET ||
+      process.env.ALEXA_APP_LINK_STATE_SECRET ||
+      process.env.ALEXA_OAUTH_CLIENT_SECRET ||
+      "adhancast-dev-session-secret"
+  );
+}
+
+function getAppSessionTtlMs() {
+  const raw = Number(process.env.APP_SESSION_TTL_MS || DEFAULT_APP_SESSION_TTL_MS);
+  if (!Number.isFinite(raw) || raw < 5 * 60 * 1000) return DEFAULT_APP_SESSION_TTL_MS;
+  return Math.min(raw, 90 * 24 * 60 * 60 * 1000);
+}
+
+function signAppSessionPayload(encodedPayload) {
+  return crypto
+    .createHmac("sha256", getAppSessionSecret())
+    .update(encodedPayload)
+    .digest("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function createAppSessionToken(profile) {
+  if (!profile?.user_id) {
+    const err = new Error("Cannot create app session without Amazon user id.");
+    err.status = 500;
+    throw err;
+  }
+
+  const now = Date.now();
+  const expiresAtMs = now + getAppSessionTtlMs();
+  const payload = {
+    typ: "adhancast_app_session",
+    user_id: String(profile.user_id),
+    email: profile.email || null,
+    name: profile.name || null,
+    iat: Math.floor(now / 1000),
+    exp: Math.floor(expiresAtMs / 1000),
+  };
+
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const signature = signAppSessionPayload(encodedPayload);
+
+  return {
+    token: `${APP_SESSION_PREFIX}${encodedPayload}.${signature}`,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+}
+
+function verifyAppSessionToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw.startsWith(APP_SESSION_PREFIX)) return null;
+
+  const withoutPrefix = raw.slice(APP_SESSION_PREFIX.length);
+  const splitAt = withoutPrefix.lastIndexOf(".");
+  if (splitAt <= 0) {
+    const err = new Error("Invalid app session token.");
+    err.status = 401;
+    throw err;
+  }
+
+  const encodedPayload = withoutPrefix.slice(0, splitAt);
+  const signature = withoutPrefix.slice(splitAt + 1);
+  const expected = signAppSessionPayload(encodedPayload);
+
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    const err = new Error("App session token signature is invalid.");
+    err.status = 401;
+    throw err;
+  }
+
+  const payload = JSON.parse(base64UrlDecode(encodedPayload));
+  if (payload?.typ !== "adhancast_app_session" || !payload?.user_id) {
+    const err = new Error("App session token payload is invalid.");
+    err.status = 401;
+    throw err;
+  }
+
+  if (Number(payload.exp || 0) * 1000 <= Date.now()) {
+    const err = new Error("App session token has expired.");
+    err.status = 401;
+    throw err;
+  }
+
+  return {
+    payload,
+    profile: {
+      user_id: String(payload.user_id),
+      email: payload.email || null,
+      name: payload.name || null,
+    },
+    expiresAt: new Date(Number(payload.exp) * 1000).toISOString(),
+  };
+}
+
 async function fetchAmazonProfile(accessToken) {
   if (!accessToken) {
     const err = new Error("Missing Amazon access token");
@@ -1208,6 +1445,14 @@ async function requireAmazonAuth(req, res, next) {
       return res
         .status(401)
         .json({ error: "Missing Authorization: Bearer <token>" });
+    }
+
+    const appSession = verifyAppSessionToken(token);
+    if (appSession) {
+      req.amazonProfile = appSession.profile;
+      req.amazonToken = token;
+      req.appSession = appSession.payload;
+      return next();
     }
 
     const profile = await fetchAmazonProfile(token);
@@ -2169,6 +2414,40 @@ app.get(
   })
 );
 
+async function enableAccountAndBuildLoginResponse(pool, profile) {
+  const userId = await ensureUser(pool, profile.user_id);
+
+  await pool
+    .request()
+    .input("user_id", sql.UniqueIdentifier, userId)
+    .query(`
+      UPDATE dbo.user_profiles
+      SET
+        account_enabled = 1,
+        updated_at = SYSUTCDATETIME()
+      WHERE user_id = @user_id
+    `);
+
+  const session = createAppSessionToken(profile);
+
+  return {
+    ok: true,
+    userKey: profile.user_id,
+    sessionToken: session.token,
+    sessionExpiresAt: session.expiresAt,
+    alexa: {
+      connected: true,
+      linkedAt: new Date().toISOString(),
+      displayName: profile.name || null,
+      accountId: profile.user_id || null,
+    },
+    amazon: {
+      connected: true,
+      email: profile.email || null,
+    },
+  };
+}
+
 app.post(
   "/api/integrations/alexa/login",
   asyncHandler(async (req, res) => {
@@ -2179,32 +2458,33 @@ app.post(
 
     const profile = await fetchAmazonProfile(accessToken);
     const pool = await getPool();
-    const userId = await ensureUser(pool, profile.user_id);
+    const payload = await enableAccountAndBuildLoginResponse(pool, profile);
+    res.json(payload);
+  })
+);
 
-    await pool
-      .request()
-      .input("user_id", sql.UniqueIdentifier, userId)
-      .query(`
-        UPDATE dbo.user_profiles
-        SET
-          account_enabled = 1,
-          updated_at = SYSUTCDATETIME()
-        WHERE user_id = @user_id
-      `);
+app.post(
+  "/api/integrations/alexa/login-code",
+  asyncHandler(async (req, res) => {
+    const code = String(req.body?.code || req.body?.authorizationCode || "").trim();
+    const redirectUri = String(req.body?.redirectUri || req.body?.redirect_uri || "").trim();
+
+    if (!code) {
+      return res.status(400).json({ error: "Missing Amazon authorization code." });
+    }
+
+    const amazonTokens = await exchangeAmazonLoginAuthorizationCodeForTokens({
+      code,
+      redirectUri,
+    });
+
+    const profile = await fetchAmazonProfile(amazonTokens.accessToken);
+    const pool = await getPool();
+    const payload = await enableAccountAndBuildLoginResponse(pool, profile);
 
     res.json({
-      ok: true,
-      userKey: profile.user_id,
-      alexa: {
-        connected: true,
-        linkedAt: new Date().toISOString(),
-        displayName: profile.name || null,
-        accountId: profile.user_id || null,
-      },
-      amazon: {
-        connected: true,
-        email: profile.email || null,
-      },
+      ...payload,
+      amazonTokenScope: amazonTokens.scope || null,
     });
   })
 );

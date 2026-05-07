@@ -65,6 +65,7 @@ export default function Step1Welcome({
   };
 
   const handleContinue = () => {
+    console.log("handleContinue called, navigating to step 2");
     setOnboardingData({
       ...onboardingData,
       selectedPlatforms,

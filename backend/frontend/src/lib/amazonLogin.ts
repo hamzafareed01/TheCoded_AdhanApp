@@ -1,9 +1,10 @@
-// amazonLogin.ts
-// Browser/PWA-only Login with Amazon helper for AdhanCast.
-// This restores the stable pre-Android baseline so Step 2 works on web first.
+import { Capacitor } from "@capacitor/core";
+
+const AMAZON_SDK_SRC = "https://assets.loginwithamazon.com/sdk/na/login1.js";
 
 type AmazonAuthorizeResponse = {
   access_token?: string;
+  code?: string;
   token_type?: string;
   expires_in?: number | string;
   scope?: string;
@@ -16,7 +17,7 @@ type AmazonAuthorizeOptions = {
   scope?: string;
   state?: string;
   popup?: boolean;
-  responseType?: "token";
+  responseType?: "code" | "token";
 };
 
 type AmazonLoginNamespace = {
@@ -28,6 +29,17 @@ type AmazonLoginNamespace = {
   logout?: () => void;
 };
 
+type ParsedAuthReturn = {
+  url: URL;
+  path: string;
+  accessToken: string | null;
+  code: string | null;
+  state: string | null;
+  scope: string | null;
+  error: string | null;
+  errorDescription: string | null;
+};
+
 declare global {
   interface Window {
     amazon?: {
@@ -36,16 +48,15 @@ declare global {
   }
 }
 
-const AMAZON_SDK_SRC = "https://assets.loginwithamazon.com/sdk/na/login1.js";
-const AMAZON_CLIENT_ID_FALLBACK =
-  "amzn1.application-oa2-client.383c219cb1ca42fdbd844e17e11aa843";
 const PROD_STEP2_URL =
   "https://nice-ground-009684610.1.azurestaticapps.net/onboarding/step2";
+
+const LOCAL_STEP2_URL = "http://localhost:5173/onboarding/step2";
 
 const ALLOWED_RETURN_ORIGINS = new Set([
   "https://nice-ground-009684610.1.azurestaticapps.net",
   "https://nice-ground-009684610-1.centralus.1.azurestaticapps.net",
-  "http://localhost:5173",
+  "http://localhost:5173"
 ]);
 
 let sdkLoadPromise: Promise<void> | null = null;
@@ -75,18 +86,40 @@ function normalizeOrigin(value: string): string {
 }
 
 function getEnv(name: string): string {
-  return String((import.meta as any).env?.[name] || "").trim();
+  return String(import.meta.env?.[name] || "").trim();
+}
+
+function isNativeRuntime(): boolean {
+  try {
+    return !!Capacitor?.isNativePlatform?.();
+  } catch {
+    return false;
+  }
+}
+
+export function isAmazonNativeRuntime(): boolean {
+  return isNativeRuntime();
+}
+
+function getPreferredClientIdCandidates(): string[] {
+  return [getEnv("VITE_AMAZON_CLIENT_ID")].filter(Boolean);
 }
 
 export function getAmazonClientId(): string {
-  return (
-    getEnv("VITE_AMAZON_CLIENT_ID") ||
-    getEnv("VITE_AMAZON_APP_LINK_CLIENT_ID") ||
-    AMAZON_CLIENT_ID_FALLBACK
-  );
+  const clientId = getPreferredClientIdCandidates()[0] || "";
+  if (!clientId) {
+    throw new Error(
+      "Amazon client ID is missing. Set VITE_AMAZON_CLIENT_ID."
+    );
+  }
+  return clientId;
 }
 
 export function getAmazonReturnUrl(): string {
+  // Amazon Login with Amazon must always receive an HTTPS/localhost web callback.
+  // Never return the native Android custom scheme from here. Android receives
+  // com.thecoded.adhanhome://auth only after the Step 2 web callback exchanges
+  // the Amazon authorization code with the backend and gets an adhapp_ session.
   const explicit =
     normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
     normalizeUrl(getEnv("VITE_AMAZON_REDIRECT_URI"));
@@ -94,18 +127,17 @@ export function getAmazonReturnUrl(): string {
   if (explicit) {
     const origin = normalizeOrigin(explicit);
     if (!ALLOWED_RETURN_ORIGINS.has(origin)) {
-      throw new Error(
-        `Amazon return URL origin is not allowed: ${origin || explicit}`
-      );
+      throw new Error(`Amazon return URL origin is not allowed: ${origin || explicit}`);
     }
     return explicit;
   }
 
-  if (typeof window !== "undefined") {
-    const currentOrigin = normalizeOrigin(window.location.origin);
-    if (ALLOWED_RETURN_ORIGINS.has(currentOrigin)) {
-      return `${currentOrigin}/onboarding/step2`;
-    }
+  if (
+    !isNativeRuntime() &&
+    typeof window !== "undefined" &&
+    ["localhost", "127.0.0.1"].includes(window.location.hostname)
+  ) {
+    return LOCAL_STEP2_URL;
   }
 
   return PROD_STEP2_URL;
@@ -139,9 +171,7 @@ export async function loadAmazonSdk(): Promise<void> {
   }
 
   sdkLoadPromise = new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[src="${AMAZON_SDK_SRC}"]`
-    );
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${AMAZON_SDK_SRC}"]`);
 
     if (existing) {
       existing.addEventListener("load", () => {
@@ -190,20 +220,23 @@ export const ensureAmazonSdk = loadAmazonSdk;
 export function buildAmazonAuthorizeOptions(
   options: AmazonAuthorizeOptions = {}
 ): Record<string, unknown> {
+  const popup = options.popup ?? !isNativeRuntime();
   const returnUrl = getAmazonReturnUrl();
-  const popup = options.popup ?? false;
 
   const authorizeOptions: Record<string, unknown> = {
     client_id: getAmazonClientId(),
     scope: options.scope || getAmazonScope(),
-    response_type: options.responseType || "token",
-    popup,
+    response_type: options.responseType || "code",
     redirect_uri: returnUrl,
-    return_url: returnUrl,
+    popup
   };
 
   if (options.state) {
     authorizeOptions.state = options.state;
+  }
+
+  if (!popup) {
+    authorizeOptions.next = returnUrl;
   }
 
   return authorizeOptions;
@@ -236,6 +269,11 @@ export async function authorizeWithAmazon(
           return;
         }
 
+        if (!response.access_token && !response.code) {
+          reject(new Error("Amazon authorization did not return an access token or authorization code."));
+          return;
+        }
+
         resolve(response);
       });
     } catch (err) {
@@ -249,16 +287,71 @@ export async function connectAmazonInteractive(
 ): Promise<AmazonAuthorizeResponse> {
   return authorizeWithAmazon({
     state,
-    popup: false,
-    responseType: "token",
-    scope: "profile",
+    popup: !isNativeRuntime(),
+    responseType: "code",
+    scope: "profile"
   });
 }
 
 export function logoutAmazon(): void {
+  if (isNativeRuntime()) return;
   try {
     window.amazon?.Login?.logout?.();
   } catch {
     // no-op
   }
+}
+
+export function parseAuthReturnUrl(rawUrl: string): ParsedAuthReturn | null {
+  console.log("parseAuthReturnUrl: Processing URL:", rawUrl);
+  try {
+    const url = new URL(rawUrl);
+
+    // Support custom scheme or App Link
+    let path = url.pathname;
+    if (url.protocol === "com.thecoded.adhanhome:") {
+      // For com.thecoded.adhanhome://onboarding/step2
+      // URL constructor: host = "onboarding", pathname = "/step2"
+      if (url.host && url.host !== "localhost") {
+        path = "/" + url.host + url.pathname;
+      }
+    }
+
+    // Normalize path: remove trailing slashes and ensure leading slash
+    path = path.replace(/\/+$/, "");
+    if (!path.startsWith("/")) {
+      path = "/" + path;
+    }
+
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+    const accessToken = hashParams.get("access_token");
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+
+    console.log("parseAuthReturnUrl: Parsed components:", {
+      path,
+      hasAccessToken: !!accessToken,
+      hasCode: !!code,
+      state
+    });
+
+    return {
+      url,
+      path,
+      accessToken,
+      code,
+      state,
+      scope: url.searchParams.get("scope"),
+      error: url.searchParams.get("error"),
+      errorDescription: url.searchParams.get("error_description")
+    };
+  } catch (err) {
+    console.error("parseAuthReturnUrl: Failed to parse URL:", err);
+    return null;
+  }
+}
+
+export function isStep2CallbackPath(path: string): boolean {
+  const normalized = path.replace(/\/+$/, "");
+  return normalized === "/onboarding/step2" || normalized === "/alexa/link";
 }
