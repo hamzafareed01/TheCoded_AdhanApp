@@ -150,7 +150,6 @@ export default function RootShell({ user }: RootShellProps) {
 
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
-      restoreAmazonTokenFromUrl();
       setHasAmazonToken(!!getStoredAmazonToken());
     });
   }, []);

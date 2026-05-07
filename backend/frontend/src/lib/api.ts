@@ -17,7 +17,23 @@ const host = isBrowser ? window.location.hostname : "";
 const protocol = isBrowser ? window.location.protocol : "";
 const isAzureStaticApps = host.endsWith("azurestaticapps.net");
 
-const isLocalWebDev = host === "localhost" || host === "127.0.0.1";
+function isCapacitorNativeRuntime(): boolean {
+  if (!isBrowser) return false;
+
+  const cap = (window as any)?.Capacitor;
+  if (typeof cap?.isNativePlatform === "function") {
+    try {
+      return !!cap.isNativePlatform();
+    } catch {
+      return false;
+    }
+  }
+
+  return protocol === "capacitor:";
+}
+
+const isNativeRuntime = isCapacitorNativeRuntime();
+const isLocalWebDev = !isNativeRuntime && (host === "localhost" || host === "127.0.0.1");
 
 const TOKEN_KEY = "amazon_access_token";
 const AUTH_EVENT = "amazon-auth-changed";
@@ -25,6 +41,7 @@ const APP_SESSION_PREFIX = "adhapp_";
 
 export const API_BASE =
   normalizeBase(envBase) ||
+  (isNativeRuntime ? FALLBACK_PROD_API : "") ||
   (!isLocalWebDev && isAzureStaticApps ? FALLBACK_PROD_API : "");
 
 export function getApiUrl(path: string): string {
@@ -100,13 +117,8 @@ export function restoreAmazonTokenFromUrl(): string | null {
     }
 
     if (code) {
-      console.log("Auth code found in URL:", code);
-      // For now, we store the code as the token, but ideally this should be exchanged
-      // via a backend call: await apiFetch('/api/auth/amazon/exchange', { method: 'POST', body: JSON.stringify({ code }) })
-      setStoredAmazonToken(code);
-      const cleanUrl = `${window.location.origin}${window.location.pathname}`;
-      window.history.replaceState({}, document.title, cleanUrl);
-      return code;
+      console.log("Auth code found in URL; leaving it for Step2ConnectAccounts to exchange.");
+      return null;
     }
 
     if (!token) return null;

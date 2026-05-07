@@ -1,0 +1,18 @@
+@"
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Android build artifacts - do not commit these
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/captures/
+android/.idea/
+
+# Root android folder is stale - ignore entirely
+"@ | Set-Content backend/frontend/.gitignore
