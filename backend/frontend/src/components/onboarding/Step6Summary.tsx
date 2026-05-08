@@ -6,30 +6,30 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Sparkles, CheckCircle2, XCircle } from "lucide-react";
 import { apiFetch, getStoredAmazonToken } from "../../lib/api";
-
+ 
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
-
+ 
 type JsonRecord = Record<string, unknown>;
-
+ 
 type QuietHours = {
   enabled: boolean;
   from: string;
   to: string;
   muteFajr?: boolean;
 };
-
+ 
 type AfterAdhan = {
   type: AfterType;
   payload: JsonRecord | null;
 };
-
+ 
 type PrayerConfig = {
   prayerName: PrayerName;
   adhanReciterId: string | null;
   afterAdhan: AfterAdhan;
 };
-
+ 
 type OnboardingLocation = {
   country?: string;
   city?: string;
@@ -38,7 +38,7 @@ type OnboardingLocation = {
   longitude?: number | string;
   useMosqueLocation?: boolean;
 };
-
+ 
 type OnboardingPrayerSettings = {
   calculationMethod?: string;
   method?: string;
@@ -49,7 +49,7 @@ type OnboardingPrayerSettings = {
   highLatitudeMethod?: string;
   highLatitudeMode?: string;
 };
-
+ 
 type OnboardingDevices = {
   quietHours?: QuietHours;
   adhanPreferences?: {
@@ -60,7 +60,7 @@ type OnboardingDevices = {
     };
   };
 };
-
+ 
 type OnboardingData = {
   connectedPlatforms?: string[];
   selectedPlatforms?: string[];
@@ -71,12 +71,12 @@ type OnboardingData = {
   prayerConfigs?: PrayerConfig[];
   mosque?: JsonRecord | null;
 };
-
+ 
 type Props = {
   onboardingData: OnboardingData;
   setOnboardingData: (data: OnboardingData) => void;
 };
-
+ 
 type SummaryData = {
   platformsConnected: string[];
   location: {
@@ -102,7 +102,7 @@ type SummaryData = {
   linkedDeviceCount: number;
   selectedDeviceIds: string[];
 };
-
+ 
 const METHOD_LABEL: Record<string, string> = {
   isna: "ISNA (North America)",
   mwl: "Muslim World League",
@@ -113,22 +113,22 @@ const METHOD_LABEL: Record<string, string> = {
   jafari: "Jafari (Shia)",
   ummAlQura: "Umm Al-Qura",
 };
-
+ 
 const HIGHLAT_LABEL: Record<string, string> = {
   automatic: "Automatic",
   middle_of_the_night: "Middle of the Night",
   one_seventh: "One Seventh",
   angle_based: "Angle Based",
 };
-
+ 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
+ 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
-
+ 
 function toNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) {
@@ -136,32 +136,32 @@ function toNumber(v: unknown): number | null {
   }
   return null;
 }
-
+ 
 function normalizeCountry(value: unknown): string {
   const raw = String(value ?? "").trim().replace(/\s+/g, " ");
   if (!raw) return "US";
   if (/^[A-Za-z]{2}$/.test(raw)) return raw.toUpperCase();
   return raw;
 }
-
+ 
 function normalizeTimezone(value: unknown): string {
   const timezone = asString(value);
   return timezone || "Etc/UTC";
 }
-
+ 
 function readConnectedPlatforms(onboardingData: OnboardingData): string[] {
   const fromConnected = Array.isArray(onboardingData?.connectedPlatforms)
     ? onboardingData.connectedPlatforms.filter(
         (x): x is string => typeof x === "string"
       )
     : [];
-
+ 
   const fromSelected = Array.isArray(onboardingData?.selectedPlatforms)
     ? onboardingData.selectedPlatforms.filter(
         (x): x is string => typeof x === "string"
       )
     : [];
-
+ 
   const fromLocal = (() => {
     try {
       const raw = localStorage.getItem("adhan_connected_platforms");
@@ -173,23 +173,23 @@ function readConnectedPlatforms(onboardingData: OnboardingData): string[] {
       return [];
     }
   })();
-
+ 
   const merged = new Set<string>([
     ...fromConnected,
     ...fromSelected,
     ...fromLocal,
   ]);
-
+ 
   if (getStoredAmazonToken()) {
     merged.add("alexa");
   }
-
+ 
   return Array.from(merged);
 }
-
+ 
 function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
   if (!Array.isArray(value)) return [];
-
+ 
   return value
     .filter((item): item is JsonRecord => isRecord(item))
     .map((item) => {
@@ -197,22 +197,22 @@ function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
         asString(item.prayerName)?.toLowerCase() ??
         asString(item.prayer_name)?.toLowerCase() ??
         "";
-
+ 
       const prayerName = (
         ["fajr", "dhuhr", "asr", "maghrib", "isha"].includes(prayerNameRaw)
           ? prayerNameRaw
           : "fajr"
       ) as PrayerName;
-
+ 
       const afterAdhanSource = isRecord(item.afterAdhan)
         ? item.afterAdhan
         : null;
-
+ 
       const afterType =
         afterAdhanSource?.type === "dua" || afterAdhanSource?.type === "surah"
           ? afterAdhanSource.type
           : "none";
-
+ 
       return {
         prayerName,
         adhanReciterId: asString(item.adhanReciterId),
@@ -225,30 +225,30 @@ function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
       };
     });
 }
-
+ 
 async function saveSettings(payload: Record<string, unknown>) {
   const put = await apiFetch("/api/user/settings", {
     method: "PUT",
     body: JSON.stringify(payload),
   });
-
+ 
   if (put.ok) return put;
-
+ 
   return apiFetch("/api/user/settings", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
-
+ 
 async function geocodeLocation(city: string, country: string) {
   const params = new URLSearchParams({
     city: city.trim(),
     country,
   });
-
+ 
   const res = await apiFetch(`/api/geocode?${params.toString()}`);
   const data = await res.json().catch(() => null);
-
+ 
   if (!res.ok) {
     const message =
       isRecord(data) && typeof data.error === "string"
@@ -256,22 +256,22 @@ async function geocodeLocation(city: string, country: string) {
         : "Could not geocode your city.";
     throw new Error(message);
   }
-
+ 
   if (!isRecord(data)) {
     throw new Error("Invalid geocoding response.");
   }
-
+ 
   const lat = toNumber(data.lat);
   const lng = toNumber(data.lng);
   const timezone = normalizeTimezone(data.timezone);
-
+ 
   if (lat === null || lng === null) {
     throw new Error("Geocoding did not return valid coordinates.");
   }
-
+ 
   return { lat, lng, timezone };
 }
-
+ 
 export default function Step6Summary({
   onboardingData,
   setOnboardingData,
@@ -279,52 +279,52 @@ export default function Step6Summary({
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+ 
   const summary = useMemo<SummaryData>(() => {
     const location = onboardingData?.location || {};
     const prayer = onboardingData?.prayerSettings || {};
     const devicesValue = onboardingData?.devices;
     const platformsConnected = readConnectedPlatforms(onboardingData);
-
+ 
     const country = normalizeCountry(location.country);
     const city = location.city?.trim() || "Chicago";
     const timezone = normalizeTimezone(location.timezone);
     const latitude = toNumber(location.latitude);
     const longitude = toNumber(location.longitude);
     const useMosqueLocation = location.useMosqueLocation === true;
-
+ 
     const calculationMethod = prayer.calculationMethod || prayer.method || "isna";
     const madhhab = prayer.madhhab || "hanafi";
     const sect = prayer.sect || (prayer.shia ? "SHIA" : "SUNNI");
     const madhab = prayer.madhab || (prayer.shia ? "shia" : "sunni");
     const highLatitudeMethod =
       prayer.highLatitudeMethod || prayer.highLatitudeMode || "automatic";
-
+ 
     const quietHoursEnabled =
       !Array.isArray(devicesValue) &&
       (devicesValue?.adhanPreferences?.quietHoursEnabled === true ||
         devicesValue?.quietHours?.enabled === true);
-
+ 
     const quietFrom =
       !Array.isArray(devicesValue)
         ? devicesValue?.adhanPreferences?.quietHours?.from ||
           devicesValue?.quietHours?.from ||
           "22:00"
         : "22:00";
-
+ 
     const quietTo =
       !Array.isArray(devicesValue)
         ? devicesValue?.adhanPreferences?.quietHours?.to ||
           devicesValue?.quietHours?.to ||
           "07:00"
         : "07:00";
-
+ 
     const selectedDeviceIds = Array.isArray(devicesValue)
       ? devicesValue.filter(
           (id): id is string => typeof id === "string" && id.trim().length > 0
         )
       : [];
-
+ 
     return {
       platformsConnected,
       location: {
@@ -354,53 +354,52 @@ export default function Step6Summary({
       selectedDeviceIds,
     };
   }, [onboardingData]);
-
+ 
   function isConnected(platform: string) {
     return summary.platformsConnected.includes(platform);
   }
-
+ 
   const hasReciterConfigured = useMemo(() => {
     return summary.prayerConfigs.some((config) => !!config.adhanReciterId);
   }, [summary.prayerConfigs]);
-
+ 
   const isComplete = useMemo(() => {
     return isConnected("alexa") && summary.accountEnabled && hasReciterConfigured;
   }, [summary.accountEnabled, hasReciterConfigured, summary.platformsConnected]);
-
+ 
   async function finish() {
     setSaving(true);
     setError(null);
-
+ 
     try {
       const amazonToken = getStoredAmazonToken();
       if (!amazonToken) {
         throw new Error("Please connect Amazon in Step 2 before finishing setup.");
       }
-
+ 
       if (!summary.location.city.trim()) {
         throw new Error("City is required before finishing setup.");
       }
-
+ 
       if (!hasReciterConfigured) {
         throw new Error("Please choose at least one Adhan reciter before finishing setup.");
       }
-
-      const loginResp = await apiFetch("/api/integrations/alexa/login", {
-        method: "POST",
-        body: JSON.stringify({ accessToken: amazonToken }),
-      });
-
-      if (!loginResp.ok) {
-        const loginText = await loginResp.text().catch(() => "");
+ 
+      // Verify the session is still valid. The stored token is an adhapp_ session
+      // token — use /api/integrations which handles adhapp_ tokens correctly.
+      // Never send adhapp_ tokens to /api/integrations/alexa/login (that endpoint
+      // expects a raw Amazon access token and will fail with invalid_token).
+      const verifyResp = await apiFetch("/api/integrations");
+      if (!verifyResp.ok) {
         throw new Error(
-          loginText || "Amazon Alexa account sync failed. Please reconnect Amazon."
+          "Your Amazon session has expired. Please go back to Step 2 and reconnect Amazon."
         );
       }
-
+ 
       let syncedLatitude = summary.location.latitude;
       let syncedLongitude = summary.location.longitude;
       let syncedTimezone = summary.location.timezone;
-
+ 
       if (syncedLatitude === null || syncedLongitude === null) {
         const geo = await geocodeLocation(
           summary.location.city,
@@ -408,12 +407,12 @@ export default function Step6Summary({
         );
         syncedLatitude = geo.lat;
         syncedLongitude = geo.lng;
-
+ 
         if (!summary.location.timezone || summary.location.timezone === "Etc/UTC") {
           syncedTimezone = geo.timezone;
         }
       }
-
+ 
       const payload: Record<string, unknown> = {
         country: summary.location.country,
         city: summary.location.city,
@@ -436,22 +435,22 @@ export default function Step6Summary({
         },
         prayerConfigs: summary.prayerConfigs,
       };
-
+ 
       if (syncedLatitude !== null) {
         payload.latitude = syncedLatitude;
       }
-
+ 
       if (syncedLongitude !== null) {
         payload.longitude = syncedLongitude;
       }
-
+ 
       const resp = await saveSettings(payload);
-
+ 
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(text || "Failed to save settings.");
       }
-
+ 
       setOnboardingData({
         ...onboardingData,
         connectedPlatforms: summary.platformsConnected,
@@ -468,7 +467,7 @@ export default function Step6Summary({
         accountEnabled: summary.accountEnabled,
         prayerConfigs: summary.prayerConfigs,
       });
-
+ 
       navigate("/dashboard");
     } catch (e: unknown) {
       if (e instanceof Error) {
@@ -480,7 +479,7 @@ export default function Step6Summary({
       setSaving(false);
     }
   }
-
+ 
   return (
     <div className="min-h-screen bg-slate-950">
       <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
@@ -491,7 +490,7 @@ export default function Step6Summary({
           </div>
         </div>
       </div>
-
+ 
       <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
         <div className="mb-8 md:mb-10 text-center">
           <div className="inline-flex items-center justify-center gap-3 mb-4">
@@ -507,20 +506,20 @@ export default function Step6Summary({
             <strong className="text-white">Complete Setup</strong> to start receiving prayer time notifications.
           </p>
         </div>
-
+ 
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
             <p className="text-red-300 text-sm leading-relaxed">{error}</p>
           </div>
         )}
-
+ 
         <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10 space-y-8">
           <div>
             <div className="flex items-center gap-2 mb-4">
               <div className="h-1 w-1 rounded-full bg-emerald-400" />
               <h2 className="text-white text-lg font-semibold">Connection status</h2>
             </div>
-
+ 
             <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -548,7 +547,7 @@ export default function Step6Summary({
                   )}
                 </div>
               </div>
-
+ 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className={`rounded-lg p-2 ${summary.accountEnabled ? "bg-emerald-500/10" : "bg-slate-700/30"}`}>
@@ -575,7 +574,7 @@ export default function Step6Summary({
                   )}
                 </div>
               </div>
-
+ 
               {!isComplete && (
                 <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
                   <p className="text-amber-200 text-sm leading-relaxed">
@@ -585,13 +584,13 @@ export default function Step6Summary({
               )}
             </div>
           </div>
-
+ 
           <div>
             <div className="flex items-center gap-2 mb-4">
               <div className="h-1 w-1 rounded-full bg-emerald-400" />
               <h2 className="text-white text-lg font-semibold">Location & prayer times</h2>
             </div>
-
+ 
             <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
                 <div>
@@ -603,14 +602,14 @@ export default function Step6Summary({
                     {summary.location.timezone}
                   </div>
                 </div>
-
+ 
                 <div>
                   <div className="text-slate-400 text-sm mb-1">Tradition</div>
                   <div className="text-white font-medium capitalize">
                     {summary.prayer.sect}
                   </div>
                 </div>
-
+ 
                 <div>
                   <div className="text-slate-400 text-sm mb-1">Calculation method</div>
                   <div className="text-white font-medium">
@@ -618,14 +617,14 @@ export default function Step6Summary({
                       summary.prayer.calculationMethod}
                   </div>
                 </div>
-
+ 
                 <div>
                   <div className="text-slate-400 text-sm mb-1">Asr madhhab</div>
                   <div className="text-white font-medium capitalize">
                     {summary.prayer.madhhab}
                   </div>
                 </div>
-
+ 
                 <div>
                   <div className="text-slate-400 text-sm mb-1">High latitude rule</div>
                   <div className="text-white font-medium">
@@ -633,7 +632,7 @@ export default function Step6Summary({
                       summary.prayer.highLatitudeMethod}
                   </div>
                 </div>
-
+ 
                 <div>
                   <div className="text-slate-400 text-sm mb-1">Linked devices</div>
                   <div className="text-white font-medium">
@@ -643,14 +642,14 @@ export default function Step6Summary({
               </div>
             </div>
           </div>
-
+ 
           {summary.prayerConfigs.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-4">
                 <div className="h-1 w-1 rounded-full bg-emerald-400" />
                 <h2 className="text-white text-lg font-semibold">Adhan preferences</h2>
               </div>
-
+ 
               <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5">
                 <div className="space-y-3">
                   {summary.prayerConfigs.map((config) => (
@@ -677,7 +676,7 @@ export default function Step6Summary({
               </div>
             </div>
           )}
-
+ 
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
@@ -693,7 +692,7 @@ export default function Step6Summary({
               </div>
             </div>
           </div>
-
+ 
           <div className="flex flex-col sm:flex-row gap-3 pt-4">
             <Button
               variant="outline"
