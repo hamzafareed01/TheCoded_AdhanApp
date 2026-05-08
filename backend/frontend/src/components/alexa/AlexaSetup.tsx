@@ -6,14 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Badge } from "../ui/badge";
 import { AlertTriangle, Check, CheckCircle2, Copy, Link2, RefreshCw } from "lucide-react";
 import { apiFetch } from "../../lib/api";
-
+ 
 type Template = {
   id: string;
   title: string;
   routineName: string;
   phrase: string;
 };
-
+ 
 type LinkStatus = {
   configured?: boolean;
   appLinkClientConfigured?: boolean;
@@ -29,7 +29,7 @@ type LinkStatus = {
   accountLinkStatus?: string | null;
   endpointHost?: string | null;
 };
-
+ 
 type UserSettingsSummary = {
   selectedAlexaDeviceIds?: string[];
   selectedAlexaTargetEndpointIds?: string[];
@@ -41,17 +41,17 @@ type UserSettingsSummary = {
   sect?: string | null;
   accountEnabled?: boolean;
 };
-
+ 
 type DeviceListResponse = {
   devices?: Array<{ id: string; name: string; platform?: string | null }>;
 };
-
+ 
 type EndpointListResponse = {
   endpoints?: Array<{ endpointId: string; friendlyName: string; endpointKind?: string; supportsFireTv?: boolean }>;
   selectedEndpointIds?: string[];
   prayerTargetEndpointMap?: Record<string, string[]>;
 };
-
+ 
 const FALLBACK_TEMPLATES: Template[] = [
   {
     id: "fajr",
@@ -84,17 +84,17 @@ const FALLBACK_TEMPLATES: Template[] = [
     phrase: "open adhan home and play isha adhan",
   },
 ];
-
+ 
 function formatDateTime(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
-
+ 
 function statusTone(ok: boolean) {
   return ok ? "default" : "secondary";
 }
-
+ 
 export default function AlexaSetup() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<Template[]>(FALLBACK_TEMPLATES);
@@ -104,13 +104,13 @@ export default function AlexaSetup() {
   const [playbackTargetNames, setPlaybackTargetNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
+ 
   const accountLinkPage = useMemo(() => {
     return typeof window !== "undefined"
       ? `${window.location.origin}/onboarding/step2`
       : "/onboarding/step2";
   }, []);
-
+ 
   async function copy(text: string, id: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -125,11 +125,11 @@ export default function AlexaSetup() {
     setCopiedId(id);
     setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1200);
   }
-
+ 
   async function load() {
     setLoading(true);
     setError(null);
-
+ 
     try {
       const [templatesRes, statusRes, settingsRes, devicesRes, endpointsRes] = await Promise.all([
         apiFetch("/api/alexa/routines/templates"),
@@ -138,14 +138,14 @@ export default function AlexaSetup() {
         apiFetch("/api/alexa/devices"),
         apiFetch("/api/alexa/endpoints"),
       ]);
-
+ 
       if (templatesRes.ok) {
         const payload = (await templatesRes.json()) as { templates?: Template[] };
         if (Array.isArray(payload.templates) && payload.templates.length > 0) {
           setTemplates(payload.templates);
         }
       }
-
+ 
       if (statusRes.ok) {
         const payload = (await statusRes.json()) as LinkStatus;
         setStatus(payload);
@@ -153,12 +153,12 @@ export default function AlexaSetup() {
         setStatus(null);
         setError("Connect Amazon in onboarding step 2 first, then come back here.");
       }
-
+ 
       if (settingsRes.ok) {
         const payload = (await settingsRes.json()) as { settings?: UserSettingsSummary } & UserSettingsSummary;
         setSettings(payload.settings ?? payload);
       }
-
+ 
       if (devicesRes.ok) {
         const payload = (await devicesRes.json()) as DeviceListResponse;
         const names = Array.isArray(payload.devices)
@@ -166,7 +166,7 @@ export default function AlexaSetup() {
           : [];
         setDeviceNames(names);
       }
-
+ 
       if (endpointsRes.ok) {
         const payload = (await endpointsRes.json()) as EndpointListResponse;
         const names = Array.isArray(payload.endpoints)
@@ -180,22 +180,22 @@ export default function AlexaSetup() {
       setLoading(false);
     }
   }
-
+ 
   useEffect(() => {
     void load();
   }, []);
-
+ 
   const selectedDeviceCount = Array.isArray(settings?.selectedAlexaDeviceIds)
     ? settings?.selectedAlexaDeviceIds.length
     : 0;
   const selectedTargetCount = Array.isArray(settings?.selectedAlexaTargetEndpointIds)
     ? settings?.selectedAlexaTargetEndpointIds.length
     : 0;
-
+ 
   const sourceLabel = settings?.useMosqueLocation
     ? settings?.mosqueName || "Mosque timing source"
     : "Personal location / calculation";
-
+ 
   const nextStep = useMemo(() => {
     if (!status?.configured || !status?.appLinkClientConfigured) {
       return "Backend Alexa configuration is incomplete. Check OAuth and app-link environment variables before testing devices.";
@@ -211,44 +211,61 @@ export default function AlexaSetup() {
     }
     return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, then create routines if you want scheduled playback.";
   }, [selectedDeviceCount, selectedTargetCount, status]);
-
+ 
   return (
-    <div className="min-h-screen bg-slate-950 py-8 px-4">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
-          <div className="flex items-center gap-3">
-            <Logo />
-            <div>
-              <div className="text-slate-100 font-semibold text-lg">Alexa Setup</div>
-              <div className="text-slate-400 text-sm">
-                Guided Alexa status, routine phrases, and app-controlled playback checks.
+    /* overscroll-none prevents pull-to-refresh on mobile */
+    <div
+      className="min-h-screen bg-slate-950 overscroll-none"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      {/* Sticky header — consistent with other pages */}
+      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+        <div className="max-w-7xl mx-auto px-4 py-3 md:py-4 md:px-6">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <Logo />
+              <div>
+                <div className="text-slate-100 font-semibold text-base md:text-lg">
+                  Alexa Setup
+                </div>
+                <div className="text-slate-400 text-xs md:text-sm hidden sm:block">
+                  Guided Alexa status, routine phrases, and app-controlled playback checks.
+                </div>
               </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              className="inline-flex items-center gap-2"
-              onClick={() => void load()}
-              disabled={loading}
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-              Refresh status
-            </Button>
-            <Navigation />
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* touch-manipulation removes 300ms tap delay; min-h-[44px] meets Apple HIG */}
+              <Button
+                variant="secondary"
+                className="inline-flex items-center gap-2 min-h-[44px] touch-manipulation active:opacity-80"
+                onClick={() => void load()}
+                disabled={loading}
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">Refresh status</span>
+              </Button>
+              <Navigation />
+            </div>
           </div>
         </div>
-
+      </div>
+ 
+      {/* Main content — safe area bottom so nothing hides behind home indicator */}
+      <div
+        className="max-w-7xl mx-auto px-4 py-6 md:px-6 md:py-8"
+        style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
+      >
         {error ? (
           <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
             <div className="inline-flex items-center gap-2 font-medium">
-              <AlertTriangle className="w-4 h-4" />
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               {error}
             </div>
           </div>
         ) : null}
-
+ 
         <div className="grid lg:grid-cols-3 gap-4 mb-6">
+          {/* Status card */}
           <Card className="bg-slate-900/40 border-slate-800 lg:col-span-2">
             <CardHeader>
               <CardTitle className="text-slate-100">Current status</CardTitle>
@@ -264,45 +281,35 @@ export default function AlexaSetup() {
                 <Badge variant={statusTone(!!status?.lwaLinked)}>
                   {status?.lwaLinked ? "Amazon linked" : "Amazon not linked"}
                 </Badge>
-                <Badge variant={statusTone(status?.accountLinkStatus === "LINKED")}> 
+                <Badge variant={statusTone(status?.accountLinkStatus === "LINKED")}>
                   {status?.accountLinkStatus === "LINKED" ? "Skill linked" : "Skill not linked"}
                 </Badge>
               </div>
-
+ 
               <div className="grid md:grid-cols-2 gap-3">
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                  <div className="text-slate-400">Invocation name</div>
-                  <div className="text-slate-100 font-medium">{status?.invocationName || "adhan home"}</div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                  <div className="text-slate-400">Skill stage</div>
-                  <div className="text-slate-100 font-medium">{status?.skillStage || "development"}</div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                  <div className="text-slate-400">Enablement status</div>
-                  <div className="text-slate-100 font-medium">{status?.enablementStatus || "Not enabled yet"}</div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                  <div className="text-slate-400">Account-link status</div>
-                  <div className="text-slate-100 font-medium">{status?.accountLinkStatus || "Not linked yet"}</div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                  <div className="text-slate-400">App-link token expiry</div>
-                  <div className="text-slate-100 font-medium">{formatDateTime(status?.lwaExpiresAt)}</div>
-                </div>
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                  <div className="text-slate-400">Last Alexa skill use</div>
-                  <div className="text-slate-100 font-medium">{formatDateTime(status?.lastUsedAt)}</div>
-                </div>
+                {[
+                  { label: "Invocation name", value: status?.invocationName || "adhan home" },
+                  { label: "Skill stage", value: status?.skillStage || "development" },
+                  { label: "Enablement status", value: status?.enablementStatus || "Not enabled yet" },
+                  { label: "Account-link status", value: status?.accountLinkStatus || "Not linked yet" },
+                  { label: "App-link token expiry", value: formatDateTime(status?.lwaExpiresAt) },
+                  { label: "Last Alexa skill use", value: formatDateTime(status?.lastUsedAt) },
+                ].map(({ label, value }) => (
+                  <div key={label} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 min-h-[64px]">
+                    <div className="text-slate-400 text-xs mb-1">{label}</div>
+                    <div className="text-slate-100 font-medium text-sm">{value}</div>
+                  </div>
+                ))}
               </div>
-
+ 
               <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                <div className="text-slate-400">Next recommended step</div>
-                <div className="mt-1 text-slate-100">{nextStep}</div>
+                <div className="text-slate-400 text-xs mb-1">Next recommended step</div>
+                <div className="mt-1 text-slate-100 text-sm leading-relaxed">{nextStep}</div>
               </div>
             </CardContent>
           </Card>
-
+ 
+          {/* Source of truth card */}
           <Card className="bg-slate-900/40 border-slate-800">
             <CardHeader>
               <CardTitle className="text-slate-100">App source of truth</CardTitle>
@@ -331,23 +338,32 @@ export default function AlexaSetup() {
                   {accountLinkPage}
                 </div>
               </div>
-              <Button variant="secondary" className="w-full" onClick={() => copy(accountLinkPage, "link-url")}> 
+              <Button
+                variant="secondary"
+                className="w-full min-h-[44px] touch-manipulation active:opacity-80"
+                onClick={() => copy(accountLinkPage, "link-url")}
+              >
                 {copiedId === "link-url" ? (
-                  <span className="inline-flex items-center gap-2"><Check className="w-4 h-4" /> Copied</span>
+                  <span className="inline-flex items-center gap-2">
+                    <Check className="w-4 h-4" /> Copied
+                  </span>
                 ) : (
-                  <span className="inline-flex items-center gap-2"><Link2 className="w-4 h-4" /> Copy callback URL</span>
+                  <span className="inline-flex items-center gap-2">
+                    <Link2 className="w-4 h-4" /> Copy callback URL
+                  </span>
                 )}
               </Button>
             </CardContent>
           </Card>
         </div>
-
-        <Card className="bg-slate-900/40 border-slate-800">
+ 
+        {/* How to create a routine */}
+        <Card className="bg-slate-900/40 border-slate-800 mb-6">
           <CardHeader>
             <CardTitle className="text-slate-100">How to create a routine</CardTitle>
           </CardHeader>
-          <CardContent className="text-slate-200 space-y-2">
-            <ol className="list-decimal ml-5 space-y-2">
+          <CardContent className="text-slate-200">
+            <ol className="list-decimal ml-5 space-y-2 text-sm leading-relaxed">
               <li>Finish Amazon connect + skill linking from onboarding step 2.</li>
               <li>Open the Alexa app, then go to <b>More → Routines → +</b>.</li>
               <li>Pick the correct prayer-time trigger for the routine.</li>
@@ -357,8 +373,9 @@ export default function AlexaSetup() {
             </ol>
           </CardContent>
         </Card>
-
-        <div className="mt-6 grid md:grid-cols-2 gap-4">
+ 
+        {/* Routine phrase templates */}
+        <div className="grid md:grid-cols-2 gap-4">
           {templates.map((t) => (
             <Card key={t.id} className="bg-slate-900/40 border-slate-800">
               <CardHeader className="pb-3">
@@ -368,10 +385,15 @@ export default function AlexaSetup() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 font-mono text-sm text-slate-100">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 font-mono text-sm text-slate-100 select-all">
                   {t.phrase}
                 </div>
-                <Button variant="secondary" className="w-full" onClick={() => copy(t.phrase, t.id)}>
+                {/* min-h-[44px] + touch-manipulation on every copy button */}
+                <Button
+                  variant="secondary"
+                  className="w-full min-h-[44px] touch-manipulation active:opacity-80"
+                  onClick={() => copy(t.phrase, t.id)}
+                >
                   {copiedId === t.id ? (
                     <span className="inline-flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4" /> Copied
