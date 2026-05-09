@@ -56,32 +56,32 @@ const FALLBACK_TEMPLATES: Template[] = [
   {
     id: "fajr",
     title: "Fajr Adhan",
-    routineName: "Adhan Home – Fajr Adhan",
-    phrase: "open adhan home and play fajr adhan",
+    routineName: "Adhan Cast – Fajr Adhan",
+    phrase: "open adhan cast and play fajr adhan",
   },
   {
     id: "dhuhr",
     title: "Dhuhr Adhan",
-    routineName: "Adhan Home – Dhuhr Adhan",
-    phrase: "open adhan home and play dhuhr adhan",
+    routineName: "Adhan Cast – Dhuhr Adhan",
+    phrase: "open adhan cast and play dhuhr adhan",
   },
   {
     id: "asr",
     title: "Asr Adhan",
-    routineName: "Adhan Home – Asr Adhan",
-    phrase: "open adhan home and play asr adhan",
+    routineName: "Adhan Cast – Asr Adhan",
+    phrase: "open adhan cast and play asr adhan",
   },
   {
     id: "maghrib",
     title: "Maghrib Adhan",
-    routineName: "Adhan Home – Maghrib Adhan",
-    phrase: "open adhan home and play maghrib adhan",
+    routineName: "Adhan Cast – Maghrib Adhan",
+    phrase: "open adhan cast and play maghrib adhan",
   },
   {
     id: "isha",
     title: "Isha Adhan",
-    routineName: "Adhan Home – Isha Adhan",
-    phrase: "open adhan home and play isha adhan",
+    routineName: "Adhan Cast – Isha Adhan",
+    phrase: "open adhan cast and play isha adhan",
   },
 ];
  
@@ -288,7 +288,7 @@ export default function AlexaSetup() {
  
               <div className="grid md:grid-cols-2 gap-3">
                 {[
-                  { label: "Invocation name", value: status?.invocationName || "adhan home" },
+                  { label: "Invocation name", value: status?.invocationName || "adhan cast" },
                   { label: "Skill stage", value: status?.skillStage || "development" },
                   { label: "Enablement status", value: status?.enablementStatus || "Not enabled yet" },
                   { label: "Account-link status", value: status?.accountLinkStatus || "Not linked yet" },
