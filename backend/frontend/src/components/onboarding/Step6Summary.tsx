@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { Logo } from "../shared/Logo";
 import { ProgressIndicator } from "../shared/ProgressIndicator";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
 import { Sparkles, CheckCircle2, XCircle } from "lucide-react";
 import { apiFetch, getStoredAmazonToken } from "../../lib/api";
  
@@ -204,9 +203,7 @@ function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
           : "fajr"
       ) as PrayerName;
  
-      const afterAdhanSource = isRecord(item.afterAdhan)
-        ? item.afterAdhan
-        : null;
+      const afterAdhanSource = isRecord(item.afterAdhan) ? item.afterAdhan : null;
  
       const afterType =
         afterAdhanSource?.type === "dua" || afterAdhanSource?.type === "surah"
@@ -241,11 +238,7 @@ async function saveSettings(payload: Record<string, unknown>) {
 }
  
 async function geocodeLocation(city: string, country: string) {
-  const params = new URLSearchParams({
-    city: city.trim(),
-    country,
-  });
- 
+  const params = new URLSearchParams({ city: city.trim(), country });
   const res = await apiFetch(`/api/geocode?${params.toString()}`);
   const data = await res.json().catch(() => null);
  
@@ -305,19 +298,17 @@ export default function Step6Summary({
       (devicesValue?.adhanPreferences?.quietHoursEnabled === true ||
         devicesValue?.quietHours?.enabled === true);
  
-    const quietFrom =
-      !Array.isArray(devicesValue)
-        ? devicesValue?.adhanPreferences?.quietHours?.from ||
-          devicesValue?.quietHours?.from ||
-          "22:00"
-        : "22:00";
+    const quietFrom = !Array.isArray(devicesValue)
+      ? devicesValue?.adhanPreferences?.quietHours?.from ||
+        devicesValue?.quietHours?.from ||
+        "22:00"
+      : "22:00";
  
-    const quietTo =
-      !Array.isArray(devicesValue)
-        ? devicesValue?.adhanPreferences?.quietHours?.to ||
-          devicesValue?.quietHours?.to ||
-          "07:00"
-        : "07:00";
+    const quietTo = !Array.isArray(devicesValue)
+      ? devicesValue?.adhanPreferences?.quietHours?.to ||
+        devicesValue?.quietHours?.to ||
+        "07:00"
+      : "07:00";
  
     const selectedDeviceIds = Array.isArray(devicesValue)
       ? devicesValue.filter(
@@ -382,7 +373,9 @@ export default function Step6Summary({
       }
  
       if (!hasReciterConfigured) {
-        throw new Error("Please choose at least one Adhan reciter before finishing setup.");
+        throw new Error(
+          "Please choose at least one Adhan reciter before finishing setup."
+        );
       }
  
       // Verify the session is still valid. The stored token is an adhapp_ session
@@ -481,8 +474,12 @@ export default function Step6Summary({
   }
  
   return (
-    <div className="min-h-screen bg-slate-950">
-      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+    <div className="min-h-screen bg-slate-950 overscroll-none">
+      {/* Sticky Header */}
+      <div
+        className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
         <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <Logo />
@@ -491,7 +488,11 @@ export default function Step6Summary({
         </div>
       </div>
  
-      <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
+      <div
+        className="max-w-4xl mx-auto px-4 py-8 md:py-12"
+        style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
+      >
+        {/* Hero Section */}
         <div className="mb-8 md:mb-10 text-center">
           <div className="inline-flex items-center justify-center gap-3 mb-4">
             <div className="rounded-full bg-gradient-to-br from-emerald-500/20 to-teal-500/20 p-3">
@@ -503,17 +504,21 @@ export default function Step6Summary({
           </h1>
           <p className="text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl mx-auto">
             Review your settings below. When everything looks good, click{" "}
-            <strong className="text-white">Complete Setup</strong> to start receiving prayer time notifications.
+            <strong className="text-white">Complete Setup</strong> to start
+            receiving prayer time notifications.
           </p>
         </div>
  
+        {/* Error Alert */}
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
             <p className="text-red-300 text-sm leading-relaxed">{error}</p>
           </div>
         )}
  
+        {/* Main Content Card */}
         <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10 space-y-8">
+          {/* Connection Status */}
           <div>
             <div className="flex items-center gap-2 mb-4">
               <div className="h-1 w-1 rounded-full bg-emerald-400" />
@@ -523,21 +528,35 @@ export default function Step6Summary({
             <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className={`rounded-lg p-2 ${isConnected("alexa") ? "bg-emerald-500/10" : "bg-slate-700/30"}`}>
-                    <svg className={`w-5 h-5 ${isConnected("alexa") ? "text-emerald-400" : "text-slate-500"}`} fill="currentColor" viewBox="0 0 20 20">
+                  <div
+                    className={`rounded-lg p-2 ${
+                      isConnected("alexa") ? "bg-emerald-500/10" : "bg-slate-700/30"
+                    }`}
+                  >
+                    <svg
+                      className={`w-5 h-5 ${
+                        isConnected("alexa") ? "text-emerald-400" : "text-slate-500"
+                      }`}
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
                       <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-2h2v2zm0-4H9V5h2v4z" />
                     </svg>
                   </div>
                   <div>
                     <div className="text-white font-medium">Amazon Alexa</div>
-                    <div className="text-slate-400 text-sm">Voice assistant integration</div>
+                    <div className="text-slate-400 text-sm">
+                      Voice assistant integration
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {isConnected("alexa") ? (
                     <>
                       <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                      <span className="text-sm text-emerald-400 font-medium">Connected</span>
+                      <span className="text-sm text-emerald-400 font-medium">
+                        Connected
+                      </span>
                     </>
                   ) : (
                     <>
@@ -550,21 +569,39 @@ export default function Step6Summary({
  
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className={`rounded-lg p-2 ${summary.accountEnabled ? "bg-emerald-500/10" : "bg-slate-700/30"}`}>
-                    <svg className={`w-5 h-5 ${summary.accountEnabled ? "text-emerald-400" : "text-slate-500"}`} fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  <div
+                    className={`rounded-lg p-2 ${
+                      summary.accountEnabled ? "bg-emerald-500/10" : "bg-slate-700/30"
+                    }`}
+                  >
+                    <svg
+                      className={`w-5 h-5 ${
+                        summary.accountEnabled ? "text-emerald-400" : "text-slate-500"
+                      }`}
+                      fill="currentColor"
+                      viewBox="0 0 20 20"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                        clipRule="evenodd"
+                      />
                     </svg>
                   </div>
                   <div>
                     <div className="text-white font-medium">Adhan playback</div>
-                    <div className="text-slate-400 text-sm">Automatic prayer time announcements</div>
+                    <div className="text-slate-400 text-sm">
+                      Automatic prayer time announcements
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {summary.accountEnabled ? (
                     <>
                       <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                      <span className="text-sm text-emerald-400 font-medium">Enabled</span>
+                      <span className="text-sm text-emerald-400 font-medium">
+                        Enabled
+                      </span>
                     </>
                   ) : (
                     <>
@@ -578,17 +615,21 @@ export default function Step6Summary({
               {!isComplete && (
                 <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
                   <p className="text-amber-200 text-sm leading-relaxed">
-                    Please ensure Amazon Alexa is connected, Adhan playback is enabled, and at least one reciter is selected before completing setup.
+                    Please ensure Amazon Alexa is connected, Adhan playback is enabled,
+                    and at least one reciter is selected before completing setup.
                   </p>
                 </div>
               )}
             </div>
           </div>
  
+          {/* Location & Prayer Settings */}
           <div>
             <div className="flex items-center gap-2 mb-4">
               <div className="h-1 w-1 rounded-full bg-emerald-400" />
-              <h2 className="text-white text-lg font-semibold">Location & prayer times</h2>
+              <h2 className="text-white text-lg font-semibold">
+                Location &amp; prayer times
+              </h2>
             </div>
  
             <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5">
@@ -611,7 +652,9 @@ export default function Step6Summary({
                 </div>
  
                 <div>
-                  <div className="text-slate-400 text-sm mb-1">Calculation method</div>
+                  <div className="text-slate-400 text-sm mb-1">
+                    Calculation method
+                  </div>
                   <div className="text-white font-medium">
                     {METHOD_LABEL[summary.prayer.calculationMethod.toLowerCase()] ||
                       summary.prayer.calculationMethod}
@@ -626,7 +669,9 @@ export default function Step6Summary({
                 </div>
  
                 <div>
-                  <div className="text-slate-400 text-sm mb-1">High latitude rule</div>
+                  <div className="text-slate-400 text-sm mb-1">
+                    High latitude rule
+                  </div>
                   <div className="text-white font-medium">
                     {HIGHLAT_LABEL[summary.prayer.highLatitudeMethod] ||
                       summary.prayer.highLatitudeMethod}
@@ -636,18 +681,22 @@ export default function Step6Summary({
                 <div>
                   <div className="text-slate-400 text-sm mb-1">Linked devices</div>
                   <div className="text-white font-medium">
-                    {summary.linkedDeviceCount} {summary.linkedDeviceCount === 1 ? "device" : "devices"}
+                    {summary.linkedDeviceCount}{" "}
+                    {summary.linkedDeviceCount === 1 ? "device" : "devices"}
                   </div>
                 </div>
               </div>
             </div>
           </div>
  
+          {/* Adhan Preferences */}
           {summary.prayerConfigs.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-4">
                 <div className="h-1 w-1 rounded-full bg-emerald-400" />
-                <h2 className="text-white text-lg font-semibold">Adhan preferences</h2>
+                <h2 className="text-white text-lg font-semibold">
+                  Adhan preferences
+                </h2>
               </div>
  
               <div className="rounded-xl border border-slate-700/60 bg-slate-800/30 p-5">
@@ -677,41 +726,72 @@ export default function Step6Summary({
             </div>
           )}
  
+          {/* Trust & Reassurance Box */}
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5">
             <div className="flex items-start gap-3">
               <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
-                <svg className="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <svg
+                  className="w-5 h-5 text-emerald-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
                 </svg>
               </div>
               <div className="flex-1">
-                <div className="text-white font-medium mb-2">Your settings are secure</div>
+                <div className="text-white font-medium mb-2">
+                  Your settings are secure
+                </div>
                 <p className="text-slate-400 text-sm leading-relaxed">
-                  All your preferences will be saved to your account and synced with your Alexa devices. You can change any of these settings later from your dashboard.
+                  All your preferences will be saved to your account and synced with
+                  your Alexa devices. You can change any of these settings later from
+                  your dashboard.
                 </p>
               </div>
             </div>
           </div>
  
+          {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3 pt-4">
             <Button
               variant="outline"
               onClick={() => navigate("/onboarding/step5")}
               disabled={saving}
-              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11"
+              className="flex-1 border-slate-700 text-slate-300 hover:bg-slate-800 h-11 touch-manipulation active:bg-slate-800"
             >
               Back to review
             </Button>
             <Button
               onClick={finish}
               disabled={saving || !isComplete}
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 font-medium disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation active:opacity-90"
             >
               {saving ? (
                 <span className="flex items-center gap-2">
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  <svg
+                    className="w-4 h-4 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
                   </svg>
                   Completing setup...
                 </span>
@@ -725,3 +805,4 @@ export default function Step6Summary({
     </div>
   );
 }
+ 
