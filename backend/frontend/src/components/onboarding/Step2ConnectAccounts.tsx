@@ -3,7 +3,7 @@ import { Browser } from "@capacitor/browser";
 import { Capacitor } from "@capacitor/core";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
- 
+
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Logo } from "../shared/Logo";
@@ -21,28 +21,28 @@ import {
   getAmazonClientId,
   getAmazonReturnUrl,
 } from "../../lib/amazonLogin";
- 
+
 // Retrigger deploy..delete later if not needed
- 
+
 type AmazonAuthorizeResponse = {
   access_token?: string;
   error?: string;
   error_description?: string;
   [key: string]: unknown;
 };
- 
+
 type PlatformKey = "alexa" | "google";
- 
+
 type OnboardingData = {
   connectedPlatforms?: PlatformKey[];
   tokens?: Record<string, string>;
 };
- 
+
 type Props = {
   onboardingData?: OnboardingData;
   setOnboardingData?: (data: OnboardingData) => void;
 };
- 
+
 type IntegrationStatus = {
   userKey?: string;
   sessionToken?: string | null;
@@ -60,7 +60,7 @@ type IntegrationStatus = {
   };
   google?: { connected: boolean; linkedAt: string | null };
 };
- 
+
 type AlexaLinkStatus = {
   configured?: boolean;
   invocationName?: string | null;
@@ -71,31 +71,31 @@ type AlexaLinkStatus = {
   enablementStatus?: string | null;
   accountLinkStatus?: string | null;
 };
- 
+
 type AlexaLinkStartResponse = {
   authorizationUrl: string;
   state: string;
   codeVerifier: string;
   redirectUri: string;
 };
- 
+
 type AlexaLinkPending = {
   state: string;
   codeVerifier: string;
   redirectUri: string;
   startedAt: number;
 };
- 
+
 const LS_CONNECTED = "adhan_connected_platforms";
 const LS_TOKENS = "adhan_tokens";
 const LS_ALEXA_LINK_PENDING = "adhan_alexa_link_pending";
- 
+
 const AMAZON_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
 const AMAZON_LOGIN_STATE_PREFIX = "adhancast_amazon_login_";
 const NATIVE_LOGIN_STATE_PREFIX = "adhancast_native_login_";
 const NATIVE_AUTH_CALLBACK_URL = "com.thecoded.adhanhome://auth";
 const APP_SESSION_PREFIX = "adhapp_";
- 
+
 function isNativeRuntime(): boolean {
   try {
     return !!Capacitor?.isNativePlatform?.();
@@ -103,7 +103,7 @@ function isNativeRuntime(): boolean {
     return false;
   }
 }
- 
+
 function parseAuthParamsFromCurrentUrl() {
   if (typeof window === "undefined") {
     return {
@@ -115,10 +115,10 @@ function parseAuthParamsFromCurrentUrl() {
       errorDescription: null,
     };
   }
- 
+
   const searchParams = new URLSearchParams(window.location.search || "");
   const hashParams = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
- 
+
   return {
     accessToken:
       hashParams.get("access_token") ||
@@ -132,7 +132,7 @@ function parseAuthParamsFromCurrentUrl() {
       searchParams.get("error_description") || hashParams.get("error_description"),
   };
 }
- 
+
 function buildAmazonLoginUrl(state: string): string {
   const url = new URL(AMAZON_AUTHORIZE_URL);
   url.searchParams.set("client_id", getAmazonClientId());
@@ -142,14 +142,14 @@ function buildAmazonLoginUrl(state: string): string {
   url.searchParams.set("state", state);
   return url.toString();
 }
- 
+
 function buildNativeAppCallbackUrl(params: {
   sessionToken?: string | null;
   userKey?: string | null;
   error?: string | null;
 }) {
   const url = new URL(NATIVE_AUTH_CALLBACK_URL);
- 
+
   if (params.sessionToken) {
     const sessionToken = params.sessionToken.trim();
     if (!sessionToken.startsWith(APP_SESSION_PREFIX)) {
@@ -157,26 +157,26 @@ function buildNativeAppCallbackUrl(params: {
     }
     url.searchParams.set("session_token", sessionToken);
   }
- 
+
   if (params.userKey) {
     url.searchParams.set("user_key", params.userKey);
   }
- 
+
   if (params.error) {
     url.searchParams.set("error", params.error);
   }
- 
+
   return url.toString();
 }
- 
+
 function parseNativeAppCallbackUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl);
- 
+
     if (url.protocol !== "com.thecoded.adhanhome:" || url.host !== "auth") {
       return null;
     }
- 
+
     return {
       sessionToken: url.searchParams.get("session_token"),
       userKey: url.searchParams.get("user_key"),
@@ -188,7 +188,7 @@ function parseNativeAppCallbackUrl(rawUrl: string) {
     return null;
   }
 }
- 
+
 function readJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -197,11 +197,11 @@ function readJson<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
- 
+
 function writeJson(key: string, value: unknown) {
   localStorage.setItem(key, JSON.stringify(value));
 }
- 
+
 function readPendingAlexaLink(): AlexaLinkPending | null {
   try {
     const raw = sessionStorage.getItem(LS_ALEXA_LINK_PENDING);
@@ -210,54 +210,54 @@ function readPendingAlexaLink(): AlexaLinkPending | null {
     return null;
   }
 }
- 
+
 function storePendingAlexaLink(value: AlexaLinkPending) {
   sessionStorage.setItem(LS_ALEXA_LINK_PENDING, JSON.stringify(value));
 }
- 
+
 function clearPendingAlexaLink() {
   sessionStorage.removeItem(LS_ALEXA_LINK_PENDING);
 }
- 
+
 function cleanCurrentUrl() {
   if (typeof window === "undefined") return;
   const cleanUrl = `${window.location.origin}${window.location.pathname}`;
   window.history.replaceState({}, document.title, cleanUrl);
 }
- 
+
 function currentAlexaLinkUrl(): string {
   return getAmazonReturnUrl();
 }
- 
+
 export default function Step2ConnectAccounts({
   onboardingData,
   setOnboardingData,
 }: Props) {
   const navigate = useNavigate();
- 
+
   const [loadingKey, setLoadingKey] = useState<PlatformKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [deviceHint, setDeviceHint] = useState<string | null>(null);
   const [serverStatus, setServerStatus] = useState<IntegrationStatus | null>(null);
   const [alexaStatus, setAlexaStatus] = useState<AlexaLinkStatus | null>(null);
- 
+
   const [connectedPlatforms, setConnectedPlatforms] = useState<PlatformKey[]>(() =>
     readJson<PlatformKey[]>(LS_CONNECTED, onboardingData?.connectedPlatforms ?? [])
   );
- 
+
   const [tokens, setTokens] = useState<Record<string, string>>(() =>
     readJson<Record<string, string>>(LS_TOKENS, onboardingData?.tokens ?? {})
   );
- 
+
   useEffect(() => {
     writeJson(LS_CONNECTED, connectedPlatforms);
   }, [connectedPlatforms]);
- 
+
   useEffect(() => {
     writeJson(LS_TOKENS, tokens);
   }, [tokens]);
- 
+
   const platforms = useMemo(
     () => [
       {
@@ -277,13 +277,13 @@ export default function Step2ConnectAccounts({
     ],
     []
   );
- 
+
   const isConnected = (key: PlatformKey) => connectedPlatforms.includes(key);
- 
+
   const markConnected = (key: PlatformKey) => {
     setConnectedPlatforms((prev) => (prev.includes(key) ? prev : [...prev, key]));
   };
- 
+
   const markDisconnected = (key: PlatformKey) => {
     setConnectedPlatforms((prev) => prev.filter((p) => p !== key));
     setTokens((prev) => {
@@ -292,14 +292,14 @@ export default function Step2ConnectAccounts({
       return next;
     });
   };
- 
+
   async function refreshServerStatus() {
     const token = getStoredAmazonToken();
     if (!token) {
       setServerStatus(null);
       return;
     }
- 
+
     try {
       const resp = await apiFetchWithAmazonRepair("/api/integrations");
       if (!resp.ok) {
@@ -311,10 +311,10 @@ export default function Step2ConnectAccounts({
         }
         return;
       }
- 
+
       const data = (await resp.json()) as IntegrationStatus;
       setServerStatus(data);
- 
+
       if (data?.alexa?.connected) {
         markConnected("alexa");
       }
@@ -322,14 +322,14 @@ export default function Step2ConnectAccounts({
       setServerStatus(null);
     }
   }
- 
+
   async function refreshAlexaLinkStatus() {
     const token = getStoredAmazonToken();
     if (!token) {
       setAlexaStatus(null);
       return;
     }
- 
+
     try {
       const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/status");
       if (!resp.ok) return;
@@ -339,7 +339,7 @@ export default function Step2ConnectAccounts({
       setAlexaStatus(null);
     }
   }
- 
+
   async function completeAlexaLogin(
     accessToken: string
   ): Promise<{ data: IntegrationStatus; durableToken: string }> {
@@ -347,12 +347,12 @@ export default function Step2ConnectAccounts({
       method: "POST",
       body: JSON.stringify({ accessToken }),
     });
- 
+
     if (!linkRes.ok) {
       const msg = await linkRes.text().catch(() => "");
       throw new Error(`Backend link failed (${linkRes.status}). ${msg}`.trim());
     }
- 
+
     const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus & {
       accessToken?: string | null;
     };
@@ -360,19 +360,19 @@ export default function Step2ConnectAccounts({
       typeof data?.sessionToken === "string" && data.sessionToken.trim()
         ? data.sessionToken.trim()
         : accessToken;
- 
+
     setStoredAmazonToken(durableToken);
     setTokens((prev) => ({ ...prev, alexa: durableToken }));
     markConnected("alexa");
     setServerStatus(data);
     setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
- 
+
     void refreshServerStatus();
     void refreshAlexaLinkStatus();
- 
+
     return { data, durableToken };
   }
- 
+
   async function completeAlexaLoginWithCode(
     code: string
   ): Promise<{ data: IntegrationStatus; durableToken: string }> {
@@ -383,58 +383,58 @@ export default function Step2ConnectAccounts({
         redirectUri: getAmazonReturnUrl(),
       }),
     });
- 
+
     if (!linkRes.ok) {
       const msg = await linkRes.text().catch(() => "");
       console.error("[Step2] /login-code failed:", linkRes.status, msg);
       throw new Error(`Backend code exchange failed (${linkRes.status}). ${msg}`.trim());
     }
- 
+
     const data = (await linkRes.json().catch(() => ({}))) as IntegrationStatus & {
       accessToken?: string | null;
     };
- 
+
     const durableToken =
       typeof data?.sessionToken === "string" && data.sessionToken.trim()
         ? data.sessionToken.trim()
         : "";
- 
+
     if (!durableToken) {
       throw new Error("Backend did not return an AdhanCast session token.");
     }
- 
+
     if (!durableToken.startsWith(APP_SESSION_PREFIX)) {
       throw new Error("Backend returned an invalid AdhanCast session token.");
     }
- 
+
     setStoredAmazonToken(durableToken);
     setTokens((prev) => ({ ...prev, alexa: durableToken }));
     markConnected("alexa");
     setServerStatus(data);
     setInfo("Amazon account connected. You can now enable the Alexa skill from this screen.");
- 
+
     void refreshServerStatus();
     void refreshAlexaLinkStatus();
- 
+
     return { data, durableToken };
   }
- 
+
   async function handleNativeAppCallback(rawUrl: string): Promise<boolean> {
     const parsed = parseNativeAppCallbackUrl(rawUrl);
     if (!parsed) return false;
- 
+
     try {
       await Browser.close();
     } catch {
       // Browser may already be closed.
     }
- 
+
     if (parsed.error) {
       setError(parsed.error);
       setLoadingKey(null);
       return true;
     }
- 
+
     if (parsed.code) {
       setError(
         "Android login returned an authorization code instead of a session token. Rebuild/deploy the Step 2 web callback so it exchanges the code first."
@@ -442,29 +442,29 @@ export default function Step2ConnectAccounts({
       setLoadingKey(null);
       return true;
     }
- 
+
     if (!parsed.sessionToken) {
       setError("Android login returned without a session token.");
       setLoadingKey(null);
       return true;
     }
- 
+
     if (!parsed.sessionToken.startsWith(APP_SESSION_PREFIX)) {
       setError("Android login returned an invalid AdhanCast session token.");
       setLoadingKey(null);
       return true;
     }
- 
+
     setStoredAmazonToken(parsed.sessionToken);
     setTokens((prev) => ({ ...prev, alexa: parsed.sessionToken || "" }));
     markConnected("alexa");
     setInfo("Amazon account connected in the Android app.");
     setLoadingKey(null);
- 
+
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
     return true;
   }
- 
+
   async function finalizeAlexaSkillLink(code: string, state: string) {
     const pending = readPendingAlexaLink();
     if (!pending || pending.state !== state) {
@@ -474,9 +474,9 @@ export default function Step2ConnectAccounts({
         "Alexa returned to the app, but the linking session could not be verified."
       );
     }
- 
+
     cleanCurrentUrl();
- 
+
     const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/complete", {
       method: "POST",
       body: JSON.stringify({
@@ -486,7 +486,7 @@ export default function Step2ConnectAccounts({
         redirectUri: pending.redirectUri,
       }),
     });
- 
+
     if (!resp.ok) {
       let msg = "";
       try {
@@ -498,24 +498,33 @@ export default function Step2ConnectAccounts({
       clearPendingAlexaLink();
       throw new Error(`Alexa linking failed (${resp.status}). ${msg}`.trim());
     }
- 
+
+    // Extract the real invocation name the backend uses so the hint is accurate.
+    const completeData = await resp.json().catch(() => ({})) as { invocationName?: unknown };
+    const invocationName =
+      typeof completeData?.invocationName === "string" &&
+      completeData.invocationName.trim()
+        ? completeData.invocationName.trim()
+        : "adhan cast";
+
     clearPendingAlexaLink();
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
     setInfo("Alexa skill enabled and account linking completed.");
     setDeviceHint(
-      "Devices appear in Step 5 after the linked Alexa device talks to the skill once. Say: Alexa, open AdhanCast. Then say play Fajr adhan."
+      `Devices appear in Step 5 after a linked Echo device talks to the skill once. ` +
+      `Say: Alexa, open ${invocationName}. Then say: play Fajr adhan.`
     );
   }
- 
+
   useEffect(() => {
     const boot = async () => {
       const authParams = parseAuthParamsFromCurrentUrl();
       const pendingAlexaLink = readPendingAlexaLink();
- 
+
       try {
         if (authParams.error) {
           cleanCurrentUrl();
- 
+
           if (authParams.state?.startsWith(NATIVE_LOGIN_STATE_PREFIX)) {
             window.location.replace(
               buildNativeAppCallbackUrl({
@@ -524,15 +533,15 @@ export default function Step2ConnectAccounts({
             );
             return;
           }
- 
+
           if (pendingAlexaLink?.state === authParams.state) {
             clearPendingAlexaLink();
           }
- 
+
           setError(authParams.errorDescription || authParams.error);
           return;
         }
- 
+
         if (authParams.code && authParams.state?.startsWith(NATIVE_LOGIN_STATE_PREFIX)) {
           setLoadingKey("alexa");
           setError(null);
@@ -545,7 +554,7 @@ export default function Step2ConnectAccounts({
           );
           return;
         }
- 
+
         if (authParams.code && authParams.state?.startsWith(AMAZON_LOGIN_STATE_PREFIX)) {
           setLoadingKey("alexa");
           setError(null);
@@ -553,7 +562,7 @@ export default function Step2ConnectAccounts({
           cleanCurrentUrl();
           return;
         }
- 
+
         if (authParams.code && pendingAlexaLink?.state === authParams.state) {
           if (
             authParams.scope &&
@@ -563,13 +572,13 @@ export default function Step2ConnectAccounts({
               `Alexa returned the wrong scope (${authParams.scope}). The linking request must use alexa::skills:account_linking.`
             );
           }
- 
+
           setLoadingKey("alexa");
           setError(null);
           await finalizeAlexaSkillLink(authParams.code, authParams.state || "");
           return;
         }
- 
+
         if (authParams.accessToken) {
           setLoadingKey("alexa");
           setError(null);
@@ -577,7 +586,7 @@ export default function Step2ConnectAccounts({
           cleanCurrentUrl();
           return;
         }
- 
+
         const restoredToken = restoreAmazonTokenFromUrl();
         if (restoredToken && !restoredToken.startsWith(APP_SESSION_PREFIX)) {
           // Only send raw Amazon access tokens to the old /login endpoint.
@@ -599,15 +608,15 @@ export default function Step2ConnectAccounts({
         await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
       }
     };
- 
+
     void boot();
   }, []);
- 
+
   useEffect(() => {
     if (!isNativeRuntime()) return;
- 
+
     let removeListener: (() => void) | null = null;
- 
+
     void CapacitorApp.addListener("appUrlOpen", ({ url }) => {
       if (!url) return;
       void handleNativeAppCallback(url);
@@ -616,27 +625,27 @@ export default function Step2ConnectAccounts({
         void listener.remove();
       };
     });
- 
+
     void CapacitorApp.getLaunchUrl().then((result) => {
       if (result?.url) {
         void handleNativeAppCallback(result.url);
       }
     });
- 
+
     return () => {
       if (removeListener) removeListener();
     };
   }, []);
- 
+
   async function connectAlexa() {
     setError(null);
     setInfo(null);
     setLoadingKey("alexa");
- 
+
     try {
       const state = `${isNativeRuntime() ? NATIVE_LOGIN_STATE_PREFIX : AMAZON_LOGIN_STATE_PREFIX}${Date.now()}`;
       const authorizationUrl = buildAmazonLoginUrl(state);
- 
+
       if (isNativeRuntime()) {
         setInfo(
           "Opening Amazon sign-in. After approval, AdhanCast will return to the app automatically."
@@ -648,70 +657,70 @@ export default function Step2ConnectAccounts({
         setLoadingKey(null);
         return;
       }
- 
+
       window.location.assign(authorizationUrl);
     } catch (e: unknown) {
       setLoadingKey(null);
       setError(e instanceof Error ? e.message : "Alexa connection failed.");
     }
   }
- 
+
   async function startAlexaSkillLinking() {
     setError(null);
     setInfo(null);
     setLoadingKey("alexa");
- 
+
     if (!getStoredAmazonToken()) {
       setLoadingKey(null);
       setError("Connect your Amazon account first.");
       return;
     }
- 
+
     try {
       const redirectUri = currentAlexaLinkUrl();
- 
+
       const resp = await apiFetchWithAmazonRepair("/api/alexa/account-linking/start", {
         method: "POST",
         body: JSON.stringify({ redirectUri }),
       });
- 
+
       if (!resp.ok) {
         const msg = await resp.text().catch(() => "");
         throw new Error(`Could not start Alexa linking (${resp.status}). ${msg}`.trim());
       }
- 
+
       const data = (await resp.json()) as AlexaLinkStartResponse;
- 
+
       storePendingAlexaLink({
         state: data.state,
         codeVerifier: data.codeVerifier,
         redirectUri: data.redirectUri,
         startedAt: Date.now(),
       });
- 
+
       window.location.assign(data.authorizationUrl);
     } catch (e: unknown) {
       setLoadingKey(null);
       setError(e instanceof Error ? e.message : "Could not start Alexa linking.");
     }
   }
- 
+
   async function disconnectAlexa() {
     setError(null);
     setInfo(null);
     setLoadingKey("alexa");
- 
+
     try {
       await apiFetchWithAmazonRepair("/api/integrations/alexa/disconnect", {
         method: "POST",
       }).catch(() => undefined);
- 
+
       try {
         window.amazon?.Login?.logout?.();
       } catch {
         // ignore Amazon SDK logout errors
       }
- 
+
       clearStoredAmazonToken();
       clearPendingAlexaLink();
       markDisconnected("alexa");
@@ -722,32 +731,32 @@ export default function Step2ConnectAccounts({
       setLoadingKey(null);
     }
   }
- 
+
   async function handleConnect(key: PlatformKey) {
     if (key !== "alexa") {
       setError("Google Assistant is coming soon.");
       return;
     }
- 
+
     if (!serverStatus?.alexa?.connected) {
       await connectAlexa();
       return;
     }
- 
+
     if (serverStatus?.alexa?.skillLinked || alexaStatus?.accountLinkStatus === "LINKED") {
       setInfo("Alexa skill is already linked for this account.");
       return;
     }
- 
+
     await startAlexaSkillLinking();
   }
- 
+
   async function handleDisconnect(key: PlatformKey) {
     if (key === "alexa") {
       await disconnectAlexa();
     }
   }
- 
+
   function handleContinue() {
     setOnboardingData?.({
       ...(onboardingData || {}),
@@ -756,14 +765,14 @@ export default function Step2ConnectAccounts({
     });
     navigate("/onboarding/step3");
   }
- 
+
   const amazonConnected = !!serverStatus?.alexa?.connected || isConnected("alexa");
   const skillLinked =
     !!serverStatus?.alexa?.skillLinked ||
     alexaStatus?.accountLinkStatus === "LINKED" ||
     alexaStatus?.linked === true;
   const continueEnabled = amazonConnected;
- 
+
   return (
     <div className="min-h-screen bg-slate-950 overscroll-none">
       {/* Sticky Header */}
@@ -778,7 +787,7 @@ export default function Step2ConnectAccounts({
           </div>
         </div>
       </div>
- 
+
       <div
         className="max-w-4xl mx-auto px-4 py-8 md:py-12"
         style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
@@ -792,7 +801,7 @@ export default function Step2ConnectAccounts({
             Sign in with Amazon &bull; Enable Alexa skill
           </p>
         </div>
- 
+
         {/* Main Content Card */}
         <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
           {/* Alerts */}
@@ -801,13 +810,13 @@ export default function Step2ConnectAccounts({
               <p className="text-red-300 text-sm leading-relaxed">{error}</p>
             </div>
           )}
- 
+
           {info && (
             <div className="mb-6 rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-5 py-4">
               <p className="text-emerald-300 text-sm leading-relaxed">{info}</p>
             </div>
           )}
- 
+
           {/* Platform Cards */}
           <div className="space-y-4 mb-8">
             {platforms.map((platform) => {
@@ -816,7 +825,7 @@ export default function Step2ConnectAccounts({
                 platform.key === "alexa" ? !!serverStatus?.alexa?.connected : false;
               const linked = platform.key === "alexa" ? skillLinked : false;
               const disabled = platform.key !== "alexa";
- 
+
               return (
                 <div
                   key={platform.key}
@@ -843,7 +852,7 @@ export default function Step2ConnectAccounts({
                       >
                         <platform.Icon className="h-9 w-9" />
                       </div>
- 
+
                       <div className="space-y-2.5 flex-1 min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="font-semibold text-white text-lg">
@@ -862,11 +871,11 @@ export default function Step2ConnectAccounts({
                             </Badge>
                           )}
                         </div>
- 
+
                         <div className="text-sm text-slate-400 leading-relaxed">
                           {platform.desc}
                         </div>
- 
+
                         {/* Connection Status Indicators */}
                         {platform.key === "alexa" && serverConnected && (
                           <div className="flex flex-wrap items-center gap-3 pt-1">
@@ -891,7 +900,7 @@ export default function Step2ConnectAccounts({
                             )}
                           </div>
                         )}
- 
+
                         {/* Technical Details — collapsible */}
                         {platform.key === "alexa" && serverConnected && (
                           <details className="text-xs text-slate-500 pt-1">
@@ -928,7 +937,7 @@ export default function Step2ConnectAccounts({
                         )}
                       </div>
                     </div>
- 
+
                     {/* Action Buttons */}
                     <div className="flex flex-wrap items-center gap-3 md:flex-col md:items-stretch md:min-w-[160px]">
                       {platform.key === "alexa" ? (
@@ -992,7 +1001,7 @@ export default function Step2ConnectAccounts({
               );
             })}
           </div>
- 
+
           {/* Guidance Box */}
           <div className="mb-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
             <div className="flex items-start gap-4">
@@ -1030,7 +1039,7 @@ export default function Step2ConnectAccounts({
               </div>
             </div>
           </div>
- 
+
           {/* Device Hint — shown after skill linking */}
           {(deviceHint || skillLinked) && (
             <div className="mb-6 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-100">
@@ -1038,7 +1047,7 @@ export default function Step2ConnectAccounts({
                 "After linking, use the skill once from each Alexa device you want to appear in Step 5. Saying 'Alexa, open AdhanCast' and then 'play Fajr adhan' is enough."}
             </div>
           )}
- 
+
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3">
             <Button
@@ -1048,7 +1057,7 @@ export default function Step2ConnectAccounts({
             >
               Back
             </Button>
- 
+
             <Button
               onClick={handleContinue}
               disabled={!continueEnabled}

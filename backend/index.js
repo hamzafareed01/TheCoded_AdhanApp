@@ -3742,6 +3742,9 @@ async function handleSaveUserSettings(req, res) {
 
 app.put("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 app.post("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
+// PATCH is identical to PUT/POST — handleSaveUserSettings already does partial updates
+// via COALESCE (only provided fields are written; everything else keeps its stored value).
+app.patch("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 
 // Prayer times
 app.get(
@@ -3929,6 +3932,62 @@ app.post(
       `);
 
     res.json({ ok: true });
+  })
+);
+
+// Alexa endpoints — returns the user's registered Alexa devices formatted as
+// Smart Home–style endpoint objects so the AlexaSetup page can show playback
+// target names. selectedEndpointIds mirrors the selectedAlexaDeviceIds list.
+app.get(
+  "/api/alexa/endpoints",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const amazonUserId = req.amazonProfile.user_id;
+    const userId = await ensureUser(pool, amazonUserId);
+
+    const [devicesResult, profileResult] = await Promise.all([
+      pool
+        .request()
+        .input("user_id", sql.UniqueIdentifier, userId)
+        .query(`
+          SELECT device_id AS id, device_name AS name, platform
+          FROM dbo.devices
+          WHERE user_id = @user_id AND platform = 'alexa'
+          ORDER BY device_name
+        `),
+      pool
+        .request()
+        .input("user_id", sql.UniqueIdentifier, userId)
+        .query(`
+          SELECT selected_alexa_device_ids_json
+          FROM dbo.user_profiles
+          WHERE user_id = @user_id
+        `),
+    ]);
+
+    let selectedEndpointIds = [];
+    try {
+      const raw =
+        profileResult.recordset[0]?.selected_alexa_device_ids_json;
+      const parsed = raw ? JSON.parse(raw) : [];
+      selectedEndpointIds = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      selectedEndpointIds = [];
+    }
+
+    res.json({
+      endpoints: devicesResult.recordset.map((d) => ({
+        endpointId: d.id,
+        friendlyName: d.name,
+        endpointKind: "ALEXA_DEVICE",
+        supportsFireTv:
+          typeof d.name === "string" &&
+          /fire\s*tv|firetv/i.test(d.name),
+      })),
+      selectedEndpointIds,
+      prayerTargetEndpointMap: {},
+    });
   })
 );
 
