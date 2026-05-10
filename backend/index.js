@@ -46,7 +46,6 @@ app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }
 // -----------------------------
 // Constants
 // -----------------------------
-// re-trigger deploy for update....delete later
 const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
@@ -3112,6 +3111,88 @@ app.post(
 
       throw err;
     }
+  })
+);
+
+// device-seen — called by the skill Lambda on every launch/intent so that
+// Echo devices auto-register the first time a user speaks to the skill.
+// This is what makes devices appear in the Step 5 device list without the
+// user having to do anything extra. Uses requireAlexaSkillAuth (skill OAuth
+// token) rather than requireAmazonAuth (adhapp_ session token).
+app.post(
+  "/api/alexa/skill/device-seen",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const userId = req.skillAuth.userId;
+
+    const deviceId = String(req.body?.deviceId || "").trim();
+    const alexaUserId = String(req.body?.alexaUserId || "").trim();
+    const locale = String(req.body?.locale || "en-US").trim();
+    const requestId = req.body?.requestId ? String(req.body.requestId) : null;
+
+    // Always track that the skill user was seen (updates last-used timestamp).
+    if (alexaUserId) {
+      await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
+    }
+
+    if (!deviceId) {
+      return res.json({
+        ok: true,
+        registered: false,
+        reason: "No deviceId provided.",
+        registrationHint: null,
+      });
+    }
+
+    // Build a readable name from the locale tag (e.g. "en-US" → "Echo (en-US)").
+    // The Alexa app doesn't expose a friendly name through the skill event;
+    // users can rename devices in the AdhanCast app later.
+    const deviceName = `Echo Device (${locale})`;
+
+    // Upsert the device. WHEN MATCHED we intentionally do NOT overwrite an
+    // existing custom name the user may have set through the app.
+    await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("device_id", sql.NVarChar(255), deviceId)
+      .input("device_name", sql.NVarChar(255), deviceName)
+      .query(`
+        MERGE dbo.devices AS target
+        USING (
+          SELECT @user_id AS user_id, 'alexa' AS platform, @device_id AS device_id
+        ) AS src
+        ON  target.user_id   = src.user_id
+        AND target.platform  = src.platform
+        AND target.device_id = src.device_id
+        WHEN MATCHED THEN
+          UPDATE SET updated_at = SYSUTCDATETIME()
+        WHEN NOT MATCHED THEN
+          INSERT (user_id, platform, device_id, device_name)
+          VALUES (@user_id, 'alexa', @device_id, @device_name);
+      `);
+
+    await logAlexaDispatch(pool, {
+      userId,
+      requestId,
+      prayerName: null,
+      deviceId,
+      triggerSource: "skill-seen",
+      status: "registered",
+      message: `Device seen and registered: ${deviceId}`,
+      payload: { locale, alexaUserId },
+    });
+
+    const invocationName = getSkillInvocationName();
+
+    res.json({
+      ok: true,
+      registered: true,
+      registrationHint: {
+        voiceCommand: `Alexa, open ${invocationName} and play Fajr adhan`,
+        note: "This device is now registered and will appear in your AdhanCast app.",
+      },
+    });
   })
 );
 
