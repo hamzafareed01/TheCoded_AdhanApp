@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { ArrowLeft, Save, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Save, CheckCircle2, MoonStar, BellOff, Clock } from "lucide-react";
 import {
   apiFetch,
   getStoredAmazonToken,
@@ -31,6 +31,13 @@ type Offsets = Record<PrayerName, number>;
 type AfterAdhan = {
   type: AfterType;
   payload: JsonRecord | null;
+};
+ 
+type QuietHours = {
+  enabled: boolean;
+  from: string;
+  to: string;
+  muteFajr: boolean;
 };
  
 type PrayerConfig = {
@@ -65,6 +72,7 @@ type UserSettings = {
   accountEnabled: boolean;
   globalOffsets: Offsets;
   prayerConfigs: PrayerConfig[];
+  quietHours: QuietHours;
 };
  
 type Reciter = {
@@ -340,6 +348,15 @@ function normalizeSettings(payload: unknown): UserSettings {
       isha: asNumber(offsetsSource.isha) ?? 0,
     },
     prayerConfigs: normalizePrayerConfigs(src.prayerConfigs),
+    quietHours: (() => {
+      const qh = isRecord(src.quietHours) ? src.quietHours : {};
+      return {
+        enabled: asBoolean(qh.enabled) ?? false,
+        from: (asString(qh.from) ?? "22:00").slice(0, 5),
+        to: (asString(qh.to) ?? "07:00").slice(0, 5),
+        muteFajr: asBoolean(qh.muteFajr) ?? false,
+      };
+    })(),
   };
 }
  
@@ -496,6 +513,16 @@ function isAfterAdhanDua(dua: DuaItem) {
   const tags = Array.isArray(dua.tags) ? dua.tags.join(" ").toLowerCase() : "";
   const title = dua.title.toLowerCase();
   return title.includes("after adhan") || tags.includes("after adhan") || tags.includes("adhan");
+}
+ 
+function formatTime12(hhmm: string): string {
+  const [hStr, mStr] = (hhmm || "").split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (isNaN(h) || isNaN(m)) return hhmm;
+  const period = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 || 12;
+  return h12 + ":" + String(m).padStart(2, "0") + " " + period;
 }
  
 export default function Settings({
@@ -738,6 +765,12 @@ export default function Settings({
         longitude: syncedSettings.longitude,
         useMosqueLocation: syncedSettings.useMosqueLocation,
         accountEnabled: syncedSettings.accountEnabled,
+        quietHours: {
+          enabled: syncedSettings.quietHours.enabled,
+          from: syncedSettings.quietHours.from,
+          to: syncedSettings.quietHours.to,
+          muteFajr: syncedSettings.quietHours.muteFajr,
+        },
         selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
         globalOffsets: sanitizedGlobalOffsets,
         prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
@@ -939,6 +972,12 @@ export default function Settings({
                 className="flex-shrink-0 data-[state=active]:bg-emerald-600 data-[state=active]:text-white rounded-lg transition-all px-4 py-2 min-h-[44px] touch-manipulation"
               >
                 Tilawat Schedules
+              </TabsTrigger>
+              <TabsTrigger
+                value="quiet"
+                className="flex-shrink-0 data-[state=active]:bg-emerald-600 data-[state=active]:text-white rounded-lg transition-all px-4 py-2 min-h-[44px] touch-manipulation"
+              >
+                Quiet Hours
               </TabsTrigger>
             </TabsList>
  
@@ -1691,6 +1730,115 @@ export default function Settings({
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+            </TabsContent>
+ 
+            {/* Quiet Hours Tab */}
+            <TabsContent value="quiet" className="mt-0">
+              <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10 space-y-7">
+                <div className="flex items-start gap-3 mb-2">
+                  <div className="rounded-xl bg-emerald-500/10 p-2.5">
+                    <MoonStar className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-white text-lg font-semibold mb-1">Global quiet hours</h2>
+                    <p className="text-slate-400 text-sm leading-relaxed">
+                      Silence all Adhan playback on your Alexa devices during a set window every day.
+                      Per-prayer overrides are configured in the Per-Prayer Adhan tab.
+                    </p>
+                  </div>
+                </div>
+ 
+                {/* Master Toggle */}
+                <div className="p-6 rounded-2xl border-2 border-slate-700/60 bg-slate-800/30">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="text-white font-semibold mb-1">Enable quiet hours</div>
+                      <p className="text-slate-400 text-sm leading-relaxed">
+                        All prayers will be silenced during the window below
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.quietHours.enabled}
+                      onCheckedChange={(v: boolean) =>
+                        updateField("quietHours", { ...settings.quietHours, enabled: v })
+                      }
+                      className="data-[state=checked]:bg-emerald-500"
+                    />
+                  </div>
+                </div>
+ 
+                {/* Time Range */}
+                <div className={`grid grid-cols-2 gap-4 transition-opacity ${settings.quietHours.enabled ? "opacity-100" : "opacity-40 pointer-events-none"}`}>
+                  <div>
+                    <Label className="text-slate-300 text-sm font-medium mb-2 block">
+                      <Clock className="w-3.5 h-3.5 inline mr-1.5 text-slate-400" aria-hidden="true" />
+                      Silence from
+                    </Label>
+                    <input
+                      type="time"
+                      value={settings.quietHours.from}
+                      aria-label="Silence from time"
+                      title="Silence from time"
+                      onChange={(e) =>
+                        updateField("quietHours", { ...settings.quietHours, from: e.target.value })
+                      }
+                      className="w-full bg-slate-800/60 border border-slate-700/60 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 touch-manipulation"
+                    />
+                    <p className="text-slate-500 text-xs mt-1.5">
+                      {formatTime12(settings.quietHours.from)}
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-slate-300 text-sm font-medium mb-2 block">
+                      <Clock className="w-3.5 h-3.5 inline mr-1.5 text-slate-400" aria-hidden="true" />
+                      Resume at
+                    </Label>
+                    <input
+                      type="time"
+                      value={settings.quietHours.to}
+                      aria-label="Resume at time"
+                      title="Resume at time"
+                      onChange={(e) =>
+                        updateField("quietHours", { ...settings.quietHours, to: e.target.value })
+                      }
+                      className="w-full bg-slate-800/60 border border-slate-700/60 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 touch-manipulation"
+                    />
+                    <p className="text-slate-500 text-xs mt-1.5">
+                      {formatTime12(settings.quietHours.to)}
+                    </p>
+                  </div>
+                </div>
+ 
+                {/* Mute Fajr */}
+                <div className={`transition-opacity ${settings.quietHours.enabled ? "opacity-100" : "opacity-40 pointer-events-none"}`}>
+                  <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-slate-800/40 border border-slate-700/50">
+                    <div className="flex items-start gap-3">
+                      <BellOff className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="text-white text-sm font-medium">Also silence Fajr</div>
+                        <p className="text-slate-400 text-xs leading-relaxed mt-0.5">
+                          Fajr often falls inside quiet hours. Enable this to silence it too, or leave off to always play Fajr regardless.
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={settings.quietHours.muteFajr}
+                      onCheckedChange={(v: boolean) =>
+                        updateField("quietHours", { ...settings.quietHours, muteFajr: v })
+                      }
+                      className="data-[state=checked]:bg-amber-500"
+                    />
+                  </div>
+                </div>
+ 
+                {/* Info */}
+                <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+                  <p className="text-slate-400 text-xs leading-relaxed">
+                    The window can span midnight — for example, 10:00 PM to 7:00 AM works as expected.
+                    Hit <strong className="text-slate-300">Save all settings</strong> to apply changes.
+                  </p>
                 </div>
               </div>
             </TabsContent>
