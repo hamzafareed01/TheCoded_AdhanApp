@@ -29,4 +29,9 @@ backend-deploy.zip
 
 backend/_deploy/
 deploy/
-backend_deploy.zip
+backend_deploy.zipadhancast-release.jks
+keystore-base64.txt
+*.jks
+backend/frontend/android/.idea/
+backend/frontend/android/capacitor-cordova-android-plugins/
+backend/frontend/android/app/src/main/assets/
