@@ -283,6 +283,36 @@ function isAfterAdhanDua(dua: DuaOption) {
   );
 }
  
+function getDeviceIcon(name: string): string {
+  const n = (name || "").toLowerCase();
+  if (n.includes("fire tv") || n.includes("firetv") || n.includes("fire stick") || n.includes("firestick"))
+    return "📺";
+  if (n.includes("fire tablet") || n.includes("kindle"))
+    return "📱";
+  if (n.includes("show"))
+    return "🖥️";
+  if (n.includes("studio"))
+    return "🔊";
+  if (n.includes("dot"))
+    return "⚫";
+  if (n.includes("echo") || n.includes("alexa"))
+    return "🔵";
+  return "🔊";
+}
+ 
+function getDeviceLabel(name: string): string {
+  const n = (name || "").toLowerCase();
+  if (n.includes("fire tv") || n.includes("firetv"))  return "Fire TV";
+  if (n.includes("fire stick") || n.includes("firestick")) return "Fire Stick";
+  if (n.includes("fire tablet"))  return "Fire Tablet";
+  if (n.includes("echo show"))    return "Echo Show";
+  if (n.includes("echo studio"))  return "Echo Studio";
+  if (n.includes("echo dot"))     return "Echo Dot";
+  if (n.includes("echo"))         return "Echo";
+  if (n.includes("alexa"))        return "Alexa Device";
+  return "Alexa Device";
+}
+ 
 export default function Step5DevicesAdhan({
   onboardingData,
   setOnboardingData,
@@ -734,10 +764,9 @@ export default function Step5DevicesAdhan({
                           <div className="text-white font-medium truncate">
                             {device.name}
                           </div>
-                          <div className="text-slate-400 text-sm">
-                            {device.platform
-                              ? device.platform.toUpperCase()
-                              : "ALEXA"}
+                          <div className="text-slate-400 text-sm flex items-center gap-1.5">
+                            {getDeviceIcon(device.name)}
+                            {getDeviceLabel(device.name)}
                           </div>
                         </div>
                         {checked && (

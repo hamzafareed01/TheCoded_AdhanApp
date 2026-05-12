@@ -5,7 +5,7 @@ const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-
+ 
 dotenv.config();
 const { getPool, sql } = require("./db/sql");
 const {
@@ -34,7 +34,7 @@ const {
   handleSmartHomeDirective,
   loadSmartHomeContext,
 } = require("./services/alexaSmartHome");
-
+ 
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -42,7 +42,7 @@ app.use(helmet());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false }));
 app.use("/audio", express.static(path.join(__dirname, "audio"), { maxAge: "1h" }));
-
+ 
 // -----------------------------
 // Constants
 // -----------------------------
@@ -50,9 +50,9 @@ const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 const AMAZON_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
 const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
 const UPSTREAM_TIMEOUT_MS = 15000;
-
+ 
 const HADITH_OF_DAY_CACHE = new Map();
-
+ 
 const SUNNI_HADITH_POOL = [
   {
     id: "sunni-1",
@@ -109,11 +109,11 @@ const SUNNI_HADITH_POOL = [
     textArabic: null,
   },
 ];
-
+ 
 function normalizeHadithSect(value) {
   return String(value || "").trim().toUpperCase() === "SHIA" ? "SHIA" : "SUNNI";
 }
-
+ 
 function getUtcDateKey(date = new Date()) {
   return new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
@@ -121,19 +121,19 @@ function getUtcDateKey(date = new Date()) {
     .toISOString()
     .slice(0, 10);
 }
-
+ 
 function getUtcDayNumber(date = new Date()) {
   return Math.floor(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) /
     86400000
   );
 }
-
+ 
 function buildSunniHadithOfDay(date = new Date()) {
   const dateKey = getUtcDateKey(date);
   const index = getUtcDayNumber(date) % SUNNI_HADITH_POOL.length;
   const item = SUNNI_HADITH_POOL[index];
-
+ 
   return {
     ...item,
     sect: "SUNNI",
@@ -141,15 +141,15 @@ function buildSunniHadithOfDay(date = new Date()) {
     dateKey,
   };
 }
-
+ 
 async function fetchShiaHadithOfDay(date = new Date()) {
   const dateKey = getUtcDateKey(date);
   const cacheKey = `SHIA:${dateKey}`;
-
+ 
   if (HADITH_OF_DAY_CACHE.has(cacheKey)) {
     return HADITH_OF_DAY_CACHE.get(cacheKey);
   }
-
+ 
   const resp = await fetchWithTimeout(
     "https://www.thaqalayn-api.net/api/v2/random",
     {
@@ -159,12 +159,12 @@ async function fetchShiaHadithOfDay(date = new Date()) {
     },
     15000
   );
-
+ 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`Shia hadith upstream failed (${resp.status}): ${text}`);
   }
-
+ 
   const data = await resp.json();
   const payload = {
     id: data?._id || `shia-${dateKey}`,
@@ -181,11 +181,11 @@ async function fetchShiaHadithOfDay(date = new Date()) {
     source: data?.URL || "https://www.thaqalayn-api.net/api/v2/random",
     dateKey,
   };
-
+ 
   HADITH_OF_DAY_CACHE.set(cacheKey, payload);
   return payload;
 }
-
+ 
 function buildShiaFallbackHadith(date = new Date()) {
   return {
     id: `shia-fallback-${getUtcDateKey(date)}`,
@@ -200,10 +200,10 @@ function buildShiaFallbackHadith(date = new Date()) {
     dateKey: getUtcDateKey(date),
   };
 }
-
+ 
 async function getHadithOfDay(sectValue, date = new Date()) {
   const sect = normalizeHadithSect(sectValue);
-
+ 
   if (sect === "SHIA") {
     try {
       return await fetchShiaHadithOfDay(date);
@@ -212,57 +212,57 @@ async function getHadithOfDay(sectValue, date = new Date()) {
       return buildShiaFallbackHadith(date);
     }
   }
-
+ 
   return buildSunniHadithOfDay(date);
 }
-
+ 
 const tokenCache = new Map(); // token -> { profile, exp }
-
+ 
 const regionDisplay =
   typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function"
     ? new Intl.DisplayNames(["en"], { type: "region" })
     : null;
-
+ 
 // -----------------------------
 // CORS
 // -----------------------------
 function normalizeOrigin(value) {
   const raw = String(value || "").trim().replace(/\/+$/, "");
   if (!raw) return "";
-
+ 
   try {
     return new URL(raw).origin;
   } catch {
     return "";
   }
 }
-
+ 
 const corsOriginsRaw = process.env.CORS_ORIGINS || "";
 const allowedOrigins = corsOriginsRaw
   .split(",")
   .map(normalizeOrigin)
   .filter(Boolean);
-
+ 
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     if (allowedOrigins.length === 0) return cb(null, true);
-
+ 
     const normalizedOrigin = normalizeOrigin(origin);
     if (normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) {
       return cb(null, true);
     }
-
+ 
     return cb(new Error("CORS blocked for origin: " + origin), false);
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204,
 };
-
+ 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
-
+ 
 // -----------------------------
 // Generic helpers
 // -----------------------------
@@ -271,93 +271,93 @@ function asyncHandler(fn) {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 }
-
+ 
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
-
+ 
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
+ 
 function readJsonFile(relativePath) {
   const full = path.join(__dirname, relativePath);
   const raw = fs.readFileSync(full, "utf8");
   return JSON.parse(raw);
 }
-
+ 
 function normalizeQueryText(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
-
+ 
 function getBearerToken(req) {
   const auth = req.headers.authorization || "";
   const match = auth.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : "";
 }
-
+ 
 function getAmazonTokenFromRequest(req) {
   return (
     getBearerToken(req) ||
     String(req.body?.accessToken || req.body?.access_token || "").trim()
   );
 }
-
+ 
 function cleanupExpiredTokenCache() {
   const now = Date.now();
   for (const [token, value] of tokenCache.entries()) {
     if (!value || value.exp <= now) tokenCache.delete(token);
   }
 }
-
+ 
 function parseOptionalNumber(value) {
   if (value === undefined || value === null || value === "") return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
 }
-
+ 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
 }
-
+ 
 function normalizeTimeString(value, fallback) {
   const raw = String(value || "").trim();
-
+ 
   if (/^\d{2}:\d{2}:\d{2}$/.test(raw)) {
     return raw;
   }
-
+ 
   if (/^\d{2}:\d{2}$/.test(raw)) {
     return `${raw}:00`;
   }
-
+ 
   const fb = String(fallback || "").trim();
   if (/^\d{2}:\d{2}:\d{2}$/.test(fb)) {
     return fb;
   }
-
+ 
   if (/^\d{2}:\d{2}$/.test(fb)) {
     return `${fb}:00`;
   }
-
+ 
   return "22:00:00";
 }
-
-
+ 
+ 
 function toSqlTime(value, fallback = "00:00:00") {
   const normalized = normalizeTimeString(value, fallback);
   const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})$/);
-
+ 
   if (!match) {
     throw new Error(`Invalid time value: ${value}`);
   }
-
+ 
   const hh = Number(match[1]);
   const mm = Number(match[2]);
   const ss = Number(match[3]);
-
+ 
   if (
     !Number.isInteger(hh) ||
     !Number.isInteger(mm) ||
@@ -371,89 +371,89 @@ function toSqlTime(value, fallback = "00:00:00") {
   ) {
     throw new Error(`Invalid time value: ${normalized}`);
   }
-
+ 
   const d = new Date(Date.UTC(1970, 0, 1, hh, mm, ss, 0));
   return d;
 }
-
-
+ 
+ 
 function getRegionCode(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
   return /^[A-Za-z]{2}$/.test(raw) ? raw.toUpperCase() : null;
 }
-
+ 
 function normalizeStoredCountry(value, fallback = "US") {
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;
   const regionCode = getRegionCode(raw);
   return regionCode || raw;
 }
-
+ 
 function countryLabel(value, fallback = "United States") {
   const raw = String(value || "").trim();
   if (!raw) return fallback;
-
+ 
   const regionCode = getRegionCode(raw);
   if (regionCode && regionDisplay) {
     return regionDisplay.of(regionCode) || regionCode;
   }
-
+ 
   return raw;
 }
-
+ 
 function buildGeocodeQuery(cityOrQuery, countryValue) {
   const q = normalizeQueryText(cityOrQuery);
   const countryText = countryLabel(countryValue, "");
-
+ 
   if (!q) return "";
   if (!countryText) return q;
-
+ 
   const lowerQ = q.toLowerCase();
   const lowerCountry = countryText.toLowerCase();
-
+ 
   if (lowerQ.includes(lowerCountry)) return q;
   return `${q}, ${countryText}`;
 }
-
+ 
 function resolveRequestedSect(value) {
   const raw = String(value || "").trim().toUpperCase();
   if (raw === "SHIA") return "SHIA";
   if (raw === "SUNNI") return "SUNNI";
   return "ALL";
 }
-
+ 
 function normalizeMosqueSearchText(query, countryValue, sectHint = "") {
   const q = normalizeQueryText(query);
   const countryText = countryLabel(countryValue, "");
   const sect = resolveRequestedSect(sectHint);
-
+ 
   const scopePrefix =
     sect === "SHIA"
       ? "shia mosque"
       : sect === "SUNNI"
         ? "sunni mosque"
         : "mosque";
-
+ 
   if (!q) {
     return countryText ? `${scopePrefix} in ${countryText}` : scopePrefix;
   }
-
+ 
   if (/mosque|masjid|imambargah|imam bargah|hussainia|husayniyah/i.test(q)) {
     if (!countryText) return q;
     return q.toLowerCase().includes(countryText.toLowerCase())
       ? q
       : `${q}, ${countryText}`;
   }
-
+ 
   if (!countryText) return `${scopePrefix} in ${q}`;
   return `${scopePrefix} in ${q}, ${countryText}`;
 }
-
+ 
 function inferMosqueSectFromText(parts) {
   const haystack = parts.map((part) => String(part || "").toLowerCase()).join(" ");
   if (!haystack) return "UNKNOWN";
-
+ 
   const shiaSignals = [
     /\bshia\b/,
     /\bshi'a\b/,
@@ -471,7 +471,7 @@ function inferMosqueSectFromText(parts) {
     /\babbas\b/,
     /\bmahdi\b/,
   ];
-
+ 
   const sunniSignals = [
     /\bsunni\b/,
     /\bahlus sunnah\b/,
@@ -484,53 +484,53 @@ function inferMosqueSectFromText(parts) {
     /\bbarelvi\b/,
     /\bsalafi\b/,
   ];
-
+ 
   if (shiaSignals.some((pattern) => pattern.test(haystack))) return "SHIA";
   if (sunniSignals.some((pattern) => pattern.test(haystack))) return "SUNNI";
   return "UNKNOWN";
 }
-
+ 
 function getSectConfidence(requestedSect, inferredSect) {
   const requested = resolveRequestedSect(requestedSect);
   const inferred = String(inferredSect || "UNKNOWN").toUpperCase();
-
+ 
   if (requested === "ALL") {
     return inferred === "UNKNOWN" ? "generic" : "inferred";
   }
-
+ 
   if (inferred === requested) return "match";
   if (inferred === "UNKNOWN") return "generic";
   return "mismatch";
 }
-
+ 
 function scoreMosqueForSect(mosque, requestedSect) {
   const requested = resolveRequestedSect(requestedSect);
   const confidence = String(mosque?.sectConfidence || "generic").toLowerCase();
   const inferred = String(mosque?.sect || "UNKNOWN").toUpperCase();
-
+ 
   if (requested === "SHIA") {
     if (confidence === "match") return 300;
     if (confidence === "generic") return 150;
     return 20;
   }
-
+ 
   if (requested === "SUNNI") {
     if (confidence === "match") return 300;
     if (confidence === "generic") return 150;
     return 20;
   }
-
+ 
   if (inferred === "SHIA") return 220;
   if (inferred === "SUNNI") return 210;
   return 120;
 }
-
+ 
 function buildMosqueTextQueries(query, countryValue, requestedSect) {
   const q = normalizeQueryText(query);
   const countryText = countryLabel(countryValue, "");
   const sect = resolveRequestedSect(requestedSect);
   const out = [];
-
+ 
   if (sect === "SHIA") {
     out.push(normalizeMosqueSearchText(q, countryValue, "SHIA"));
     if (q) {
@@ -544,12 +544,12 @@ function buildMosqueTextQueries(query, countryValue, requestedSect) {
       out.push(countryText ? `sunni masjid in ${q}, ${countryText}` : `sunni masjid in ${q}`);
     }
   }
-
+ 
   out.push(normalizeMosqueSearchText(q, countryValue));
-
+ 
   return [...new Set(out.filter(Boolean))];
 }
-
+ 
 function extractCountryCodeFromComponents(components, fallback = "US") {
   const raw = String(
     components?.["ISO_3166-1_alpha-2"] ||
@@ -557,10 +557,10 @@ function extractCountryCodeFromComponents(components, fallback = "US") {
     fallback ||
     "US"
   ).trim();
-
+ 
   return /^[A-Za-z]{2}$/.test(raw) ? raw.toUpperCase() : fallback;
 }
-
+ 
 function extractCityFromComponents(components, fallback = "") {
   return (
     String(
@@ -576,9 +576,9 @@ function extractCityFromComponents(components, fallback = "") {
     ).trim() || fallback
   );
 }
-
-
-
+ 
+ 
+ 
 const AMAZON_OAUTH_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
 const AMAZON_OAUTH_TOKEN_URL = "https://api.amazon.com/auth/o2/token";
 const DEFAULT_ALEXA_API_ENDPOINTS = [
@@ -588,7 +588,7 @@ const DEFAULT_ALEXA_API_ENDPOINTS = [
 ];
 const APP_LINK_STATE_TTL_MS = 10 * 60 * 1000;
 const ALEXA_APP_LINK_SCOPE = "alexa::skills:account_linking";
-
+ 
 function getAlexaSkillId() {
   return String(
     process.env.ALEXA_SKILL_ID ||
@@ -597,16 +597,16 @@ function getAlexaSkillId() {
     ""
   ).trim();
 }
-
-
-
+ 
+ 
+ 
 function getAlexaSkillStage() {
   const raw = String(process.env.ALEXA_SKILL_STAGE || process.env.AMAZON_ALEXA_SKILL_STAGE || "development")
     .trim()
     .toLowerCase();
   return raw === "live" ? "live" : "development";
 }
-
+ 
 function getSkillOauthScope() {
   return getDefaultAlexaOauthScope();
 }
@@ -618,10 +618,10 @@ function getAppLinkStateSecret() {
     "adhancast-app-link-state"
   );
 }
-
+ 
 function getAlexaAppLinkConfig() {
   const oauth = getAlexaOauthConfig();
-
+ 
   const clientId = String(
     process.env.ALEXA_APP_LINK_CLIENT_ID ||
     process.env.ALEXA_APP_TO_APP_CLIENT_ID ||
@@ -629,7 +629,7 @@ function getAlexaAppLinkConfig() {
     oauth.clientId ||
     ""
   ).trim();
-
+ 
   const clientSecret = String(
     process.env.ALEXA_APP_LINK_CLIENT_SECRET ||
     process.env.ALEXA_APP_TO_APP_CLIENT_SECRET ||
@@ -637,15 +637,15 @@ function getAlexaAppLinkConfig() {
     oauth.clientSecret ||
     ""
   ).trim();
-
+ 
   return {
     configured: !!clientId && !!clientSecret,
     clientId,
     clientSecret,
   };
 }
-
-
+ 
+ 
 function base64UrlEncode(value) {
   return Buffer.from(value)
     .toString("base64")
@@ -653,25 +653,25 @@ function base64UrlEncode(value) {
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
 }
-
+ 
 function base64UrlDecode(value) {
   const input = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
   const pad = input.length % 4;
   const normalized = pad ? input + "=".repeat(4 - pad) : input;
   return Buffer.from(normalized, "base64").toString("utf8");
 }
-
+ 
 function createPkceVerifier() {
   return base64UrlEncode(crypto.randomBytes(48));
 }
-
+ 
 function createPkceChallenge(verifier) {
   return crypto.createHash("sha256").update(String(verifier || "")).digest("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
 }
-
+ 
 function signAppLinkState(payload) {
   const json = JSON.stringify(payload);
   const encoded = base64UrlEncode(json);
@@ -684,7 +684,7 @@ function signAppLinkState(payload) {
     .replace(/=+$/g, "");
   return `${encoded}.${signature}`;
 }
-
+ 
 function verifyAppLinkState(token) {
   const raw = String(token || "");
   const splitAt = raw.lastIndexOf(".");
@@ -693,7 +693,7 @@ function verifyAppLinkState(token) {
     err.status = 400;
     throw err;
   }
-
+ 
   const encoded = raw.slice(0, splitAt);
   const signature = raw.slice(splitAt + 1);
   const expected = crypto
@@ -703,34 +703,34 @@ function verifyAppLinkState(token) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
-
+ 
   if (signature !== expected) {
     const err = new Error("Alexa linking state could not be verified.");
     err.status = 400;
     throw err;
   }
-
+ 
   const payload = JSON.parse(base64UrlDecode(encoded));
   if (!payload?.userId || !payload?.ts) {
     const err = new Error("Alexa linking state payload is incomplete.");
     err.status = 400;
     throw err;
   }
-
+ 
   if (Date.now() - Number(payload.ts) > APP_LINK_STATE_TTL_MS) {
     const err = new Error("Alexa linking request expired. Please try again.");
     err.status = 400;
     throw err;
   }
-
+ 
   return payload;
 }
-
-
+ 
+ 
 async function exchangeAmazonAuthorizationCodeForTokens(params) {
   const { code, redirectUri, codeVerifier } = params;
   const appLink = getAlexaAppLinkConfig();
-
+ 
   if (!appLink.configured) {
     const err = new Error(
       "Alexa app-to-app linking credentials are not configured on the backend."
@@ -738,13 +738,13 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     err.status = 500;
     throw err;
   }
-
+ 
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
   body.set("code", String(code || ""));
   body.set("redirect_uri", String(redirectUri || ""));
   if (codeVerifier) body.set("code_verifier", String(codeVerifier));
-
+ 
   const basic = Buffer.from(`${appLink.clientId}:${appLink.clientSecret}`).toString("base64");
   const resp = await fetchWithTimeout(
     AMAZON_OAUTH_TOKEN_URL,
@@ -759,11 +759,11 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     },
     20000
   );
-
+ 
   const data = await resp.json().catch(async () => ({
     error: await resp.text().catch(() => "Token exchange failed."),
   }));
-
+ 
   if (!resp.ok || !data?.access_token) {
     const err = new Error(
       `Amazon token exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"
@@ -772,9 +772,9 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     err.status = 502;
     throw err;
   }
-
+ 
   const grantedScope = String(data.scope || "").trim();
-
+ 
   if (grantedScope) {
     const grantedScopes = grantedScope.split(/\s+/).filter(Boolean);
     if (!grantedScopes.includes(ALEXA_APP_LINK_SCOPE)) {
@@ -785,7 +785,7 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
       throw err;
     }
   }
-
+ 
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token || null,
@@ -793,10 +793,10 @@ async function exchangeAmazonAuthorizationCodeForTokens(params) {
     expiresIn: Number(data.expires_in || 3600) || 3600,
   };
 }
-
-
+ 
+ 
 const OAUTH_RELAY_STATE_TTL_MS = 10 * 60 * 1000;
-
+ 
 function getOauthRelayStateSecret() {
   return String(
     process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
@@ -805,18 +805,18 @@ function getOauthRelayStateSecret() {
     "adhancast-oauth-relay-state"
   );
 }
-
+ 
 function normalizeFullRedirectUri(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
-
+ 
   try {
     return new URL(raw).toString();
   } catch {
     return "";
   }
 }
-
+ 
 function getRequestOrigin(req) {
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
     .split(",")[0]
@@ -824,23 +824,23 @@ function getRequestOrigin(req) {
   const forwardedHost = String(req.headers["x-forwarded-host"] || "")
     .split(",")[0]
     .trim();
-
+ 
   const protocol = forwardedProto || req.protocol || "https";
   const host = forwardedHost || req.get("host") || "";
-
+ 
   if (!host) {
     const err = new Error("Could not determine request host.");
     err.status = 500;
     throw err;
   }
-
+ 
   return `${protocol}://${host}`;
 }
-
+ 
 function buildAlexaOauthCallbackUrl(req) {
   return `${getRequestOrigin(req)}/oauth/authorize/callback`;
 }
-
+ 
 function createOauthRelayState(payload) {
   const json = JSON.stringify(payload);
   const encoded = base64UrlEncode(json);
@@ -851,10 +851,10 @@ function createOauthRelayState(payload) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
-
+ 
   return `${encoded}.${signature}`;
 }
-
+ 
 function verifyOauthRelayState(value) {
   const raw = String(value || "");
   const splitAt = raw.lastIndexOf(".");
@@ -863,7 +863,7 @@ function verifyOauthRelayState(value) {
     err.status = 400;
     throw err;
   }
-
+ 
   const encoded = raw.slice(0, splitAt);
   const signature = raw.slice(splitAt + 1);
   const expected = crypto
@@ -873,46 +873,46 @@ function verifyOauthRelayState(value) {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
-
+ 
   if (signature !== expected) {
     const err = new Error("OAuth relay state could not be verified.");
     err.status = 400;
     throw err;
   }
-
+ 
   const payload = JSON.parse(base64UrlDecode(encoded));
   if (!payload?.clientId || !payload?.redirectUri || !payload?.ts) {
     const err = new Error("OAuth relay state payload is incomplete.");
     err.status = 400;
     throw err;
   }
-
+ 
   if (Date.now() - Number(payload.ts) > OAUTH_RELAY_STATE_TTL_MS) {
     const err = new Error("OAuth relay request expired. Please try again.");
     err.status = 400;
     throw err;
   }
-
+ 
   return payload;
 }
-
+ 
 async function exchangeAmazonWebAuthorizationCodeForTokens(params) {
   const { code, redirectUri } = params;
   const oauth = getAlexaOauthConfig();
-
+ 
   if (!oauth.configured) {
     const err = new Error("Alexa OAuth credentials are not configured on the backend.");
     err.status = 500;
     throw err;
   }
-
+ 
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
   body.set("code", String(code || ""));
   body.set("redirect_uri", String(redirectUri || ""));
-
+ 
   const basic = Buffer.from(`${oauth.clientId}:${oauth.clientSecret}`).toString("base64");
-
+ 
   const resp = await fetchWithTimeout(
     AMAZON_OAUTH_TOKEN_URL,
     {
@@ -926,11 +926,11 @@ async function exchangeAmazonWebAuthorizationCodeForTokens(params) {
     },
     20000
   );
-
+ 
   const data = await resp.json().catch(async () => ({
     error: await resp.text().catch(() => "Token exchange failed."),
   }));
-
+ 
   if (!resp.ok || !data?.access_token) {
     const err = new Error(
       `Amazon web authorization exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"
@@ -939,7 +939,7 @@ async function exchangeAmazonWebAuthorizationCodeForTokens(params) {
     err.status = 502;
     throw err;
   }
-
+ 
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token || null,
@@ -947,7 +947,7 @@ async function exchangeAmazonWebAuthorizationCodeForTokens(params) {
     expiresIn: Number(data.expires_in || 3600) || 3600,
   };
 }
-
+ 
 function getAmazonLoginConfig() {
   const clientId = String(
     process.env.AMAZON_LOGIN_CLIENT_ID ||
@@ -962,7 +962,7 @@ function getAmazonLoginConfig() {
       process.env.ALEXA_SKILL_CLIENT_ID ||
       ""
   ).trim();
-
+ 
   const clientSecret = String(
     process.env.AMAZON_LOGIN_CLIENT_SECRET ||
       process.env.AMAZON_LWA_CLIENT_SECRET ||
@@ -971,14 +971,14 @@ function getAmazonLoginConfig() {
       process.env.ALEXA_SKILL_CLIENT_SECRET ||
       ""
   ).trim();
-
+ 
   return {
     configured: !!clientId && !!clientSecret,
     clientId,
     clientSecret,
   };
 }
-
+ 
 function getAllowedAmazonLoginRedirectUris() {
   const configured = [
     process.env.AMAZON_LOGIN_REDIRECT_URIS,
@@ -992,11 +992,11 @@ function getAllowedAmazonLoginRedirectUris() {
     .flatMap((value) => String(value).split(","))
     .map(normalizeFullRedirectUri)
     .filter(Boolean);
-
+ 
   if (configured.length > 0) {
     return dedupeStrings(configured);
   }
-
+ 
   return dedupeStrings([
     process.env.VITE_AMAZON_RETURN_URL,
     process.env.VITE_AMAZON_REDIRECT_URI,
@@ -1005,17 +1005,17 @@ function getAllowedAmazonLoginRedirectUris() {
     "http://localhost:5173/onboarding/step2",
   ].map(normalizeFullRedirectUri).filter(Boolean));
 }
-
+ 
 function validateAmazonLoginRedirectUri(value) {
   const normalized = normalizeFullRedirectUri(value);
   const allowed = getAllowedAmazonLoginRedirectUris();
-
+ 
   if (!normalized) {
     const err = new Error("Missing redirectUri for Amazon Login code exchange.");
     err.status = 400;
     throw err;
   }
-
+ 
   if (!allowed.includes(normalized)) {
     const err = new Error(
       `redirectUri is not allowed for Amazon Login code exchange. Received: ${value}. Allowed: ${allowed.join(", ")}`
@@ -1023,15 +1023,15 @@ function validateAmazonLoginRedirectUri(value) {
     err.status = 400;
     throw err;
   }
-
+ 
   return normalized;
 }
-
+ 
 async function exchangeAmazonLoginAuthorizationCodeForTokens(params) {
   const { code } = params;
   const redirectUri = validateAmazonLoginRedirectUri(params.redirectUri);
   const login = getAmazonLoginConfig();
-
+ 
   if (!login.configured) {
     const err = new Error(
       "Amazon Login code exchange credentials are not configured. Set AMAZON_LOGIN_CLIENT_ID and AMAZON_LOGIN_CLIENT_SECRET on the backend for the Step 2 Login with Amazon web client."
@@ -1039,13 +1039,13 @@ async function exchangeAmazonLoginAuthorizationCodeForTokens(params) {
     err.status = 500;
     throw err;
   }
-
+ 
   const body = new URLSearchParams();
   body.set("grant_type", "authorization_code");
   body.set("code", String(code || ""));
   body.set("redirect_uri", redirectUri);
   body.set("client_id", login.clientId);
-
+ 
   const basic = Buffer.from(`${login.clientId}:${login.clientSecret}`).toString("base64");
   const resp = await fetchWithTimeout(
     AMAZON_OAUTH_TOKEN_URL,
@@ -1060,11 +1060,11 @@ async function exchangeAmazonLoginAuthorizationCodeForTokens(params) {
     },
     20000
   );
-
+ 
   const data = await resp.json().catch(async () => ({
     error: await resp.text().catch(() => "Token exchange failed."),
   }));
-
+ 
   if (!resp.ok || !data?.access_token) {
     const err = new Error(
       `Amazon Login code exchange failed (${resp.status}): ${data?.error_description || data?.error || "Unknown error"}`
@@ -1072,7 +1072,7 @@ async function exchangeAmazonLoginAuthorizationCodeForTokens(params) {
     err.status = 502;
     throw err;
   }
-
+ 
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token || null,
@@ -1080,16 +1080,16 @@ async function exchangeAmazonLoginAuthorizationCodeForTokens(params) {
     expiresIn: Number(data.expires_in || 3600) || 3600,
   };
 }
-
+ 
 async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
   const appLink = getAlexaAppLinkConfig();
   if (!appLink.configured || !existingRecord?.amazonRefreshToken) return existingRecord;
-
+ 
   const body = new URLSearchParams();
   body.set("grant_type", "refresh_token");
   body.set("refresh_token", existingRecord.amazonRefreshToken);
   const basic = Buffer.from(`${appLink.clientId}:${appLink.clientSecret}`).toString("base64");
-
+ 
   const resp = await fetchWithTimeout(
     AMAZON_OAUTH_TOKEN_URL,
     {
@@ -1103,15 +1103,15 @@ async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
     },
     20000
   );
-
+ 
   const data = await resp.json().catch(async () => ({
     error: await resp.text().catch(() => "Refresh failed."),
   }));
-
+ 
   if (!resp.ok || !data?.access_token) {
     return existingRecord;
   }
-
+ 
   const expiresAt = new Date(Date.now() + (Number(data.expires_in || 3600) || 3600) * 1000);
   await upsertAlexaAppLinkToken(pool, {
     userId,
@@ -1122,72 +1122,72 @@ async function refreshStoredAlexaCustomerToken(pool, userId, existingRecord) {
     customerUserId: existingRecord.customerUserId,
     expiresAt,
   });
-
+ 
   return await getAlexaAppLinkToken(pool, userId);
 }
-
+ 
 async function getAlexaCustomerTokenRecord(pool, userId) {
   let record = await getAlexaAppLinkToken(pool, userId);
   if (!record || record.revokedAt) return null;
-
+ 
   const expiresAt = record.expiresAt ? new Date(record.expiresAt).getTime() : 0;
   if (expiresAt && expiresAt > Date.now() + 60_000 && record.amazonAccessToken) {
     return record;
   }
-
+ 
   return await refreshStoredAlexaCustomerToken(pool, userId, record);
 }
-
+ 
 async function fetchAlexaApiEndpoints(accessToken) {
   const headers = {
     Accept: "application/json",
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
   };
-
+ 
   const resp = await fetchWithTimeout("https://api.amazonalexa.com/v1/alexaApiEndpoint", { headers }, 20000);
   const data = await resp.json().catch(() => ({}));
   if (resp.ok && Array.isArray(data?.endpoints) && data.endpoints.length > 0) {
     return data.endpoints;
   }
-
+ 
   return DEFAULT_ALEXA_API_ENDPOINTS;
 }
-
+ 
 function pickSkillOauthRedirectUriForEndpoint(endpointHost, redirectUris) {
   const list = Array.isArray(redirectUris)
     ? redirectUris.map((value) => String(value || "").trim()).filter(Boolean)
     : [];
-
+ 
   if (!list.length) return "";
-
+ 
   const host = String(endpointHost || "").trim().toLowerCase();
-
+ 
   if (host === "api.eu.amazonalexa.com") {
     return (
       list.find((uri) => uri.startsWith("https://layla.amazon.com/api/skill/link/")) ||
       list[0]
     );
   }
-
+ 
   if (host === "api.fe.amazonalexa.com") {
     return (
       list.find((uri) => uri.startsWith("https://alexa.amazon.co.jp/api/skill/link/")) ||
       list[0]
     );
   }
-
+ 
   return (
     list.find((uri) => uri.startsWith("https://pitangui.amazon.com/api/skill/link/")) ||
     list[0]
   );
 }
-
+ 
 async function callAlexaSkillEnablement(params) {
   const { accessToken, skillId, stage, accountLinkRedirectUri, authCode, authCodeVerifier, preferredEndpoint } = params;
   const endpoints = preferredEndpoint ? [preferredEndpoint, ...DEFAULT_ALEXA_API_ENDPOINTS.filter((x) => x !== preferredEndpoint)] : await fetchAlexaApiEndpoints(accessToken);
   let lastError = null;
-
+ 
   for (const endpointHost of endpoints) {
     const url = `https://${endpointHost}/v1/users/~current/skills/${encodeURIComponent(skillId)}/enablement`;
     const resp = await fetchWithTimeout(
@@ -1211,30 +1211,30 @@ async function callAlexaSkillEnablement(params) {
       },
       20000
     );
-
+ 
     const data = await resp.json().catch(() => ({}));
     if (resp.status === 201 && data) {
       return { endpointHost, data };
     }
-
+ 
     if (resp.status === 400 && data?.code === "incorrectEndpoint") {
       lastError = new Error(data?.message || "Incorrect endpoint for customer.");
       continue;
     }
-
+ 
     const err = new Error(`Alexa enablement failed (${resp.status}): ${data?.message || data?.code || "Unknown error"}`);
     err.status = resp.status;
     throw err;
   }
-
+ 
   if (lastError) throw lastError;
   throw new Error("Alexa enablement failed before any endpoint responded.");
 }
-
+ 
 async function fetchAlexaSkillEnablementStatus(params) {
   const { accessToken, skillId, preferredEndpoint } = params;
   const endpoints = preferredEndpoint ? [preferredEndpoint, ...DEFAULT_ALEXA_API_ENDPOINTS.filter((x) => x !== preferredEndpoint)] : await fetchAlexaApiEndpoints(accessToken);
-
+ 
   for (const endpointHost of endpoints) {
     const url = `https://${endpointHost}/v1/users/~current/skills/${encodeURIComponent(skillId)}/enablement`;
     const resp = await fetchWithTimeout(
@@ -1248,33 +1248,33 @@ async function fetchAlexaSkillEnablementStatus(params) {
       },
       15000
     );
-
+ 
     if (resp.status === 404) {
       return { endpointHost, data: { status: "NO_ASSOCIATION", accountLink: { status: "NOT_LINKED" } } };
     }
-
+ 
     const data = await resp.json().catch(() => ({}));
     if (resp.ok) {
       return { endpointHost, data };
     }
-
+ 
     if (resp.status === 400 && data?.code === "incorrectEndpoint") {
       continue;
     }
-
+ 
     const err = new Error(`Alexa status lookup failed (${resp.status}): ${data?.message || data?.code || "Unknown error"}`);
     err.status = resp.status;
     throw err;
   }
-
+ 
   return null;
 }
-
-
+ 
+ 
 async function fetchWithTimeout(url, options = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+ 
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (err) {
@@ -1288,13 +1288,13 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = UPSTREAM_TIMEOUT_
     clearTimeout(timer);
   }
 }
-
+ 
 // -----------------------------
 // Auth helpers
 // -----------------------------
 const APP_SESSION_PREFIX = "adhapp_";
 const DEFAULT_APP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
+ 
 function getAppSessionSecret() {
   return String(
     process.env.APP_SESSION_SECRET ||
@@ -1304,13 +1304,13 @@ function getAppSessionSecret() {
       "adhancast-dev-session-secret"
   );
 }
-
+ 
 function getAppSessionTtlMs() {
   const raw = Number(process.env.APP_SESSION_TTL_MS || DEFAULT_APP_SESSION_TTL_MS);
   if (!Number.isFinite(raw) || raw < 5 * 60 * 1000) return DEFAULT_APP_SESSION_TTL_MS;
   return Math.min(raw, 90 * 24 * 60 * 60 * 1000);
 }
-
+ 
 function signAppSessionPayload(encodedPayload) {
   return crypto
     .createHmac("sha256", getAppSessionSecret())
@@ -1320,14 +1320,14 @@ function signAppSessionPayload(encodedPayload) {
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
 }
-
+ 
 function createAppSessionToken(profile) {
   if (!profile?.user_id) {
     const err = new Error("Cannot create app session without Amazon user id.");
     err.status = 500;
     throw err;
   }
-
+ 
   const now = Date.now();
   const expiresAtMs = now + getAppSessionTtlMs();
   const payload = {
@@ -1338,20 +1338,20 @@ function createAppSessionToken(profile) {
     iat: Math.floor(now / 1000),
     exp: Math.floor(expiresAtMs / 1000),
   };
-
+ 
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = signAppSessionPayload(encodedPayload);
-
+ 
   return {
     token: `${APP_SESSION_PREFIX}${encodedPayload}.${signature}`,
     expiresAt: new Date(expiresAtMs).toISOString(),
   };
 }
-
+ 
 function verifyAppSessionToken(token) {
   const raw = String(token || "").trim();
   if (!raw.startsWith(APP_SESSION_PREFIX)) return null;
-
+ 
   const withoutPrefix = raw.slice(APP_SESSION_PREFIX.length);
   const splitAt = withoutPrefix.lastIndexOf(".");
   if (splitAt <= 0) {
@@ -1359,11 +1359,11 @@ function verifyAppSessionToken(token) {
     err.status = 401;
     throw err;
   }
-
+ 
   const encodedPayload = withoutPrefix.slice(0, splitAt);
   const signature = withoutPrefix.slice(splitAt + 1);
   const expected = signAppSessionPayload(encodedPayload);
-
+ 
   const a = Buffer.from(signature);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
@@ -1371,20 +1371,20 @@ function verifyAppSessionToken(token) {
     err.status = 401;
     throw err;
   }
-
+ 
   const payload = JSON.parse(base64UrlDecode(encodedPayload));
   if (payload?.typ !== "adhancast_app_session" || !payload?.user_id) {
     const err = new Error("App session token payload is invalid.");
     err.status = 401;
     throw err;
   }
-
+ 
   if (Number(payload.exp || 0) * 1000 <= Date.now()) {
     const err = new Error("App session token has expired.");
     err.status = 401;
     throw err;
   }
-
+ 
   return {
     payload,
     profile: {
@@ -1395,48 +1395,48 @@ function verifyAppSessionToken(token) {
     expiresAt: new Date(Number(payload.exp) * 1000).toISOString(),
   };
 }
-
+ 
 async function fetchAmazonProfile(accessToken) {
   if (!accessToken) {
     const err = new Error("Missing Amazon access token");
     err.status = 401;
     throw err;
   }
-
+ 
   cleanupExpiredTokenCache();
-
+ 
   const now = Date.now();
   const cached = tokenCache.get(accessToken);
   if (cached && cached.exp > now) return cached.profile;
-
+ 
   const resp = await fetchWithTimeout("https://api.amazon.com/user/profile", {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   });
-
+ 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     const err = new Error(`Amazon profile failed (${resp.status}): ${text}`);
     err.status = 401;
     throw err;
   }
-
+ 
   const profile = await resp.json();
   if (!profile?.user_id) {
     const err = new Error("Amazon token invalid");
     err.status = 401;
     throw err;
   }
-
+ 
   tokenCache.set(accessToken, {
     profile,
     exp: now + AMAZON_TOKEN_CACHE_TTL_MS,
   });
-
+ 
   return profile;
 }
-
+ 
 async function requireAmazonAuth(req, res, next) {
   try {
     const token = getBearerToken(req);
@@ -1445,7 +1445,7 @@ async function requireAmazonAuth(req, res, next) {
         .status(401)
         .json({ error: "Missing Authorization: Bearer <token>" });
     }
-
+ 
     const appSession = verifyAppSessionToken(token);
     if (appSession) {
       req.amazonProfile = appSession.profile;
@@ -1453,7 +1453,7 @@ async function requireAmazonAuth(req, res, next) {
       req.appSession = appSession.payload;
       return next();
     }
-
+ 
     const profile = await fetchAmazonProfile(token);
     req.amazonProfile = profile;
     req.amazonToken = token;
@@ -1463,20 +1463,20 @@ async function requireAmazonAuth(req, res, next) {
     res.status(status).json({ error: String(e.message || e) });
   }
 }
-
+ 
 async function requireAlexaSkillAuth(req, res, next) {
   try {
     const token = getBearerToken(req);
     if (!token) {
       return res.status(401).json({ error: "Missing Alexa skill bearer token." });
     }
-
+ 
     const pool = await getPool();
     const auth = await authenticateAlexaSkillAccessToken(pool, token);
     if (!auth) {
       return res.status(401).json({ error: "Alexa skill token is invalid or expired." });
     }
-
+ 
     req.skillAuth = auth;
     next();
   } catch (e) {
@@ -1484,17 +1484,17 @@ async function requireAlexaSkillAuth(req, res, next) {
     res.status(status).json({ error: String(e.message || e) });
   }
 }
-
+ 
 const DEFAULT_ALEXA_APP_LINK_PATHS = ["/alexa/link", "/onboarding/step2"];
-
+ 
 function dedupeStrings(values) {
   return [...new Set((values || []).filter(Boolean))];
 }
-
+ 
 function normalizeComparableRedirectUri(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
-
+ 
   try {
     const url = new URL(raw);
     url.hash = "";
@@ -1505,7 +1505,7 @@ function normalizeComparableRedirectUri(value) {
     return "";
   }
 }
-
+ 
 function buildDefaultAppLinkRedirectUris() {
   return dedupeStrings(
     allowedOrigins.flatMap((origin) =>
@@ -1519,33 +1519,33 @@ function buildDefaultAppLinkRedirectUris() {
     )
   );
 }
-
+ 
 function getAllowedAppLinkRedirectUris() {
   const envList = String(process.env.ALEXA_APP_LINK_REDIRECT_URIS || "")
     .split(",")
     .map((value) => normalizeComparableRedirectUri(value))
     .filter(Boolean);
-
+ 
   return dedupeStrings([...envList, ...buildDefaultAppLinkRedirectUris()]);
 }
-
+ 
 function getDefaultAppLinkRedirectUri() {
   return getAllowedAppLinkRedirectUris()[0] || "";
 }
-
+ 
 function validateAppLinkRedirectUri(value) {
   const raw = String(value || "").trim();
   const allowed = getAllowedAppLinkRedirectUris();
   const normalized = raw
     ? normalizeComparableRedirectUri(raw)
     : getDefaultAppLinkRedirectUri();
-
+ 
   if (!normalized) {
     const err = new Error("Missing redirect URI for Alexa linking.");
     err.status = 400;
     throw err;
   }
-
+ 
   if (!allowed.includes(normalized)) {
     const err = new Error(
       `Redirect URI is not allowed for Alexa linking. Received: ${raw || normalized}. Allowed: ${allowed.join(", ")}`
@@ -1553,11 +1553,11 @@ function validateAppLinkRedirectUri(value) {
     err.status = 400;
     throw err;
   }
-
+ 
   return normalized;
 }
-
-
+ 
+ 
 // -----------------------------
 // DB helpers
 // -----------------------------
@@ -1565,10 +1565,10 @@ function isDuplicateSqlError(err) {
   const number = Number(err?.number);
   return number === 2601 || number === 2627;
 }
-
+ 
 async function ensureUser(pool, amazonUserId) {
   let userId = null;
-
+ 
   const existing = await pool
     .request()
     .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
@@ -1577,9 +1577,9 @@ async function ensureUser(pool, amazonUserId) {
       FROM dbo.users
       WHERE amazon_user_id = @amazon_user_id
     `);
-
+ 
   userId = existing.recordset[0]?.id || null;
-
+ 
   if (!userId) {
     try {
       const inserted = await pool
@@ -1590,13 +1590,13 @@ async function ensureUser(pool, amazonUserId) {
           OUTPUT inserted.id AS id
           VALUES (@amazon_user_id)
         `);
-
+ 
       userId = inserted.recordset[0]?.id || null;
     } catch (err) {
       if (!isDuplicateSqlError(err)) {
         throw err;
       }
-
+ 
       const reread = await pool
         .request()
         .input("amazon_user_id", sql.NVarChar(255), amazonUserId)
@@ -1605,15 +1605,15 @@ async function ensureUser(pool, amazonUserId) {
           FROM dbo.users
           WHERE amazon_user_id = @amazon_user_id
         `);
-
+ 
       userId = reread.recordset[0]?.id || null;
     }
   }
-
+ 
   if (!userId) {
     throw new Error("Could not resolve or create user id.");
   }
-
+ 
   await pool
     .request()
     .input("user_id", sql.UniqueIdentifier, userId)
@@ -1621,7 +1621,7 @@ async function ensureUser(pool, amazonUserId) {
       IF NOT EXISTS (SELECT 1 FROM dbo.user_profiles WHERE user_id = @user_id)
         INSERT INTO dbo.user_profiles (user_id) VALUES (@user_id);
     `);
-
+ 
   for (const prayerName of PRAYERS) {
     await pool
       .request()
@@ -1637,16 +1637,16 @@ async function ensureUser(pool, amazonUserId) {
           VALUES (@user_id, @prayer_name);
       `);
   }
-
+ 
   return userId;
 }
-
+ 
 async function getUserProfileAndPrayersByUserId(pool, userId) {
   const profileResult = await pool
     .request()
     .input("user_id", sql.UniqueIdentifier, userId)
     .query(`SELECT * FROM dbo.user_profiles WHERE user_id = @user_id`);
-
+ 
   const prayerResult = await pool
     .request()
     .input("user_id", sql.UniqueIdentifier, userId)
@@ -1656,14 +1656,14 @@ async function getUserProfileAndPrayersByUserId(pool, userId) {
       WHERE user_id = @user_id
       ORDER BY prayer_name
     `);
-
+ 
   return {
     userId,
     profile: profileResult.recordset[0] || {},
     prayers: prayerResult.recordset || [],
   };
 }
-
+ 
 async function getUserProfileAndPrayers(pool, amazonUserId) {
   const userId = await ensureUser(pool, amazonUserId);
   return getUserProfileAndPrayersByUserId(pool, userId);
@@ -1674,28 +1674,28 @@ async function getUserProfileAndPrayers(pool, amazonUserId) {
 function addMinutesHHMM(hhmm, deltaMin) {
   const [hh, mm] = String(hhmm || "").split(":").map(Number);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return hhmm;
-
+ 
   let total = hh * 60 + mm + Number(deltaMin || 0);
   total = ((total % 1440) + 1440) % 1440;
-
+ 
   const outH = Math.floor(total / 60);
   const outM = total % 60;
   return `${String(outH).padStart(2, "0")}:${String(outM).padStart(2, "0")}`;
 }
-
+ 
 function to12h(hhmm) {
   const [hh, mm] = String(hhmm || "").split(":").map(Number);
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return hhmm;
-
+ 
   const suffix = hh >= 12 ? "PM" : "AM";
   const h12 = ((hh + 11) % 12) + 1;
   return `${h12}:${String(mm).padStart(2, "0")} ${suffix}`;
 }
-
+ 
 function parseOffsetsFromBody(body, fallback) {
   const src = body?.globalOffsets || body?.offsets || {};
   const out = {};
-
+ 
   for (const prayer of PRAYERS) {
     if (hasOwn(src, prayer)) {
       const n = Number(src[prayer]);
@@ -1706,13 +1706,13 @@ function parseOffsetsFromBody(body, fallback) {
       out[prayer] = fallback[prayer];
     }
   }
-
+ 
   return out;
 }
-
+ 
 function mapCalcMethodToAlAdhan(method, sect) {
   const m = String(method || "").toLowerCase();
-
+ 
   if (m.includes("jafari")) return 0;
   if (m.includes("karachi")) return 1;
   if (m.includes("isna")) return 2;
@@ -1721,16 +1721,16 @@ function mapCalcMethodToAlAdhan(method, sect) {
   if (m.includes("egypt")) return 5;
   if (m.includes("tehran")) return 7;
   if (String(sect || "").toUpperCase() === "SHIA") return 0;
-
+ 
   return 2; // ISNA
 }
-
+ 
 function sanitizeCalculationMethodForSect(method, sect) {
   const normalizedSect =
     String(sect || "").trim().toUpperCase() === "SHIA" ? "SHIA" : "SUNNI";
-
+ 
   const raw = String(method || "").trim().toLowerCase();
-
+ 
   const shiaAllowed = new Set(["jafari", "tehran"]);
   const sunniAllowed = new Set([
     "karachi",
@@ -1741,18 +1741,18 @@ function sanitizeCalculationMethodForSect(method, sect) {
     "makkah",
     "egypt",
   ]);
-
+ 
   if (normalizedSect === "SHIA") {
     return shiaAllowed.has(raw) ? raw : "jafari";
   }
-
+ 
   return sunniAllowed.has(raw) ? raw : "isna";
 }
-
+ 
 function madhhabToSchool(madhhab) {
   return String(madhhab || "").toLowerCase() === "hanafi" ? 1 : 0;
 }
-
+ 
 function daysArrayToMask(days) {
   if (!Array.isArray(days) || days.length !== 7) return 127;
   let mask = 0;
@@ -1761,25 +1761,25 @@ function daysArrayToMask(days) {
   }
   return mask;
 }
-
+ 
 function maskToDaysArray(mask) {
   const m = Number(mask || 127);
   return Array.from({ length: 7 }, (_, i) => ((m >> i) & 1) === 1);
 }
-
+ 
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
-
+ 
 function parseStringArray(value) {
   if (!value) return [];
-
+ 
   if (Array.isArray(value)) {
     return value
       .map((item) => String(item || "").trim())
       .filter(Boolean);
   }
-
+ 
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
@@ -1792,23 +1792,23 @@ function parseStringArray(value) {
       // ignore invalid json
     }
   }
-
+ 
   return [];
 }
-
+ 
 function resolveTimingSource(profile) {
   const hasUserCoords =
     typeof profile.latitude === "number" &&
     Number.isFinite(profile.latitude) &&
     typeof profile.longitude === "number" &&
     Number.isFinite(profile.longitude);
-
+ 
   const hasMosqueCoords =
     typeof profile.mosque_lat === "number" &&
     Number.isFinite(profile.mosque_lat) &&
     typeof profile.mosque_lng === "number" &&
     Number.isFinite(profile.mosque_lng);
-
+ 
   if (profile.use_mosque_location && hasMosqueCoords) {
     return {
       source: "mosque",
@@ -1817,7 +1817,7 @@ function resolveTimingSource(profile) {
       fallbackReason: null,
     };
   }
-
+ 
   if (hasUserCoords) {
     return {
       source: "personal",
@@ -1829,7 +1829,7 @@ function resolveTimingSource(profile) {
           : null,
     };
   }
-
+ 
   return {
     source: "city",
     latitude: null,
@@ -1840,17 +1840,17 @@ function resolveTimingSource(profile) {
         : null,
   };
 }
-
+ 
 function buildLocationPayload(profile, timing) {
   const city = normalizeQueryText(profile.city || "Chicago");
   const country = profile.country || "US";
   const timezone = profile.timezone || "Etc/UTC";
-
+ 
   const label =
     timing.source === "mosque"
       ? profile.mosque_name || profile.mosque_address || city
       : `${city}${country ? `, ${country}` : ""}`;
-
+ 
   return {
     city,
     country,
@@ -1860,7 +1860,7 @@ function buildLocationPayload(profile, timing) {
     label,
   };
 }
-
+ 
 function buildMethodPayload(profile) {
   const sect = profile.sect || "SUNNI";
   return {
@@ -1872,7 +1872,7 @@ function buildMethodPayload(profile) {
     madhhab: profile.madhhab || "hanafi",
   };
 }
-
+ 
 async function computePrayerTimesForProfile(profile, prayers, targetDate = new Date()) {
   const perPrayerOffset = {};
   const enabledMap = {};
@@ -1880,23 +1880,23 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     perPrayerOffset[r.prayer_name] = r.offset_min || 0;
     enabledMap[r.prayer_name] = !!r.enabled;
   }
-
+ 
   const method = mapCalcMethodToAlAdhan(
     profile.calculation_method || "isna",
     profile.sect || "SUNNI"
   );
   const school = madhhabToSchool(profile.madhhab || "hanafi");
   const timing = resolveTimingSource(profile);
-
+ 
   const city = normalizeQueryText(profile.city || "Chicago");
   const country = profile.country || "US";
   const countryForApi = countryLabel(country, "United States");
-
+ 
   const date = targetDate instanceof Date ? targetDate : new Date(targetDate);
   const year = date.getFullYear();
   const month = date.getMonth() + 1;
   const day = date.getDate();
-
+ 
   const url =
     timing.latitude != null && timing.longitude != null
       ? `https://api.aladhan.com/v1/calendar?latitude=${encodeURIComponent(
@@ -1909,19 +1909,19 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
       )}&country=${encodeURIComponent(
         countryForApi
       )}&method=${method}&school=${school}&month=${month}&year=${year}`;
-
+ 
   const resp = await fetchWithTimeout(url);
   if (!resp.ok) {
     const err = new Error("Prayer API upstream failed");
     err.status = 502;
     throw err;
   }
-
+ 
   const json = await resp.json();
   const rows = Array.isArray(json?.data) ? json.data : [];
   const selected = rows[day - 1] || rows[0] || {};
   const t = selected?.timings || {};
-
+ 
   const base24 = {
     fajr: String(t.Fajr || "").slice(0, 5),
     sunrise: String(t.Sunrise || "").slice(0, 5),
@@ -1930,7 +1930,7 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     maghrib: String(t.Maghrib || "").slice(0, 5),
     isha: String(t.Isha || "").slice(0, 5),
   };
-
+ 
   const globalOffsets = {
     fajr: profile.offset_fajr || 0,
     dhuhr: profile.offset_dhuhr || 0,
@@ -1938,7 +1938,7 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     maghrib: profile.offset_maghrib || 0,
     isha: profile.offset_isha || 0,
   };
-
+ 
   const adjusted24 = {
     fajr: addMinutesHHMM(base24.fajr, globalOffsets.fajr + (perPrayerOffset.fajr || 0)),
     sunrise: base24.sunrise,
@@ -1947,7 +1947,7 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     maghrib: addMinutesHHMM(base24.maghrib, globalOffsets.maghrib + (perPrayerOffset.maghrib || 0)),
     isha: addMinutesHHMM(base24.isha, globalOffsets.isha + (perPrayerOffset.isha || 0)),
   };
-
+ 
   const adjusted12 = {
     fajr: to12h(adjusted24.fajr),
     sunrise: to12h(adjusted24.sunrise),
@@ -1956,7 +1956,7 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     maghrib: to12h(adjusted24.maghrib),
     isha: to12h(adjusted24.isha),
   };
-
+ 
   return {
     location: buildLocationPayload(profile, timing),
     mosque: {
@@ -1993,52 +1993,52 @@ async function computePrayerTimesForProfile(profile, prayers, targetDate = new D
     meta: selected?.meta || json?.data?.meta || null,
   };
 }
-
-
+ 
+ 
 // -----------------------------
 // Qiblah helpers
 // -----------------------------
 function degToRad(deg) {
   return (deg * Math.PI) / 180;
 }
-
+ 
 function radToDeg(rad) {
   return (rad * 180) / Math.PI;
 }
-
+ 
 function bearingToCompass(bearing) {
   const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
   const idx = Math.round((((bearing % 360) + 360) % 360) / 45) % 8;
   return dirs[idx];
 }
-
+ 
 function computeQiblahBearing(lat, lon) {
   const kaabaLat = degToRad(21.4225);
   const kaabaLon = degToRad(39.8262);
-
+ 
   const phi1 = degToRad(lat);
   const lambda1 = degToRad(lon);
-
+ 
   const y = Math.sin(kaabaLon - lambda1);
   const x =
     Math.cos(phi1) * Math.tan(kaabaLat) -
     Math.sin(phi1) * Math.cos(kaabaLon - lambda1);
-
+ 
   const theta = Math.atan2(y, x);
   return ((radToDeg(theta) % 360) + 360) % 360;
 }
-
+ 
 // -----------------------------
 // User settings shape
 // -----------------------------
 function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
   const rows = Array.isArray(prayerRows) ? prayerRows : [];
-
+ 
   const firstQuietRow =
     rows.find((r) => r.quiet_enabled || r.quiet_from || r.quiet_to) ||
     rows[0] ||
     {};
-
+ 
   const quietHours = {
     enabled: !!firstQuietRow.quiet_enabled,
     from: firstQuietRow.quiet_from
@@ -2049,7 +2049,7 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
       : "07:00",
     muteFajr: true,
   };
-
+ 
   const prayerConfigs = rows.map((r) => {
     let afterPayload = null;
     try {
@@ -2059,7 +2059,7 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
     } catch {
       afterPayload = null;
     }
-
+ 
     return {
       prayerName: r.prayer_name,
       enabled: !!r.enabled,
@@ -2074,7 +2074,7 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
       },
     };
   });
-
+ 
   return {
     userId: amazonUserId,
     userKey: amazonUserId,
@@ -2129,7 +2129,7 @@ function buildUserSettingsPayload(amazonUserId, profile, prayerRows) {
     prayerConfigs,
   };
 }
-
+ 
 // -----------------------------
 // Google Places helpers
 // -----------------------------
@@ -2140,7 +2140,7 @@ async function googlePlacesPost(endpoint, body, fieldMask) {
     err.status = 500;
     throw err;
   }
-
+ 
   const resp = await fetchWithTimeout(`${GOOGLE_PLACES_BASE}${endpoint}`, {
     method: "POST",
     headers: {
@@ -2150,39 +2150,39 @@ async function googlePlacesPost(endpoint, body, fieldMask) {
     },
     body: JSON.stringify(body),
   });
-
+ 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     const err = new Error(`Google Places request failed (${resp.status}): ${text}`);
     err.status = 502;
     throw err;
   }
-
+ 
   return resp.json();
 }
-
+ 
 function normalizePlace(place, requestedSect = "ALL") {
   const displayName =
     place?.displayName?.text ||
     place?.displayName ||
     place?.name ||
     "Unknown mosque";
-
+ 
   const placeId =
     place?.id ||
     (typeof place?.name === "string" && place.name.startsWith("places/")
       ? place.name.replace(/^places\//, "")
       : null);
-
+ 
   const address = place?.formattedAddress || null;
-
+ 
   const inferredSect = inferMosqueSectFromText([
     displayName,
     address,
     place?.primaryTypeDisplayName?.text,
     place?.editorialSummary?.text,
   ]);
-
+ 
   return {
     placeId: placeId || null,
     name: displayName,
@@ -2199,34 +2199,34 @@ function normalizePlace(place, requestedSect = "ALL") {
     sectConfidence: getSectConfidence(requestedSect, inferredSect),
   };
 }
-
+ 
 function dedupeMosques(list) {
   const seen = new Set();
   const out = [];
-
+ 
   for (const item of list) {
     const key =
       item.placeId ||
       `${String(item.name || "").toLowerCase()}|${String(item.address || "").toLowerCase()}`;
-
+ 
     if (!key || seen.has(key)) continue;
     seen.add(key);
     out.push(item);
   }
-
+ 
   return out;
 }
-
+ 
 // -----------------------------
 // Routes
 // -----------------------------
 app.get("/", (req, res) => {
   res.json({ ok: true, service: "adhanhome-api" });
 });
-
+ 
 app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
-
+ 
 app.get(
   "/api/health/db",
   asyncHandler(async (req, res) => {
@@ -2235,7 +2235,7 @@ app.get(
     res.json({ ok: true, db: true });
   })
 );
-
+ 
 app.get(
   "/api/geocode",
   asyncHandler(async (req, res) => {
@@ -2243,22 +2243,22 @@ app.get(
     if (!apiKey) {
       return res.status(500).json({ error: "OPENCAGE_API_KEY is not configured" });
     }
-
+ 
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
-
+ 
     // Reverse geocoding for onboarding "Use device location"
     if (Number.isFinite(lat) && Number.isFinite(lng)) {
       if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
         return res.status(400).json({ error: "lat/lng out of valid range" });
       }
-
+ 
       const reverseUrl =
         `https://api.opencagedata.com/geocode/v1/json` +
         `?q=${encodeURIComponent(`${lat},${lng}`)}` +
         `&key=${encodeURIComponent(apiKey)}` +
         `&limit=1&no_annotations=0`;
-
+ 
       const upstream = await fetchWithTimeout(reverseUrl);
       if (!upstream.ok) {
         const text = await upstream.text().catch(() => "");
@@ -2266,21 +2266,21 @@ app.get(
           error: `Reverse geocoding upstream failed (${upstream.status}) ${text}`.trim(),
         });
       }
-
+ 
       const data = await upstream.json();
       const first = data?.results?.[0];
-
+ 
       if (!first?.geometry) {
         return res.status(404).json({
           error: "Could not resolve your device location. Please try again.",
         });
       }
-
+ 
       const components = first?.components || {};
       const countryCode = extractCountryCodeFromComponents(components, "US");
       const city = extractCityFromComponents(components, "");
       const timezone = first?.annotations?.timezone?.name || "Etc/UTC";
-
+ 
       return res.json({
         lat: first.geometry.lat,
         lng: first.geometry.lng,
@@ -2292,25 +2292,25 @@ app.get(
         formatted: first.formatted || null,
       });
     }
-
+ 
     // Forward geocoding for manual city + country lookup
     const query = normalizeQueryText(req.query.query || req.query.city || "");
     const country = normalizeStoredCountry(
       req.query.country || req.query.countryCode || "US",
       "US"
     );
-
+ 
     if (!query) {
       return res.status(400).json({ error: "city or query is required" });
     }
-
+ 
     const geocodeText = buildGeocodeQuery(query, country);
     const url =
       `https://api.opencagedata.com/geocode/v1/json` +
       `?q=${encodeURIComponent(geocodeText)}` +
       `&key=${encodeURIComponent(apiKey)}` +
       `&limit=1&no_annotations=0`;
-
+ 
     const upstream = await fetchWithTimeout(url);
     if (!upstream.ok) {
       const text = await upstream.text().catch(() => "");
@@ -2318,21 +2318,21 @@ app.get(
         error: `Geocoding upstream failed (${upstream.status}) ${text}`.trim(),
       });
     }
-
+ 
     const data = await upstream.json();
     const first = data?.results?.[0];
-
+ 
     if (!first?.geometry) {
       return res.status(404).json({
         error: "Could not look up coordinates for this location. Please try again.",
       });
     }
-
+ 
     const components = first?.components || {};
     const countryCode = extractCountryCodeFromComponents(components, country);
     const city = extractCityFromComponents(components, query);
     const timezone = first?.annotations?.timezone?.name || "Etc/UTC";
-
+ 
     res.json({
       lat: first.geometry.lat,
       lng: first.geometry.lng,
@@ -2345,8 +2345,8 @@ app.get(
     });
   })
 );
-
-
+ 
+ 
 app.get(
   "/api/integrations",
   requireAmazonAuth,
@@ -2357,7 +2357,7 @@ app.get(
     const skillLink = await getAlexaSkillLinkStatus(pool, userId);
     const storedAlexaLink = await getAlexaCustomerTokenRecord(pool, userId);
     const skillId = getAlexaSkillId();
-
+ 
     let enablement = null;
     if (skillId && storedAlexaLink?.amazonAccessToken) {
       try {
@@ -2366,7 +2366,7 @@ app.get(
           skillId,
           preferredEndpoint: storedAlexaLink.endpointHost || null,
         });
-
+ 
         if (enablement?.endpointHost && enablement.endpointHost !== storedAlexaLink.endpointHost) {
           await upsertAlexaAppLinkToken(pool, {
             userId,
@@ -2382,7 +2382,7 @@ app.get(
         console.warn("Alexa enablement status lookup failed:", err?.message || err);
       }
     }
-
+ 
     res.json({
       userKey: p.user_id,
       amazon: {
@@ -2412,10 +2412,10 @@ app.get(
     });
   })
 );
-
+ 
 async function enableAccountAndBuildLoginResponse(pool, profile) {
   const userId = await ensureUser(pool, profile.user_id);
-
+ 
   await pool
     .request()
     .input("user_id", sql.UniqueIdentifier, userId)
@@ -2426,9 +2426,9 @@ async function enableAccountAndBuildLoginResponse(pool, profile) {
         updated_at = SYSUTCDATETIME()
       WHERE user_id = @user_id
     `);
-
+ 
   const session = createAppSessionToken(profile);
-
+ 
   return {
     ok: true,
     userKey: profile.user_id,
@@ -2446,7 +2446,7 @@ async function enableAccountAndBuildLoginResponse(pool, profile) {
     },
   };
 }
-
+ 
 app.post(
   "/api/integrations/alexa/login",
   asyncHandler(async (req, res) => {
@@ -2454,40 +2454,40 @@ app.post(
     if (!accessToken) {
       return res.status(400).json({ error: "Missing accessToken" });
     }
-
+ 
     const profile = await fetchAmazonProfile(accessToken);
     const pool = await getPool();
     const payload = await enableAccountAndBuildLoginResponse(pool, profile);
     res.json(payload);
   })
 );
-
+ 
 app.post(
   "/api/integrations/alexa/login-code",
   asyncHandler(async (req, res) => {
     const code = String(req.body?.code || req.body?.authorizationCode || "").trim();
     const redirectUri = String(req.body?.redirectUri || req.body?.redirect_uri || "").trim();
-
+ 
     if (!code) {
       return res.status(400).json({ error: "Missing Amazon authorization code." });
     }
-
+ 
     const amazonTokens = await exchangeAmazonLoginAuthorizationCodeForTokens({
       code,
       redirectUri,
     });
-
+ 
     const profile = await fetchAmazonProfile(amazonTokens.accessToken);
     const pool = await getPool();
     const payload = await enableAccountAndBuildLoginResponse(pool, profile);
-
+ 
     res.json({
       ...payload,
       amazonTokenScope: amazonTokens.scope || null,
     });
   })
 );
-
+ 
 app.post(
   "/api/alexa/account-linking/start",
   requireAmazonAuth,
@@ -2497,35 +2497,35 @@ app.post(
     if (!oauth.configured) {
       return res.status(500).json({ error: "Alexa skill OAuth is not configured on the backend." });
     }
-
+ 
     if (!appLink.configured) {
       return res.status(500).json({
         error:
           "Alexa app-to-app client credentials are missing on the backend. Set ALEXA_APP_LINK_CLIENT_ID and ALEXA_APP_LINK_CLIENT_SECRET.",
       });
     }
-
+ 
     const skillId = process.env.ALEXA_SKILL_ID || "";
     if (!skillId) {
       return res.status(500).json({ error: "ALEXA_SKILL_ID is missing on the backend." });
     }
-
+ 
     const pool = await getPool();
     const userId = await ensureUser(pool, req.amazonProfile.user_id);
-
+ 
     const requestedRedirectUri = req.body?.redirectUri || req.query?.redirectUri || "";
     const redirectUri = validateAppLinkRedirectUri(requestedRedirectUri);
-
+ 
     const codeVerifier = createPkceVerifier();
     const codeChallenge = createPkceChallenge(codeVerifier);
-
+ 
     const state = signAppLinkState({
       userId,
       redirectUri,
       ts: Date.now(),
       nonce: crypto.randomBytes(12).toString("hex"),
     });
-
+ 
     const query = new URLSearchParams({
       client_id: appLink.clientId,
       scope: ALEXA_APP_LINK_SCOPE,
@@ -2535,7 +2535,7 @@ app.post(
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
     });
-
+ 
     res.json({
       ok: true,
       state,
@@ -2548,8 +2548,8 @@ app.post(
     });
   })
 );
-
-
+ 
+ 
 app.post(
   "/api/integrations/alexa/disconnect",
   requireAmazonAuth,
@@ -2558,7 +2558,7 @@ app.post(
     const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const skillId = getAlexaSkillId();
     const tokenRecord = await getAlexaCustomerTokenRecord(pool, userId);
-
+ 
     if (skillId && tokenRecord?.amazonAccessToken) {
       try {
         const status = await fetchAlexaSkillEnablementStatus({
@@ -2587,14 +2587,14 @@ app.post(
         console.warn("Alexa unlink request failed:", err?.message || err);
       }
     }
-
+ 
     await revokeAlexaSkillTokensForUser(pool, userId);
     await revokeAlexaAppLinkTokenForUser(pool, userId);
-
+ 
     res.json({ ok: true });
   })
 );
-
+ 
 app.get(
   "/api/alexa/account-linking/status",
   requireAmazonAuth,
@@ -2605,7 +2605,7 @@ app.get(
     const oauth = getAlexaOauthConfig();
     const skillId = getAlexaSkillId();
     const tokenRecord = await getAlexaCustomerTokenRecord(pool, userId);
-
+ 
     let enablement = null;
     if (skillId && tokenRecord?.amazonAccessToken) {
       try {
@@ -2618,7 +2618,7 @@ app.get(
         console.warn("Alexa skill status fetch failed:", err?.message || err);
       }
     }
-
+ 
     res.json({
       configured: oauth.configured,
       clientId: oauth.clientId || null,
@@ -2638,8 +2638,8 @@ app.get(
     });
   })
 );
-
-
+ 
+ 
 app.post(
   "/api/alexa/account-linking/complete",
   requireAmazonAuth,
@@ -2648,71 +2648,71 @@ app.post(
     if (!oauth.configured) {
       return res.status(500).json({ error: "Alexa account linking is not configured on the backend." });
     }
-
+ 
     const skillId = getAlexaSkillId();
     if (!skillId) {
       return res.status(500).json({ error: "ALEXA_SKILL_ID is missing on the backend." });
     }
-
+ 
     const code = String(req.body?.code || "").trim();
     const state = String(req.body?.state || "").trim();
     const codeVerifier = String(req.body?.codeVerifier || "").trim();
     const redirectUri = validateAppLinkRedirectUri(req.body?.redirectUri || req.query?.redirectUri);
-
+ 
     if (!code || !state || !codeVerifier) {
       return res.status(400).json({
         error: "Missing code, state, or PKCE verifier for Alexa linking.",
       });
     }
-
+ 
     const pool = await getPool();
     const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const statePayload = verifyAppLinkState(state);
-
+ 
     if (statePayload.userId !== userId) {
       return res.status(400).json({
         error: "Alexa linking state does not match the signed-in user.",
       });
     }
-
+ 
     if (statePayload.redirectUri !== redirectUri) {
       return res.status(400).json({
         error: "Alexa linking redirect URI does not match the signed-in session.",
       });
     }
-
+ 
     // Use the Step 2 app redirect ONLY for the Amazon app-to-app code exchange
     const amazonTokens = await exchangeAmazonAuthorizationCodeForTokens({
       code,
       redirectUri,
       codeVerifier,
     });
-
+ 
     // Use the Alexa OAuth redirect URI that matches the customer's Alexa region
     const endpointCandidates = await fetchAlexaApiEndpoints(amazonTokens.accessToken);
     const preferredEndpoint =
       Array.isArray(endpointCandidates) && endpointCandidates.length
         ? endpointCandidates[0]
         : null;
-
+ 
     const skillAccountLinkRedirectUri = pickSkillOauthRedirectUriForEndpoint(
       preferredEndpoint,
       oauth.redirectUris
     );
-
+ 
     if (!skillAccountLinkRedirectUri) {
       return res.status(500).json({
         error: "No Alexa OAuth redirect URI is configured on the backend.",
       });
     }
-
+ 
     const created = await createAlexaAuthorizationCode(pool, {
       userId,
       clientId: oauth.clientId,
       redirectUri: skillAccountLinkRedirectUri,
       scope: getSkillOauthScope(),
     });
-
+ 
     console.info("Alexa account-linking complete: issuing skill auth code", {
       userId,
       appRedirectUri: redirectUri,
@@ -2721,7 +2721,7 @@ app.post(
       appLinkScope: amazonTokens.scope,
       skillScope: getSkillOauthScope(),
     });
-
+ 
     const enablement = await callAlexaSkillEnablement({
       accessToken: amazonTokens.accessToken,
       skillId,
@@ -2731,7 +2731,7 @@ app.post(
       authCodeVerifier: null,
       preferredEndpoint,
     });
-
+ 
     const expiresAt = new Date(Date.now() + amazonTokens.expiresIn * 1000);
     await upsertAlexaAppLinkToken(pool, {
       userId,
@@ -2742,7 +2742,7 @@ app.post(
       customerUserId: enablement?.data?.user?.id || null,
       expiresAt,
     });
-
+ 
     const skillLink = await getAlexaSkillLinkStatus(pool, userId);
     res.json({
       ok: true,
@@ -2756,7 +2756,7 @@ app.post(
     });
   })
 );
-
+ 
 app.post(
   "/api/alexa/account-linking/authorize",
   requireAmazonAuth,
@@ -2766,7 +2766,7 @@ app.post(
     if (responseType !== "code") {
       return res.status(400).json({ error: "Only OAuth authorization-code linking is supported." });
     }
-
+ 
     const pool = await getPool();
     const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const created = await createAlexaAuthorizationCode(pool, {
@@ -2775,13 +2775,13 @@ app.post(
       redirectUri: body.redirectUri || body.redirect_uri,
       scope: body.scope || getSkillOauthScope(),
     });
-
+ 
     const redirectUrl = new URL(String(body.redirectUri || body.redirect_uri));
     redirectUrl.searchParams.set("code", created.code);
     if (body.state) {
       redirectUrl.searchParams.set("state", String(body.state));
     }
-
+ 
     res.json({
       ok: true,
       redirectUrl: redirectUrl.toString(),
@@ -2790,7 +2790,7 @@ app.post(
     });
   })
 );
-
+ 
 app.get(
   "/oauth/authorize",
   asyncHandler(async (req, res) => {
@@ -2800,33 +2800,33 @@ app.get(
         error: "Alexa account linking is not configured on the backend.",
       });
     }
-
+ 
     const clientId = String(req.query?.client_id || "").trim();
     const redirectUri = normalizeFullRedirectUri(req.query?.redirect_uri);
     const responseType = String(req.query?.response_type || "code").trim().toLowerCase();
     const scope = String(req.query?.scope || getSkillOauthScope()).trim() || getSkillOauthScope();
     const state = String(req.query?.state || "").trim();
-
+ 
     if (responseType !== "code") {
       return res.status(400).json({
         error: "Only response_type=code is supported.",
       });
     }
-
+ 
     if (!clientId || clientId !== oauth.clientId) {
       return res.status(400).json({
         error: "Invalid OAuth client_id.",
       });
     }
-
+ 
     if (!redirectUri || !oauth.redirectUris.includes(redirectUri)) {
       return res.status(400).json({
         error: "redirect_uri is not allowed for Alexa account linking.",
       });
     }
-
+ 
     const callbackUrl = buildAlexaOauthCallbackUrl(req);
-
+ 
     const relayState = createOauthRelayState({
       clientId,
       redirectUri,
@@ -2836,42 +2836,42 @@ app.get(
       ts: Date.now(),
       nonce: crypto.randomBytes(12).toString("hex"),
     });
-
+ 
     const amazonUrl = new URL(AMAZON_OAUTH_AUTHORIZE_URL);
     amazonUrl.searchParams.set("client_id", oauth.clientId);
     amazonUrl.searchParams.set("scope", "profile");
     amazonUrl.searchParams.set("response_type", "code");
     amazonUrl.searchParams.set("redirect_uri", callbackUrl);
     amazonUrl.searchParams.set("state", relayState);
-
+ 
     return res.redirect(302, amazonUrl.toString());
   })
 );
-
+ 
 app.get(
   "/oauth/authorize/callback",
   asyncHandler(async (req, res) => {
     let relayState = null;
-
+ 
     try {
       const code = String(req.query?.code || "").trim();
       relayState = verifyOauthRelayState(req.query?.state);
-
+ 
       if (!code) {
         const err = new Error("Missing authorization code from Amazon.");
         err.status = 400;
         throw err;
       }
-
+ 
       const amazonTokens = await exchangeAmazonWebAuthorizationCodeForTokens({
         code,
         redirectUri: relayState.callbackUrl || buildAlexaOauthCallbackUrl(req),
       });
-
+ 
       const profile = await fetchAmazonProfile(amazonTokens.accessToken);
       const pool = await getPool();
       const userId = await ensureUser(pool, profile.user_id);
-
+ 
       await pool
         .request()
         .input("user_id", sql.UniqueIdentifier, userId)
@@ -2882,21 +2882,21 @@ app.get(
             updated_at = SYSUTCDATETIME()
           WHERE user_id = @user_id
         `);
-
+ 
       const created = await createAlexaAuthorizationCode(pool, {
         userId,
         clientId: relayState.clientId,
         redirectUri: relayState.redirectUri,
         scope: relayState.scope || getSkillOauthScope(),
       });
-
+ 
       const redirectUrl = new URL(relayState.redirectUri);
       redirectUrl.searchParams.set("code", created.code);
-
+ 
       if (relayState.state) {
         redirectUrl.searchParams.set("state", relayState.state);
       }
-
+ 
       return res.redirect(302, redirectUrl.toString());
     } catch (err) {
       if (relayState?.redirectUri) {
@@ -2906,26 +2906,26 @@ app.get(
           "error_description",
           String(err?.message || err || "OAuth authorization failed")
         );
-
+ 
         if (relayState.state) {
           redirectUrl.searchParams.set("state", relayState.state);
         }
-
+ 
         return res.redirect(302, redirectUrl.toString());
       }
-
+ 
       throw err;
     }
   })
 );
-
+ 
 app.post(
   "/oauth/token",
   asyncHandler(async (req, res) => {
     const auth = String(req.headers.authorization || "");
     let clientId = String(req.body?.client_id || "").trim();
     let clientSecret = String(req.body?.client_secret || "").trim();
-
+ 
     const basic = auth.match(/^Basic\s+(.+)$/i);
     if (basic) {
       try {
@@ -2939,10 +2939,10 @@ app.post(
         return res.status(401).json({ error: "Invalid Basic authorization header." });
       }
     }
-
+ 
     const grantType = String(req.body?.grant_type || "").trim().toLowerCase();
     const pool = await getPool();
-
+ 
     let tokenSet;
     if (grantType === "authorization_code") {
       console.info("Alexa OAuth token exchange attempt", {
@@ -2950,7 +2950,7 @@ app.post(
         redirectUri: String(req.body?.redirect_uri || "").trim() || null,
         grantType,
       });
-
+ 
       tokenSet = await exchangeAlexaAuthorizationCode(pool, {
         clientId,
         clientSecret,
@@ -2966,7 +2966,7 @@ app.post(
     } else {
       return res.status(400).json({ error: "Unsupported grant_type." });
     }
-
+ 
     res.json({
       access_token: tokenSet.accessToken,
       token_type: tokenSet.tokenType,
@@ -2976,7 +2976,7 @@ app.post(
     });
   })
 );
-
+ 
 app.get(
   "/api/alexa/routines/templates",
   requireAmazonAuth,
@@ -2987,8 +2987,8 @@ app.get(
     });
   })
 );
-
-
+ 
+ 
 app.get(
   "/api/alexa/smart-home/discovery",
   requireAlexaSkillAuth,
@@ -2998,7 +2998,7 @@ app.get(
     res.json({ endpoints: buildDiscoveryEndpoints(profile, devices) });
   })
 );
-
+ 
 app.get(
   "/api/alexa/smart-home/state",
   requireAlexaSkillAuth,
@@ -3007,13 +3007,13 @@ app.get(
     if (!endpointId) {
       return res.status(400).json({ error: "endpointId is required." });
     }
-
+ 
     const pool = await getPool();
     const { profile, devices } = await loadSmartHomeContext(pool, req.skillAuth.userId);
     res.json({ properties: buildStateForEndpoint(profile, devices, endpointId) });
   })
 );
-
+ 
 app.post(
   "/api/alexa/smart-home/directive",
   requireAlexaSkillAuth,
@@ -3022,13 +3022,13 @@ app.post(
     if (!directive || typeof directive !== "object") {
       return res.status(400).json({ error: "directive payload is required." });
     }
-
+ 
     const pool = await getPool();
     const result = await handleSmartHomeDirective(pool, req.skillAuth.userId, directive);
     res.json(result);
   })
 );
-
+ 
 app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
@@ -3038,9 +3038,9 @@ app.get(
       pool,
       req.skillAuth.userId
     );
-
+ 
     const result = await computePrayerTimesForProfile(profile, prayers, new Date());
-
+ 
     res.json({
       ...result,
       userContext: {
@@ -3057,7 +3057,7 @@ app.get(
     });
   })
 );
-
+ 
 app.post(
   "/api/alexa/skill/playback",
   requireAlexaSkillAuth,
@@ -3067,18 +3067,18 @@ app.post(
     const requestId = req.body?.requestId ? String(req.body.requestId) : null;
     const deviceId = req.body?.deviceId ? String(req.body.deviceId) : null;
     const alexaUserId = req.body?.alexaUserId ? String(req.body.alexaUserId) : null;
-
+ 
     if (alexaUserId) {
       await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
     }
-
+ 
     try {
       const plan = await resolvePrayerPlaybackPlan(pool, {
         userId: req.skillAuth.userId,
         prayerName,
         req,
       });
-
+ 
       await logAlexaDispatch(pool, {
         userId: req.skillAuth.userId,
         requestId,
@@ -3093,7 +3093,7 @@ app.post(
           userContext: plan.userContext,
         },
       });
-
+ 
       res.json(plan);
     } catch (err) {
       await logAlexaDispatch(pool, {
@@ -3108,12 +3108,26 @@ app.post(
           alexaUserId,
         },
       });
-
+ 
       throw err;
     }
   })
 );
-
+ 
+// Infer a human-readable device type from the Alexa deviceId prefix.
+// All Alexa-enabled devices (Echo, Fire TV, Fire TV Stick, Fire Tablet,
+// Sonos, third-party) register through device-seen — not just Echo.
+function inferAlexaDeviceType(id, locale) {
+  const s = String(id || "").toUpperCase();
+  if (/FIRETV|GTV|AFTMM|AFTN|AFTS|AFTBU|AFTDCT/.test(s)) return "Fire TV / Fire Stick";
+  if (/FIRETABLET|KFTT|KFJWI|KFTHWI|KFKAWI/.test(s))     return "Fire Tablet";
+  if (/A3S5BH2HU6VAYF|A32DOYMUN6DTXA|A2H4LV5GIZ1JFT/.test(s)) return "Echo Dot";
+  if (/A1NL4BVLQ4L3N3|A2IVLV5VM2W81|AKNO1N0KSFN8L/.test(s))   return "Echo Show";
+  if (/A3RBAYBE7VM004|A1RABVCI4QCIKC/.test(s))                  return "Echo Studio";
+  if (/A10A33FOX2NUBK|A3BW5ZVFHRCQPO|A1F8D55J0FWMUK/.test(s))  return "Echo";
+  return "Alexa Device (" + locale + ")";
+}
+ 
 // device-seen — called by the skill Lambda on every launch/intent so that
 // Echo devices auto-register the first time a user speaks to the skill.
 // This is what makes devices appear in the Step 5 device list without the
@@ -3125,17 +3139,17 @@ app.post(
   asyncHandler(async (req, res) => {
     const pool = await getPool();
     const userId = req.skillAuth.userId;
-
+ 
     const deviceId = String(req.body?.deviceId || "").trim();
     const alexaUserId = String(req.body?.alexaUserId || "").trim();
     const locale = String(req.body?.locale || "en-US").trim();
     const requestId = req.body?.requestId ? String(req.body.requestId) : null;
-
+ 
     // Always track that the skill user was seen (updates last-used timestamp).
     if (alexaUserId) {
       await rememberAlexaSkillUser(pool, req.skillAuth.tokenId, alexaUserId);
     }
-
+ 
     if (!deviceId) {
       return res.json({
         ok: true,
@@ -3144,12 +3158,10 @@ app.post(
         registrationHint: null,
       });
     }
-
-    // Build a readable name from the locale tag (e.g. "en-US" → "Echo (en-US)").
-    // The Alexa app doesn't expose a friendly name through the skill event;
-    // users can rename devices in the AdhanCast app later.
-    const deviceName = `Echo Device (${locale})`;
-
+ 
+    // Infer device type from Amazon deviceId prefix — see inferAlexaDeviceType() below.
+    const deviceName = inferAlexaDeviceType(deviceId, locale);
+ 
     // Upsert the device. WHEN MATCHED we intentionally do NOT overwrite an
     // existing custom name the user may have set through the app.
     await pool
@@ -3171,7 +3183,7 @@ app.post(
           INSERT (user_id, platform, device_id, device_name)
           VALUES (@user_id, 'alexa', @device_id, @device_name);
       `);
-
+ 
     await logAlexaDispatch(pool, {
       userId,
       requestId,
@@ -3182,9 +3194,9 @@ app.post(
       message: `Device seen and registered: ${deviceId}`,
       payload: { locale, alexaUserId },
     });
-
+ 
     const invocationName = getSkillInvocationName();
-
+ 
     res.json({
       ok: true,
       registered: true,
@@ -3195,7 +3207,7 @@ app.post(
     });
   })
 );
-
+ 
 // Library
 app.get(
   "/api/library/reciters",
@@ -3208,7 +3220,7 @@ app.get(
     res.json(out);
   })
 );
-
+ 
 // Duas
 app.get(
   "/api/duas",
@@ -3217,7 +3229,7 @@ app.get(
     res.json(data);
   })
 );
-
+ 
 app.get(
   "/api/hadith-of-day",
   requireAmazonAuth,
@@ -3227,13 +3239,13 @@ app.get(
       pool,
       req.amazonProfile.user_id
     );
-
+ 
     const sect = normalizeHadithSect(req.query.sect || profile.sect || "SUNNI");
     const hadith = await getHadithOfDay(sect, new Date());
     res.json(hadith);
   })
 );
-
+ 
 // Mosque search
 app.get(
   "/api/mosques",
@@ -3241,7 +3253,7 @@ app.get(
   asyncHandler(async (req, res) => {
     const pool = await getPool();
     const { profile } = await getUserProfileAndPrayers(pool, req.amazonProfile.user_id);
-
+ 
     const country = normalizeStoredCountry(
       req.query.country || profile.country || "US",
       "US"
@@ -3254,16 +3266,16 @@ app.get(
     );
     const radiusKm = clampNumber(req.query.radiusKm, 1, 50, 25);
     const radiusMeters = radiusKm * 1000;
-
+ 
     const hasUserCoords =
       typeof profile.latitude === "number" &&
       Number.isFinite(profile.latitude) &&
       typeof profile.longitude === "number" &&
       Number.isFinite(profile.longitude);
-
+ 
     let source = "text";
     let collected = [];
-
+ 
     if (bias === "user" && hasUserCoords) {
       source = "nearby";
       const nearbyJson = await googlePlacesPost(
@@ -3284,16 +3296,16 @@ app.get(
         },
         "places.id,places.name,places.displayName,places.formattedAddress,places.location"
       );
-
+ 
       const nearbyMosques = Array.isArray(nearbyJson?.places)
         ? nearbyJson.places.map((p) => normalizePlace(p, requestedSect))
         : [];
-
+ 
       collected.push(...nearbyMosques);
     }
-
+ 
     const textQueries = buildMosqueTextQueries(rawQuery, country, requestedSect);
-
+ 
     for (const textQuery of textQueries) {
       const textBody = {
         textQuery,
@@ -3301,24 +3313,24 @@ app.get(
         strictTypeFiltering: true,
         maxResultCount: 20,
       };
-
+ 
       if (regionCode) {
         textBody.regionCode = regionCode;
       }
-
+ 
       const textJson = await googlePlacesPost(
         "/places:searchText",
         textBody,
         "places.id,places.name,places.displayName,places.formattedAddress,places.location"
       );
-
+ 
       const textMosques = Array.isArray(textJson?.places)
         ? textJson.places.map((p) => normalizePlace(p, requestedSect))
         : [];
-
+ 
       collected.push(...textMosques);
     }
-
+ 
     let mosques = dedupeMosques(
       collected.filter((m) => m.placeId && m.name)
     ).sort((a, b) => {
@@ -3326,20 +3338,20 @@ app.get(
       if (diff !== 0) return diff;
       return String(a.name || "").localeCompare(String(b.name || ""));
     });
-
+ 
     if (requestedSect !== "ALL") {
       const preferred = mosques.filter((m) => m.sectConfidence !== "mismatch");
       if (preferred.length > 0) {
         mosques = preferred;
       }
     }
-
+ 
     if (!mosques.length) {
       source = source === "nearby" ? "nearby-empty" : source;
     } else if (source === "nearby") {
       source = "nearby+text";
     }
-
+ 
     res.json({
       query: rawQuery,
       country,
@@ -3349,28 +3361,28 @@ app.get(
     });
   })
 );
-
+ 
 // Qiblah
 app.get(
   "/api/qiblah",
   asyncHandler(async (req, res) => {
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
-
+ 
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return res
         .status(400)
         .json({ error: "lat and lng query params are required numbers" });
     }
-
+ 
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       return res
         .status(400)
         .json({ error: "lat/lng out of valid range" });
     }
-
+ 
     const bearing = computeQiblahBearing(lat, lng);
-
+ 
     res.json({
       location: { lat, lon: lng },
       kaaba: { lat: 21.4225, lon: 39.8262 },
@@ -3381,7 +3393,7 @@ app.get(
     });
   })
 );
-
+ 
 // Quran
 app.get(
   "/api/quran/surahs",
@@ -3390,7 +3402,7 @@ app.get(
     if (!resp.ok) {
       return res.status(502).json({ error: "Quran upstream failed" });
     }
-
+ 
     const json = await resp.json();
     const list = (json?.data || []).map((s) => ({
       number: s.number,
@@ -3400,11 +3412,11 @@ app.get(
       ayahs: s.numberOfAyahs,
       revelationType: s.revelationType,
     }));
-
+ 
     res.json({ surahs: list });
   })
 );
-
+ 
 app.get(
   "/api/quran/surahs/:id",
   asyncHandler(async (req, res) => {
@@ -3412,36 +3424,36 @@ app.get(
     if (!Number.isFinite(id) || id < 1 || id > 114) {
       return res.status(400).json({ error: "Invalid surah id" });
     }
-
+ 
     const arabicEdition = "quran-uthmani";
     const transEdition = "en.asad";
     const audioEdition = "ar.alafasy";
-
+ 
     const [a, t, au] = await Promise.all([
       fetchWithTimeout(`https://api.alquran.cloud/v1/surah/${id}/${arabicEdition}`),
       fetchWithTimeout(`https://api.alquran.cloud/v1/surah/${id}/${transEdition}`),
       fetchWithTimeout(`https://api.alquran.cloud/v1/surah/${id}/${audioEdition}`),
     ]);
-
+ 
     if (!a.ok || !t.ok || !au.ok) {
       return res.status(502).json({ error: "Quran upstream failed" });
     }
-
+ 
     const aj = await a.json();
     const tj = await t.json();
     const auj = await au.json();
-
+ 
     const arabicAyahs = aj?.data?.ayahs || [];
     const transAyahs = tj?.data?.ayahs || [];
     const audioAyahs = auj?.data?.ayahs || [];
-
+ 
     const ayahs = arabicAyahs.map((x, idx) => ({
       numberInSurah: x.numberInSurah,
       arabic: x.text,
       translation: transAyahs[idx]?.text || "",
       audio: audioAyahs[idx]?.audio || null,
     }));
-
+ 
     res.json({
       surah: {
         number: aj?.data?.number,
@@ -3452,7 +3464,7 @@ app.get(
     });
   })
 );
-
+ 
 // User settings
 app.get(
   "/api/user/settings",
@@ -3460,10 +3472,10 @@ app.get(
   asyncHandler(async (req, res) => {
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
-
+ 
     const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
     const settings = buildUserSettingsPayload(amazonUserId, profile, prayers);
-
+ 
     res.json({
       userKey: amazonUserId,
       ...settings,
@@ -3471,7 +3483,7 @@ app.get(
     });
   })
 );
-
+ 
 async function handleSaveUserSettings(req, res) {
   const pool = await getPool();
   const amazonUserId = req.amazonProfile.user_id;
@@ -3480,55 +3492,55 @@ async function handleSaveUserSettings(req, res) {
     amazonUserId
   );
   const body = req.body || {};
-
+ 
   const incomingSect = body.sect || (body.shia === true ? "SHIA" : undefined);
   const effectiveSect = String(
     incomingSect || currentProfile.sect || "SUNNI"
   ).toUpperCase();
-
+ 
   const rawCalc = body.calculationMethod || body.calculation_method;
   const calc =
     rawCalc !== undefined && rawCalc !== null && String(rawCalc).trim() !== ""
       ? sanitizeCalculationMethodForSect(rawCalc, effectiveSect)
       : undefined;
-
+ 
   const sect = incomingSect ? effectiveSect : undefined;
   const madhhab = body.madhhab;
   const high = body.highLatitudeMethod || body.high_latitude_method;
   const language = body.language;
-
+ 
   const country = hasOwn(body, "country")
     ? normalizeStoredCountry(body.country, currentProfile.country || "US")
     : undefined;
-
+ 
   const city = hasOwn(body, "city")
     ? normalizeQueryText(body.city)
     : undefined;
-
+ 
   const timezone = hasOwn(body, "timezone")
     ? String(body.timezone || "").trim()
     : undefined;
-
+ 
   const latitude = parseOptionalNumber(body.latitude);
   const longitude = parseOptionalNumber(body.longitude);
   const accountEnabled = body.accountEnabled ?? body.account_enabled;
   const useMosqueLocation = hasOwn(body, "useMosqueLocation")
     ? body.useMosqueLocation === true
     : undefined;
-
+ 
   const hasMosqueId = hasOwn(body, "mosqueId");
   const hasMosqueName = hasOwn(body, "mosqueName");
   const hasMosqueAddress = hasOwn(body, "mosqueAddress");
   const hasMosqueLat = hasOwn(body, "mosqueLat");
   const hasMosqueLng = hasOwn(body, "mosqueLng");
-
+ 
   const hasSelectedAlexaDeviceIds =
     hasOwn(body, "selectedAlexaDeviceIds") || hasOwn(body, "selectedDeviceIds");
-
+ 
   const selectedAlexaDeviceIds = hasSelectedAlexaDeviceIds
     ? parseStringArray(body.selectedAlexaDeviceIds ?? body.selectedDeviceIds)
     : undefined;
-
+ 
   const offsets = parseOffsetsFromBody(body, {
     fajr: currentProfile.offset_fajr || 0,
     dhuhr: currentProfile.offset_dhuhr || 0,
@@ -3536,9 +3548,9 @@ async function handleSaveUserSettings(req, res) {
     maghrib: currentProfile.offset_maghrib || 0,
     isha: currentProfile.offset_isha || 0,
   });
-
+ 
   const profileReq = pool.request();
-
+ 
   profileReq.input("user_id", sql.UniqueIdentifier, userId);
   profileReq.input(
     "sect",
@@ -3580,27 +3592,27 @@ async function handleSaveUserSettings(req, res) {
     sql.Bit,
     useMosqueLocation !== undefined ? (useMosqueLocation ? 1 : 0) : null
   );
-
+ 
   profileReq.input("off_fajr", sql.Int, offsets.fajr);
   profileReq.input("off_dhuhr", sql.Int, offsets.dhuhr);
   profileReq.input("off_asr", sql.Int, offsets.asr);
   profileReq.input("off_maghrib", sql.Int, offsets.maghrib);
   profileReq.input("off_isha", sql.Int, offsets.isha);
-
+ 
   profileReq.input("set_mosque_id", sql.Bit, hasMosqueId ? 1 : 0);
   profileReq.input(
     "mosque_id",
     sql.NVarChar(255),
     hasMosqueId ? (body.mosqueId ? String(body.mosqueId) : null) : null
   );
-
+ 
   profileReq.input("set_mosque_name", sql.Bit, hasMosqueName ? 1 : 0);
   profileReq.input(
     "mosque_name",
     sql.NVarChar(255),
     hasMosqueName ? (body.mosqueName ? String(body.mosqueName) : null) : null
   );
-
+ 
   profileReq.input("set_mosque_address", sql.Bit, hasMosqueAddress ? 1 : 0);
   profileReq.input(
     "mosque_address",
@@ -3609,14 +3621,14 @@ async function handleSaveUserSettings(req, res) {
       ? (body.mosqueAddress ? String(body.mosqueAddress) : null)
       : null
   );
-
+ 
   profileReq.input("set_mosque_lat", sql.Bit, hasMosqueLat ? 1 : 0);
   profileReq.input(
     "mosque_lat",
     sql.Float,
     hasMosqueLat ? parseOptionalNumber(body.mosqueLat) ?? null : null
   );
-
+ 
   profileReq.input("set_mosque_lng", sql.Bit, hasMosqueLng ? 1 : 0);
   profileReq.input(
     "selected_alexa_device_ids_json",
@@ -3633,7 +3645,7 @@ async function handleSaveUserSettings(req, res) {
     sql.Float,
     hasMosqueLng ? parseOptionalNumber(body.mosqueLng) ?? null : null
   );
-
+ 
   await profileReq.query(`
     UPDATE dbo.user_profiles
     SET
@@ -3663,13 +3675,13 @@ async function handleSaveUserSettings(req, res) {
       updated_at = SYSUTCDATETIME()
     WHERE user_id = @user_id
   `);
-
+ 
   const quietHours = body.quietHours;
   if (isObject(quietHours)) {
     const quietEnabled = quietHours.enabled ? 1 : 0;
     const quietFrom = toSqlTime(quietHours.from, "22:00:00");
     const quietTo = toSqlTime(quietHours.to, "07:00:00");
-
+ 
     await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
@@ -3686,13 +3698,13 @@ async function handleSaveUserSettings(req, res) {
       WHERE user_id = @user_id
     `);
   }
-
+ 
   const pcs = Array.isArray(body.prayerConfigs) ? body.prayerConfigs : null;
   if (pcs) {
     for (const pc of pcs) {
       const prayerName = String(pc.prayerName || pc.prayer_name || "").toLowerCase();
       if (!PRAYERS.includes(prayerName)) continue;
-
+ 
       const setEnabled = hasOwn(pc, "enabled");
       const setOffsetMin =
         hasOwn(pc, "offsetMin") || hasOwn(pc, "offset_min");
@@ -3709,30 +3721,30 @@ async function handleSaveUserSettings(req, res) {
         hasOwn(pc, "after_type") ||
         hasOwn(pc, "after_payload") ||
         hasOwn(pc, "after_payload_json");
-
+ 
       const rawAfterType = String(
         pc.afterAdhan?.type || pc.after_type || "none"
       ).toLowerCase();
-
+ 
       const afterType = ["none", "dua", "surah"].includes(rawAfterType)
         ? rawAfterType
         : "none";
-
+ 
       const afterPayload = pc.afterAdhan?.payload ?? pc.after_payload ?? null;
       const afterPayloadJson = afterPayload ? JSON.stringify(afterPayload) : null;
-
+ 
       await pool
         .request()
         .input("user_id", sql.UniqueIdentifier, userId)
         .input("prayer_name", sql.NVarChar(10), prayerName)
-
+ 
         .input("set_enabled", sql.Bit, setEnabled ? 1 : 0)
         .input(
           "enabled",
           sql.Bit,
           setEnabled ? (pc.enabled === false ? 0 : 1) : null
         )
-
+ 
         .input("set_offset_min", sql.Bit, setOffsetMin ? 1 : 0)
         .input(
           "offset_min",
@@ -3741,14 +3753,14 @@ async function handleSaveUserSettings(req, res) {
             ? Math.max(0, Math.trunc(Number(pc.offsetMin ?? pc.offset_min ?? 0) || 0))
             : null
         )
-
+ 
         .input("set_quiet_enabled", sql.Bit, setQuietEnabled ? 1 : 0)
         .input(
           "quiet_enabled",
           sql.Bit,
           setQuietEnabled ? (pc.quietEnabled ? 1 : 0) : null
         )
-
+ 
         .input("set_quiet_from", sql.Bit, setQuietFrom ? 1 : 0)
         .input(
           "quiet_from",
@@ -3757,7 +3769,7 @@ async function handleSaveUserSettings(req, res) {
             ? toSqlTime(pc.quietFrom ?? pc.quiet_from, "22:00:00")
             : null
         )
-
+ 
         .input("set_quiet_to", sql.Bit, setQuietTo ? 1 : 0)
         .input(
           "quiet_to",
@@ -3766,7 +3778,7 @@ async function handleSaveUserSettings(req, res) {
             ? toSqlTime(pc.quietTo ?? pc.quiet_to, "07:00:00")
             : null
         )
-
+ 
         .input("set_adhan_reciter_id", sql.Bit, setAdhanReciterId ? 1 : 0)
         .input(
           "adhan_reciter_id",
@@ -3775,14 +3787,14 @@ async function handleSaveUserSettings(req, res) {
             ? (pc.adhanReciterId ? String(pc.adhanReciterId) : null)
             : null
         )
-
+ 
         .input("set_after_type", sql.Bit, setAfterAdhan ? 1 : 0)
         .input(
           "after_type",
           sql.NVarChar(16),
           setAfterAdhan ? afterType : null
         )
-
+ 
         .input("set_after_payload_json", sql.Bit, setAfterAdhan ? 1 : 0)
         .input(
           "after_payload_json",
@@ -3805,14 +3817,14 @@ async function handleSaveUserSettings(req, res) {
         `);
     }
   }
-
+ 
   const refreshed = await getUserProfileAndPrayers(pool, amazonUserId);
   const settings = buildUserSettingsPayload(
     amazonUserId,
     refreshed.profile,
     refreshed.prayers
   );
-
+ 
   res.json({
     ok: true,
     userKey: amazonUserId,
@@ -3820,13 +3832,13 @@ async function handleSaveUserSettings(req, res) {
     settings,
   });
 }
-
+ 
 app.put("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 app.post("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
 // PATCH is identical to PUT/POST — handleSaveUserSettings already does partial updates
 // via COALESCE (only provided fields are written; everything else keeps its stored value).
 app.patch("/api/user/settings", requireAmazonAuth, asyncHandler(handleSaveUserSettings));
-
+ 
 // Prayer times
 app.get(
   "/api/prayer-times/today",
@@ -3835,12 +3847,12 @@ app.get(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
-
+ 
     const result = await computePrayerTimesForProfile(profile, prayers, new Date());
     res.json(result);
   })
 );
-
+ 
 app.get(
   "/api/prayer-times/month",
   requireAmazonAuth,
@@ -3849,24 +3861,24 @@ app.get(
     if (!/^\d{4}-\d{2}$/.test(rawMonth)) {
       return res.status(400).json({ error: "month must be in YYYY-MM format" });
     }
-
+ 
     const [yearPart, monthPart] = rawMonth.split("-");
     const year = Number(yearPart);
     const month = Number(monthPart);
-
+ 
     if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
       return res.status(400).json({ error: "Invalid month value" });
     }
-
+ 
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const { profile, prayers } = await getUserProfileAndPrayers(pool, amazonUserId);
-
+ 
     const perPrayerOffset = {};
     for (const r of prayers || []) {
       perPrayerOffset[r.prayer_name] = r.offset_min || 0;
     }
-
+ 
     const method = mapCalcMethodToAlAdhan(
       profile.calculation_method || "isna",
       profile.sect || "SUNNI"
@@ -3876,7 +3888,7 @@ app.get(
     const city = normalizeQueryText(profile.city || "Chicago");
     const country = profile.country || "US";
     const countryForApi = countryLabel(country, "United States");
-
+ 
     const url =
       timing.latitude != null && timing.longitude != null
         ? `https://api.aladhan.com/v1/calendar?latitude=${encodeURIComponent(
@@ -3889,15 +3901,15 @@ app.get(
         )}&country=${encodeURIComponent(
           countryForApi
         )}&method=${method}&school=${school}&month=${month}&year=${year}`;
-
+ 
     const upstream = await fetchWithTimeout(url);
     if (!upstream.ok) {
       return res.status(502).json({ error: "Prayer API upstream failed" });
     }
-
+ 
     const json = await upstream.json();
     const data = Array.isArray(json?.data) ? json.data : [];
-
+ 
     const globalOffsets = {
       fajr: profile.offset_fajr || 0,
       dhuhr: profile.offset_dhuhr || 0,
@@ -3905,12 +3917,12 @@ app.get(
       maghrib: profile.offset_maghrib || 0,
       isha: profile.offset_isha || 0,
     };
-
+ 
     const days = data.map((entry, idx) => {
       const t = entry?.timings || {};
       const gregorianDay = Number(entry?.date?.gregorian?.day || idx + 1);
       const date = `${year}-${pad2(month)}-${pad2(gregorianDay)}`;
-
+ 
       const base24 = {
         fajr: String(t.Fajr || "").slice(0, 5),
         sunrise: String(t.Sunrise || "").slice(0, 5),
@@ -3919,7 +3931,7 @@ app.get(
         maghrib: String(t.Maghrib || "").slice(0, 5),
         isha: String(t.Isha || "").slice(0, 5),
       };
-
+ 
       return {
         date,
         source: timing.source,
@@ -3933,7 +3945,7 @@ app.get(
         },
       };
     });
-
+ 
     res.json({
       location: buildLocationPayload(profile, timing),
       mosque: {
@@ -3959,7 +3971,7 @@ app.get(
     });
   })
 );
-
+ 
 // Alexa devices
 app.get(
   "/api/alexa/devices",
@@ -3968,7 +3980,7 @@ app.get(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
-
+ 
     const result = await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
@@ -3978,11 +3990,11 @@ app.get(
         WHERE user_id = @user_id AND platform = 'alexa'
         ORDER BY device_name
       `);
-
+ 
     res.json({ devices: result.recordset });
   })
 );
-
+ 
 app.post(
   "/api/alexa/devices",
   requireAmazonAuth,
@@ -3990,12 +4002,12 @@ app.post(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
-
+ 
     const { id, name } = req.body || {};
     if (!id || !name) {
       return res.status(400).json({ error: "Provide {id, name}" });
     }
-
+ 
     await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
@@ -4011,11 +4023,11 @@ app.post(
           INSERT (user_id, platform, device_id, device_name)
           VALUES (@user_id, 'alexa', @device_id, @device_name);
       `);
-
+ 
     res.json({ ok: true });
   })
 );
-
+ 
 // Alexa endpoints — returns the user's registered Alexa devices formatted as
 // Smart Home–style endpoint objects so the AlexaSetup page can show playback
 // target names. selectedEndpointIds mirrors the selectedAlexaDeviceIds list.
@@ -4026,7 +4038,7 @@ app.get(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
-
+ 
     const [devicesResult, profileResult] = await Promise.all([
       pool
         .request()
@@ -4046,7 +4058,7 @@ app.get(
           WHERE user_id = @user_id
         `),
     ]);
-
+ 
     let selectedEndpointIds = [];
     try {
       const raw =
@@ -4056,7 +4068,7 @@ app.get(
     } catch {
       selectedEndpointIds = [];
     }
-
+ 
     res.json({
       endpoints: devicesResult.recordset.map((d) => ({
         endpointId: d.id,
@@ -4071,7 +4083,7 @@ app.get(
     });
   })
 );
-
+ 
 // Schedules
 app.get(
   "/api/user/schedules",
@@ -4080,7 +4092,7 @@ app.get(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
-
+ 
     const result = await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
@@ -4090,7 +4102,7 @@ app.get(
         WHERE user_id = @user_id
         ORDER BY created_at DESC
       `);
-
+ 
     const out = result.recordset.map((x) => {
       let payload = null;
       try {
@@ -4098,7 +4110,7 @@ app.get(
       } catch {
         payload = null;
       }
-
+ 
       return {
         id: x.id,
         scheduleType: x.schedule_type,
@@ -4110,11 +4122,11 @@ app.get(
         createdAt: x.created_at,
       };
     });
-
+ 
     res.json({ schedules: out });
   })
 );
-
+ 
 app.post(
   "/api/user/schedules",
   requireAmazonAuth,
@@ -4122,7 +4134,7 @@ app.post(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
-
+ 
     const body = req.body || {};
     const scheduleType = String(
       body.scheduleType || body.schedule_type || "tilawat"
@@ -4134,33 +4146,33 @@ app.post(
       body.deviceId && String(body.deviceId).trim()
         ? String(body.deviceId).trim()
         : null;
-
+ 
     if (!/^\d{2}:\d{2}$/.test(timeOfDay)) {
       return res.status(400).json({ error: "timeOfDay must be HH:MM" });
     }
-
+ 
     if (scheduleType !== "tilawat") {
       return res
         .status(400)
         .json({ error: "scheduleType must be 'tilawat' for MVP" });
     }
-
+ 
     const payload = body.payload;
     if (!isObject(payload)) {
       return res.status(400).json({ error: "payload must be an object" });
     }
-
+ 
     const surahNumber = Number(payload.surahNumber);
     if (!Number.isFinite(surahNumber) || surahNumber < 1 || surahNumber > 114) {
       return res.status(400).json({ error: "payload.surahNumber must be 1..114" });
     }
-
+ 
     const payloadJson = JSON.stringify({
       surahNumber,
       title: payload.title ? String(payload.title) : null,
       reciterId: payload.reciterId ? String(payload.reciterId) : null,
     });
-
+ 
     const result = await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
@@ -4175,11 +4187,11 @@ app.post(
         OUTPUT inserted.id AS id
         VALUES (@user_id, @schedule_type, @time_of_day, @days_mask, @enabled, @device_id, @payload_json)
       `);
-
+ 
     res.json({ ok: true, id: result.recordset[0]?.id });
   })
 );
-
+ 
 app.delete(
   "/api/user/schedules/:id",
   requireAmazonAuth,
@@ -4187,9 +4199,9 @@ app.delete(
     const pool = await getPool();
     const amazonUserId = req.amazonProfile.user_id;
     const userId = await ensureUser(pool, amazonUserId);
-
+ 
     const id = String(req.params.id);
-
+ 
     await pool
       .request()
       .input("id", sql.UniqueIdentifier, id)
@@ -4198,22 +4210,22 @@ app.delete(
         DELETE FROM dbo.schedules
         WHERE id = @id AND user_id = @user_id
       `);
-
+ 
     res.json({ ok: true });
   })
 );
-
+ 
 // Error handler
 app.use((err, req, res, next) => {
   console.error(err);
   if (res.headersSent) return next(err);
-
+ 
   const status = Number(err?.status || 500);
   res.status(status).json({
     error: String(err?.message || err || "Internal server error"),
   });
 });
-
+ 
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
   console.log(`AdhanHome API listening on ${port}`);
