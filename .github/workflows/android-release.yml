@@ -71,7 +71,7 @@ jobs:
       - name: Decode release keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode \
-            > backend/frontend/android/app/adhancast-release.jks
+            > ${{ github.workspace }}/adhancast-release.jks
  
       # 9. Gradle permissions
       - name: Make gradlew executable
@@ -82,7 +82,7 @@ jobs:
       - name: Build release AAB
         working-directory: backend/frontend/android
         env:
-          KEYSTORE_PATH: app/adhancast-release.jks
+          KEYSTORE_PATH: ${{ github.workspace }}/adhancast-release.jks
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -104,4 +104,4 @@ jobs:
       # 12. Clean up keystore
       - name: Remove keystore from runner
         if: always()
-        run: rm -f backend/frontend/android/app/adhancast-release.jks
+        run: rm -f ${{ github.workspace }}/adhancast-release.jks
