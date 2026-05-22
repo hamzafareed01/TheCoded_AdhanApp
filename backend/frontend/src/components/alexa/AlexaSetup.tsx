@@ -56,32 +56,32 @@ const FALLBACK_TEMPLATES: Template[] = [
   {
     id: "fajr",
     title: "Fajr Adhan",
-    routineName: "Adhan Cast – Fajr Adhan",
-    phrase: "open adhan cast and play fajr adhan",
+    routineName: "Adhan Now – Fajr Adhan",
+    phrase: "open adhan now and play fajr adhan",
   },
   {
     id: "dhuhr",
     title: "Dhuhr Adhan",
-    routineName: "Adhan Cast – Dhuhr Adhan",
-    phrase: "open adhan cast and play dhuhr adhan",
+    routineName: "Adhan Now – Dhuhr Adhan",
+    phrase: "open adhan now and play dhuhr adhan",
   },
   {
     id: "asr",
     title: "Asr Adhan",
-    routineName: "Adhan Cast – Asr Adhan",
-    phrase: "open adhan cast and play asr adhan",
+    routineName: "Adhan Now – Asr Adhan",
+    phrase: "open adhan now and play asr adhan",
   },
   {
     id: "maghrib",
     title: "Maghrib Adhan",
-    routineName: "Adhan Cast – Maghrib Adhan",
-    phrase: "open adhan cast and play maghrib adhan",
+    routineName: "Adhan Now – Maghrib Adhan",
+    phrase: "open adhan now and play maghrib adhan",
   },
   {
     id: "isha",
     title: "Isha Adhan",
-    routineName: "Adhan Cast – Isha Adhan",
-    phrase: "open adhan cast and play isha adhan",
+    routineName: "Adhan Now – Isha Adhan",
+    phrase: "open adhan now and play isha adhan",
   },
 ];
  
@@ -207,7 +207,7 @@ export default function AlexaSetup() {
       return "Enable and link the Alexa skill from onboarding step 2. After linking succeeds, come back here to verify status.";
     }
     if (!selectedTargetCount && !selectedDeviceCount) {
-      return "Pick at least one playback target in Step 5 or Settings so AdhanCast knows which devices or groups should be allowed.";
+      return "Pick at least one playback target in Step 5 or Settings so AdhanNow knows which devices or groups should be allowed.";
     }
     return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, then create routines if you want scheduled playback.";
   }, [selectedDeviceCount, selectedTargetCount, status]);
@@ -288,7 +288,7 @@ export default function AlexaSetup() {
  
               <div className="grid md:grid-cols-2 gap-3">
                 {[
-                  { label: "Invocation name", value: status?.invocationName || "adhan cast" },
+                  { label: "Invocation name", value: status?.invocationName || "adhan now" },
                   { label: "Skill stage", value: status?.skillStage || "development" },
                   { label: "Enablement status", value: status?.enablementStatus || "Not enabled yet" },
                   { label: "Account-link status", value: status?.accountLinkStatus || "Not linked yet" },

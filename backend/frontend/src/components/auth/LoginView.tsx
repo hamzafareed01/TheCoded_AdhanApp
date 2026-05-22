@@ -77,7 +77,7 @@ export default function LoginView({ onLogin, storageKey }: LoginViewProps) {
 
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
                     <div>
-                        <h1 className="text-white text-xl mb-1">Sign in to My Adhan Home</h1>
+                        <h1 className="text-white text-xl mb-1">Sign in to My Adhan Now</h1>
                         <p className="text-slate-400 text-sm">
                             Use the demo account for now. Later we&apos;ll replace this with
                             &quot;Login with Amazon / Google / Apple&quot;.

@@ -5,7 +5,7 @@ function normalizeBase(base: string): string {
 }
 
 const FALLBACK_PROD_API =
-  "https://app-adhanhome-api-prod-cdfdcsfeb5gtd7e9.centralus-01.azurewebsites.net";
+  "https://app-adhannow-api-prod-cdfdcsfeb5gtd7e9.centralus-01.azurewebsites.net";
 
 const envBase =
   (import.meta as any).env?.VITE_API_BASE ||

@@ -49,7 +49,7 @@ function readDuas() {
 }
 
 function getSkillInvocationName() {
-  return String(process.env.ALEXA_SKILL_INVOCATION_NAME || 'adhan cast').trim();
+  return String(process.env.ALEXA_SKILL_INVOCATION_NAME || 'adhan now').trim();
 }
 
 function getPublicApiBase(req) {
@@ -280,7 +280,7 @@ function buildRoutineTemplates() {
       id: prayerName,
       prayerName,
       title,
-      routineName: `Adhan Cast – ${title}`,
+      routineName: `Adhan Now – ${title}`,
       phrase: `open ${invocationName} and play ${prayerName} adhan`,
     };
   });
@@ -327,7 +327,7 @@ async function resolvePrayerPlaybackPlan(pool, params) {
       throw createAlexaSkillError(
         403,
         'DEVICE_NOT_ENABLED',
-        'This Alexa device is not enabled in your AdhanCast settings.'
+        'This Alexa device is not enabled in your AdhanNow settings.'
       );
     }
   }
@@ -411,7 +411,7 @@ async function resolvePrayerPlaybackPlan(pool, params) {
     mode: 'policy_only',
     reason:
       quietDownEnabled
-        ? 'AdhanCast can store and enforce the quiet-down policy in your account, but device-wide mute or volume changes require separate Alexa smart-home or video device integration.'
+        ? 'AdhanNow can store and enforce the quiet-down policy in your account, but device-wide mute or volume changes require separate Alexa smart-home or video device integration.'
         : null,
   };
 

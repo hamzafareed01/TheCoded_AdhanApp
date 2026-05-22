@@ -11,10 +11,10 @@ const DEFAULT_QUIET_DOWN_POLICY = {
 };
 
 const ENDPOINT_IDS = {
-  automation: "adhancast:automation",
-  quietMode: "adhancast:quiet-mode",
-  quietVolume: "adhancast:quiet-volume",
-  fireTvQuiet: "adhancast:firetv-quiet",
+  automation: "adhannow:automation",
+  quietMode: "adhannow:quiet-mode",
+  quietVolume: "adhannow:quiet-volume",
+  fireTvQuiet: "adhannow:firetv-quiet",
 };
 
 function safeParseJson(value, fallback = null) {
@@ -155,9 +155,9 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
   const endpoints = [
     {
       endpointId: ENDPOINT_IDS.automation,
-      manufacturerName: "AdhanCast",
-      friendlyName: "AdhanCast Automation",
-      description: "Turn AdhanCast prayer automation on or off.",
+      manufacturerName: "AdhanNow",
+      friendlyName: "AdhanNow Automation",
+      description: "Turn AdhanNow prayer automation on or off.",
       displayCategories: ["SWITCH"],
       cookie: { ...baseCookie, kind: "automation" },
       capabilities: [
@@ -168,8 +168,8 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
     },
     {
       endpointId: ENDPOINT_IDS.quietMode,
-      manufacturerName: "AdhanCast",
-      friendlyName: "AdhanCast Quiet Mode",
+      manufacturerName: "AdhanNow",
+      friendlyName: "AdhanNow Quiet Mode",
       description: `Enable or disable the saved quiet-down policy during adhan${descriptionBits.length ? ` (${descriptionBits.join(", ")})` : ""}.`,
       displayCategories: ["SWITCH"],
       cookie: { ...baseCookie, kind: "quiet-mode" },
@@ -181,8 +181,8 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
     },
     {
       endpointId: ENDPOINT_IDS.quietVolume,
-      manufacturerName: "AdhanCast",
-      friendlyName: "AdhanCast Quiet Volume",
+      manufacturerName: "AdhanNow",
+      friendlyName: "AdhanNow Quiet Volume",
       description: quiet.mode === "mute"
         ? "Saved quiet-down volume target used when you switch from mute to reduced volume mode."
         : "Control the saved quiet-down volume target used during adhan.",
@@ -199,8 +199,8 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
   if (fireTvTargets.length > 0) {
     endpoints.push({
       endpointId: ENDPOINT_IDS.fireTvQuiet,
-      manufacturerName: "AdhanCast",
-      friendlyName: "AdhanCast Fire TV Quieting",
+      manufacturerName: "AdhanNow",
+      friendlyName: "AdhanNow Fire TV Quieting",
       description: "Enable or disable whether your saved quiet-down policy should include Fire TV targets in future supported integrations.",
       displayCategories: ["SWITCH"],
       cookie: { ...baseCookie, kind: "firetv-quiet" },

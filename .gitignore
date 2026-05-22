@@ -29,7 +29,7 @@ backend-deploy.zip
 
 backend/_deploy/
 deploy/
-backend_deploy.zipadhancast-release.jks
+backend_deploy.zipadhannow-release.jks
 keystore-base64.txt
 *.jks
 backend/frontend/android/.idea/

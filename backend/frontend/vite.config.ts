@@ -15,8 +15,8 @@ export default defineConfig(({ mode }) => {
         injectRegister: 'auto',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
         manifest: {
-          name: 'Adhan Home',
-          short_name: 'AdhanHome',
+          name: 'Adhan Now',
+          short_name: 'AdhanNow',
           description: 'Prayer times, Adhan alerts, duas, surahs, qiblah and mosque tools.',
           id: '/',
           start_url: '/',

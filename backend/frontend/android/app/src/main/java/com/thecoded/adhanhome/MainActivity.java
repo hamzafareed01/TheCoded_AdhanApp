@@ -1,4 +1,4 @@
-package com.thecoded.adhanhome;
+package com.thecoded.adhannow;
 
 import com.getcapacitor.BridgeActivity;
 

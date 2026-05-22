@@ -35,7 +35,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
 
                 <data
-                    android:scheme="com.thecoded.adhanhome"
+                    android:scheme="com.thecoded.adhannow"
                     android:host="auth" />
             </intent-filter>
 

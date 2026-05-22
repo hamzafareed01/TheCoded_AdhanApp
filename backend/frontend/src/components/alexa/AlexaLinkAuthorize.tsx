@@ -27,7 +27,7 @@ export default function AlexaLinkAuthorize() {
           <div>
             <div className="text-slate-100 text-lg font-semibold">Alexa account linking</div>
             <div className="text-slate-400 text-sm">
-              Returning you to AdhanCast to finish Alexa account linking…
+              Returning you to AdhanNow to finish Alexa account linking…
             </div>
           </div>
         </div>

@@ -30,7 +30,7 @@ backend-deploy.zip
 backend/_deploy/
 deploy/
 backend_deploy.zip
-adhancast-release.jks
+adhannow-release.jks
 keystore-base64.txt
 *.jks
 backend/.env

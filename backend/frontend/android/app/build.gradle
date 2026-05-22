@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace "com.thecoded.adhanhome"
+    namespace "com.thecoded.adhannow"
     compileSdk 36
     defaultConfig {
-        applicationId "com.thecoded.adhanhome"
+        applicationId "com.thecoded.adhannow"
         minSdk 24
         targetSdk 36
         versionCode 1

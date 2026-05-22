@@ -1,6 +1,6 @@
 {
-  "appId": "com.thecoded.adhanhome",
-  "appName": "AdhanCast",
+  "appId": "com.thecoded.adhannow",
+  "appName": "AdhanNow",
   "webDir": "build",
   "server": {
     "androidScheme": "https"

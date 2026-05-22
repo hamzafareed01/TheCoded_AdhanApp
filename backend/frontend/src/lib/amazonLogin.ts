@@ -118,7 +118,7 @@ export function getAmazonClientId(): string {
 export function getAmazonReturnUrl(): string {
   // Amazon Login with Amazon must always receive an HTTPS/localhost web callback.
   // Never return the native Android custom scheme from here. Android receives
-  // com.thecoded.adhanhome://auth only after the Step 2 web callback exchanges
+  // com.thecoded.adhannow://auth only after the Step 2 web callback exchanges
   // the Amazon authorization code with the backend and gets an adhapp_ session.
   const explicit =
     normalizeUrl(getEnv("VITE_AMAZON_RETURN_URL")) ||
@@ -309,8 +309,8 @@ export function parseAuthReturnUrl(rawUrl: string): ParsedAuthReturn | null {
 
     // Support custom scheme or App Link
     let path = url.pathname;
-    if (url.protocol === "com.thecoded.adhanhome:") {
-      // For com.thecoded.adhanhome://onboarding/step2
+    if (url.protocol === "com.thecoded.adhannow:") {
+      // For com.thecoded.adhannow://onboarding/step2
       // URL constructor: host = "onboarding", pathname = "/step2"
       if (url.host && url.host !== "localhost") {
         path = "/" + url.host + url.pathname;

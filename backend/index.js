@@ -615,7 +615,7 @@ function getAppLinkStateSecret() {
     process.env.ALEXA_APP_LINK_STATE_SECRET ||
     process.env.ALEXA_OAUTH_CLIENT_SECRET ||
     process.env.ALEXA_SKILL_CLIENT_SECRET ||
-    "adhancast-app-link-state"
+    "adhannow-app-link-state"
   );
 }
  
@@ -802,7 +802,7 @@ function getOauthRelayStateSecret() {
     process.env.ALEXA_OAUTH_RELAY_STATE_SECRET ||
     process.env.ALEXA_APP_LINK_STATE_SECRET ||
     process.env.ALEXA_OAUTH_CLIENT_SECRET ||
-    "adhancast-oauth-relay-state"
+    "adhannow-oauth-relay-state"
   );
 }
  
@@ -1301,7 +1301,7 @@ function getAppSessionSecret() {
       process.env.ADHANCAST_SESSION_SECRET ||
       process.env.ALEXA_APP_LINK_STATE_SECRET ||
       process.env.ALEXA_OAUTH_CLIENT_SECRET ||
-      "adhancast-dev-session-secret"
+      "adhannow-dev-session-secret"
   );
 }
  
@@ -1331,7 +1331,7 @@ function createAppSessionToken(profile) {
   const now = Date.now();
   const expiresAtMs = now + getAppSessionTtlMs();
   const payload = {
-    typ: "adhancast_app_session",
+    typ: "adhannow_app_session",
     user_id: String(profile.user_id),
     email: profile.email || null,
     name: profile.name || null,
@@ -1373,7 +1373,7 @@ function verifyAppSessionToken(token) {
   }
  
   const payload = JSON.parse(base64UrlDecode(encodedPayload));
-  if (payload?.typ !== "adhancast_app_session" || !payload?.user_id) {
+  if (payload?.typ !== "adhannow_app_session" || !payload?.user_id) {
     const err = new Error("App session token payload is invalid.");
     err.status = 401;
     throw err;
@@ -2221,7 +2221,7 @@ function dedupeMosques(list) {
 // Routes
 // -----------------------------
 app.get("/", (req, res) => {
-  res.json({ ok: true, service: "adhanhome-api" });
+  res.json({ ok: true, service: "adhannow-api" });
 });
  
 app.get("/health", (req, res) => res.json({ ok: true }));
@@ -3202,7 +3202,7 @@ app.post(
       registered: true,
       registrationHint: {
         voiceCommand: `Alexa, open ${invocationName} and play Fajr adhan`,
-        note: "This device is now registered and will appear in your AdhanCast app.",
+        note: "This device is now registered and will appear in your AdhanNow app.",
       },
     });
   })
@@ -4228,5 +4228,5 @@ app.use((err, req, res, next) => {
  
 const port = Number(process.env.PORT || 4000);
 app.listen(port, () => {
-  console.log(`AdhanHome API listening on ${port}`);
+  console.log(`AdhanNow API listening on ${port}`);
 });

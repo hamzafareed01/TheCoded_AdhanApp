@@ -90,7 +90,7 @@ export default function Step1Welcome({
         {/* Hero Section */}
         <div className="text-center mb-8 md:mb-12">
           <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
-            Welcome to My Adhan Home
+            Welcome to My Adhan Now
           </h1>
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
             Let&apos;s set up your smart home for accurate prayer times and

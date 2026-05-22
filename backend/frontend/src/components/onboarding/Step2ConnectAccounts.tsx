@@ -90,9 +90,9 @@ const LS_TOKENS = "adhan_tokens";
 const LS_ALEXA_LINK_PENDING = "adhan_alexa_link_pending";
 
 const AMAZON_AUTHORIZE_URL = "https://www.amazon.com/ap/oa";
-const AMAZON_LOGIN_STATE_PREFIX = "adhancast_amazon_login_";
-const NATIVE_LOGIN_STATE_PREFIX = "adhancast_native_login_";
-const NATIVE_AUTH_CALLBACK_URL = "com.thecoded.adhanhome://auth";
+const AMAZON_LOGIN_STATE_PREFIX = "adhannow_amazon_login_";
+const NATIVE_LOGIN_STATE_PREFIX = "adhannow_native_login_";
+const NATIVE_AUTH_CALLBACK_URL = "com.thecoded.adhannow://auth";
 const APP_SESSION_PREFIX = "adhapp_";
 
 function isNativeRuntime(): boolean {
@@ -152,7 +152,7 @@ function buildNativeAppCallbackUrl(params: {
   if (params.sessionToken) {
     const sessionToken = params.sessionToken.trim();
     if (!sessionToken.startsWith(APP_SESSION_PREFIX)) {
-      throw new Error("Cannot relay an invalid AdhanCast session token to Android.");
+      throw new Error("Cannot relay an invalid AdhanNow session token to Android.");
     }
     url.searchParams.set("session_token", sessionToken);
   }
@@ -172,7 +172,7 @@ function parseNativeAppCallbackUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl);
 
-    if (url.protocol !== "com.thecoded.adhanhome:" || url.host !== "auth") {
+    if (url.protocol !== "com.thecoded.adhannow:" || url.host !== "auth") {
       return null;
     }
 
@@ -262,7 +262,7 @@ export default function Step2ConnectAccounts({
       {
         key: "alexa" as const,
         name: "Amazon Alexa",
-        desc: "Connect Amazon first, then enable the AdhanCast Alexa skill without making users search manually.",
+        desc: "Connect Amazon first, then enable the AdhanNow Alexa skill without making users search manually.",
         Icon: AlexaIcon,
         badge: "Required",
       },
@@ -399,11 +399,11 @@ export default function Step2ConnectAccounts({
         : "";
 
     if (!durableToken) {
-      throw new Error("Backend did not return an AdhanCast session token.");
+      throw new Error("Backend did not return an AdhanNow session token.");
     }
 
     if (!durableToken.startsWith(APP_SESSION_PREFIX)) {
-      throw new Error("Backend returned an invalid AdhanCast session token.");
+      throw new Error("Backend returned an invalid AdhanNow session token.");
     }
 
     setStoredAmazonToken(durableToken);
@@ -449,7 +449,7 @@ export default function Step2ConnectAccounts({
     }
 
     if (!parsed.sessionToken.startsWith(APP_SESSION_PREFIX)) {
-      setError("Android login returned an invalid AdhanCast session token.");
+      setError("Android login returned an invalid AdhanNow session token.");
       setLoadingKey(null);
       return true;
     }
@@ -504,7 +504,7 @@ export default function Step2ConnectAccounts({
       typeof completeData?.invocationName === "string" &&
       completeData.invocationName.trim()
         ? completeData.invocationName.trim()
-        : "adhan cast";
+        : "adhan now";
 
     clearPendingAlexaLink();
     await Promise.all([refreshServerStatus(), refreshAlexaLinkStatus()]);
@@ -589,7 +589,7 @@ export default function Step2ConnectAccounts({
         const restoredToken = restoreAmazonTokenFromUrl();
         if (restoredToken && !restoredToken.startsWith(APP_SESSION_PREFIX)) {
           // Only send raw Amazon access tokens to the old /login endpoint.
-          // adhapp_ session tokens are AdhanCast app sessions — pass them
+          // adhapp_ session tokens are AdhanNow app sessions — pass them
           // through refreshServerStatus instead of re-sending to Amazon.
           setLoadingKey("alexa");
           setError(null);
@@ -647,7 +647,7 @@ export default function Step2ConnectAccounts({
 
       if (isNativeRuntime()) {
         setInfo(
-          "Opening Amazon sign-in. After approval, AdhanCast will return to the app automatically."
+          "Opening Amazon sign-in. After approval, AdhanNow will return to the app automatically."
         );
         await Browser.open({
           url: authorizationUrl,
@@ -1043,7 +1043,7 @@ export default function Step2ConnectAccounts({
           {(deviceHint || skillLinked) && (
             <div className="mb-6 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-sm text-sky-100">
               {deviceHint ||
-                "After linking, use the skill once from each Alexa device you want to appear in Step 5. Saying 'Alexa, open AdhanCast' and then 'play Fajr adhan' is enough."}
+                "After linking, use the skill once from each Alexa device you want to appear in Step 5. Saying 'Alexa, open AdhanNow' and then 'play Fajr adhan' is enough."}
             </div>
           )}
 
