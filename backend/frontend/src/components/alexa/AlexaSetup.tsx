@@ -5,7 +5,7 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { CheckCircle2, Copy, RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
 import { apiFetch } from "../../lib/api";
-
+//Workflow trigger, delete comment later
 type Template = {
   id: string;
   title: string;
