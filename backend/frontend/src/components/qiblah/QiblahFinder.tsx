@@ -3,13 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
+import { Capacitor } from "@capacitor/core";
 import { apiFetch } from "../../lib/api";
 
 type QiblahResult = {
   location: { lat: number; lon: number };
   kaaba: { lat: number; lon: number };
-  bearing: number; // degrees from true north
-  direction: string; // e.g. "NE"
+  bearing: number;
+  direction: string;
   source: string;
   message: string;
 };
@@ -26,10 +27,68 @@ function speak(text: string) {
   }
 }
 
+async function requestLocationPermission(): Promise<boolean> {
+  // On native Android/iOS, use Capacitor Geolocation plugin if available
+  if (Capacitor.isNativePlatform()) {
+    try {
+      // Dynamically import to avoid errors if plugin isn't installed
+      const { Geolocation } = await import("@capacitor/geolocation");
+      const status = await Geolocation.requestPermissions();
+      return status.location === "granted" || status.coarseLocation === "granted";
+    } catch {
+      // Plugin not available — fall through to navigator.geolocation
+      return true;
+    }
+  }
+  // On web, navigator.geolocation handles its own permission dialog
+  return true;
+}
+
+async function getCurrentPosition(): Promise<{ lat: number; lng: number }> {
+  // On native, prefer Capacitor Geolocation for reliable Android permission flow
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const { Geolocation } = await import("@capacitor/geolocation");
+      const pos = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 15000,
+      });
+      return {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      };
+    } catch {
+      // Fall through to navigator.geolocation
+    }
+  }
+
+  // Web fallback
+  return new Promise((resolve, reject) => {
+    if (!("geolocation" in navigator)) {
+      reject(new Error("Geolocation is not available in this browser."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => {
+        if (err.code === err.PERMISSION_DENIED) {
+          reject(new Error("Location permission denied. Please enable location access in your device settings and try again."));
+        } else if (err.code === err.POSITION_UNAVAILABLE) {
+          reject(new Error("Location unavailable. Please check that location services are enabled."));
+        } else {
+          reject(new Error("Could not get your location. Please try again or enter coordinates manually."));
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
 export default function QiblahFinder() {
   const [result, setResult] = useState<QiblahResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   const [latInput, setLatInput] = useState("");
   const [lngInput, setLngInput] = useState("");
@@ -79,31 +138,33 @@ export default function QiblahFinder() {
     }
   };
 
-  const handleUseCurrent = () => {
+  const handleUseCurrent = async () => {
     setError(null);
     setResult(null);
-
-    if (!("geolocation" in navigator)) {
-      setError("Geolocation is not available in this browser.");
-      return;
-    }
-
+    setPermissionDenied(false);
     setLoading(true);
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        setLatInput(lat.toString());
-        setLngInput(lng.toString());
-        callBackend(lat, lng);
-      },
-      (err) => {
-        console.error(err);
+    try {
+      const granted = await requestLocationPermission();
+      if (!granted) {
+        setPermissionDenied(true);
+        setError("Location permission is required to find the Qiblah direction. Please enable location access in your device settings.");
         setLoading(false);
-        setError("Could not get your location. Please allow location access.");
+        return;
       }
-    );
+
+      const { lat, lng } = await getCurrentPosition();
+      setLatInput(lat.toString());
+      setLngInput(lng.toString());
+      await callBackend(lat, lng);
+    } catch (err: any) {
+      console.error(err);
+      setLoading(false);
+      if (err.message?.includes("denied") || err.message?.includes("permission")) {
+        setPermissionDenied(true);
+      }
+      setError(err.message || "Could not get your location.");
+    }
   };
 
   const handleUseManual = () => {
@@ -118,7 +179,7 @@ export default function QiblahFinder() {
       return;
     }
 
-    callBackend(lat, lng);
+    void callBackend(lat, lng);
   };
 
   const handleAnnounce = () => {
@@ -128,15 +189,19 @@ export default function QiblahFinder() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 py-6 px-4 md:px-8">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-8 flex-wrap gap-4">
-          <Logo />
-          <Navigation />
+    <div className="min-h-screen bg-slate-950 overscroll-none" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
+        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <Logo />
+            <Navigation />
+          </div>
         </div>
+      </div>
 
+      <div className="max-w-6xl mx-auto px-4 py-6 md:px-8" style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}>
         <header className="mb-6">
-          <h1 className="text-white text-2xl md:text-3xl mb-2">Qiblah Finder</h1>
+          <h1 className="text-white text-2xl md:text-3xl mb-2 font-semibold">Qiblah Finder</h1>
           <p className="text-slate-400">
             Find the direction of the Kaaba from your current location, or enter coordinates manually.
           </p>
@@ -144,18 +209,23 @@ export default function QiblahFinder() {
 
         {error && (
           <div className="mb-6 p-4 rounded-2xl border border-red-900/60 bg-red-950/30 text-red-200">
-            {error}
+            <p className="mb-2">{error}</p>
+            {permissionDenied && (
+              <p className="text-sm text-red-300 mt-1">
+                To enable: go to your phone's <strong>Settings → Apps → AdhanNow → Permissions → Location</strong> and allow it, then try again.
+              </p>
+            )}
           </div>
         )}
 
         <div className="grid md:grid-cols-2 gap-6 mb-8">
           <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
-            <h2 className="text-white mb-3">Use my current location</h2>
+            <h2 className="text-white mb-3 font-medium">Use my current location</h2>
             <p className="text-slate-400 text-sm mb-4">
-              We will request browser geolocation, then calculate Qiblah direction using the backend.
+              AdhanNow will request location permission, then calculate the Qiblah direction automatically.
             </p>
             <Button
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white min-h-[44px] touch-manipulation"
               onClick={handleUseCurrent}
               disabled={loading}
             >
@@ -164,7 +234,7 @@ export default function QiblahFinder() {
           </div>
 
           <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
-            <h2 className="text-white mb-3">Enter coordinates</h2>
+            <h2 className="text-white mb-3 font-medium">Enter coordinates</h2>
             <p className="text-slate-400 text-sm mb-4">
               Paste latitude/longitude from Maps if you prefer manual entry.
             </p>
@@ -185,7 +255,7 @@ export default function QiblahFinder() {
             </div>
 
             <Button
-              className="w-full bg-slate-200 hover:bg-white text-slate-900"
+              className="w-full bg-slate-200 hover:bg-white text-slate-900 min-h-[44px] touch-manipulation"
               onClick={handleUseManual}
               disabled={loading}
             >
@@ -198,17 +268,17 @@ export default function QiblahFinder() {
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
-                <h3 className="text-white text-xl mb-1">Result</h3>
+                <h3 className="text-white text-xl mb-1 font-medium">Result</h3>
                 <p className="text-slate-300">{result.message}</p>
                 <p className="text-slate-400 text-sm mt-2">
-                  Bearing: <span className="text-slate-100 font-semibold">{Math.round(result.bearing)}°</span> • Direction:{" "}
+                  Bearing: <span className="text-slate-100 font-semibold">{Math.round(result.bearing)}°</span> · Direction:{" "}
                   <span className="text-slate-100 font-semibold">{COMPASS_DIRECTION_LABELS[result.direction] || result.direction}</span>
                 </p>
               </div>
 
               <div className="flex flex-col gap-3 min-w-[220px]">
                 <Button
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white min-h-[44px] touch-manipulation"
                   onClick={handleAnnounce}
                   disabled={!canSpeak}
                 >

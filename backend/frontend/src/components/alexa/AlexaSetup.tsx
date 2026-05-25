@@ -1,57 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Badge } from "../ui/badge";
-import { AlertTriangle, Check, CheckCircle2, Copy, Link2, RefreshCw } from "lucide-react";
+import { CheckCircle2, Copy, RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
 import { apiFetch } from "../../lib/api";
- 
+
 type Template = {
   id: string;
   title: string;
   routineName: string;
   phrase: string;
 };
- 
+
 type LinkStatus = {
   configured?: boolean;
   appLinkClientConfigured?: boolean;
   linked?: boolean;
   lwaLinked?: boolean;
-  expiresAt?: string | null;
-  lwaExpiresAt?: string | null;
-  lastUsedAt?: string | null;
   invocationName?: string | null;
-  skillId?: string | null;
-  skillStage?: string | null;
-  enablementStatus?: string | null;
   accountLinkStatus?: string | null;
-  endpointHost?: string | null;
 };
- 
-type UserSettingsSummary = {
-  selectedAlexaDeviceIds?: string[];
-  selectedAlexaTargetEndpointIds?: string[];
-  perPrayerTargetEndpointIds?: Record<string, string[]>;
-  useMosqueLocation?: boolean;
-  mosqueName?: string | null;
-  calculationMethod?: string | null;
-  madhhab?: string | null;
-  sect?: string | null;
-  accountEnabled?: boolean;
-};
- 
-type DeviceListResponse = {
-  devices?: Array<{ id: string; name: string; platform?: string | null }>;
-};
- 
-type EndpointListResponse = {
-  endpoints?: Array<{ endpointId: string; friendlyName: string; endpointKind?: string; supportsFireTv?: boolean }>;
-  selectedEndpointIds?: string[];
-  prayerTargetEndpointMap?: Record<string, string[]>;
-};
- 
+
 const FALLBACK_TEMPLATES: Template[] = [
   {
     id: "fajr",
@@ -84,33 +54,13 @@ const FALLBACK_TEMPLATES: Template[] = [
     phrase: "open adhan now and play isha adhan",
   },
 ];
- 
-function formatDateTime(value?: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
-}
- 
-function statusTone(ok: boolean) {
-  return ok ? "default" : "secondary";
-}
- 
+
 export default function AlexaSetup() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<Template[]>(FALLBACK_TEMPLATES);
   const [status, setStatus] = useState<LinkStatus | null>(null);
-  const [settings, setSettings] = useState<UserSettingsSummary | null>(null);
-  const [deviceNames, setDeviceNames] = useState<string[]>([]);
-  const [playbackTargetNames, setPlaybackTargetNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
- 
-  const accountLinkPage = useMemo(() => {
-    return typeof window !== "undefined"
-      ? `${window.location.origin}/onboarding/step2`
-      : "/onboarding/step2";
-  }, []);
- 
+
   async function copy(text: string, id: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -123,118 +73,58 @@ export default function AlexaSetup() {
       document.body.removeChild(el);
     }
     setCopiedId(id);
-    setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1200);
+    setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1500);
   }
- 
+
   async function load() {
     setLoading(true);
-    setError(null);
- 
     try {
-      const [templatesRes, statusRes, settingsRes, devicesRes, endpointsRes] = await Promise.all([
+      const [templatesRes, statusRes] = await Promise.all([
         apiFetch("/api/alexa/routines/templates"),
         apiFetch("/api/alexa/account-linking/status"),
-        apiFetch("/api/user/settings"),
-        apiFetch("/api/alexa/devices"),
-        apiFetch("/api/alexa/endpoints"),
       ]);
- 
+
       if (templatesRes.ok) {
         const payload = (await templatesRes.json()) as { templates?: Template[] };
         if (Array.isArray(payload.templates) && payload.templates.length > 0) {
           setTemplates(payload.templates);
         }
       }
- 
+
       if (statusRes.ok) {
-        const payload = (await statusRes.json()) as LinkStatus;
-        setStatus(payload);
-      } else if (statusRes.status === 401) {
-        setStatus(null);
-        setError("Connect Amazon in onboarding step 2 first, then come back here.");
-      }
- 
-      if (settingsRes.ok) {
-        const payload = (await settingsRes.json()) as { settings?: UserSettingsSummary } & UserSettingsSummary;
-        setSettings(payload.settings ?? payload);
-      }
- 
-      if (devicesRes.ok) {
-        const payload = (await devicesRes.json()) as DeviceListResponse;
-        const names = Array.isArray(payload.devices)
-          ? payload.devices.map((device) => device.name).filter(Boolean)
-          : [];
-        setDeviceNames(names);
-      }
- 
-      if (endpointsRes.ok) {
-        const payload = (await endpointsRes.json()) as EndpointListResponse;
-        const names = Array.isArray(payload.endpoints)
-          ? payload.endpoints.map((endpoint) => endpoint.friendlyName).filter(Boolean)
-          : [];
-        setPlaybackTargetNames(names);
+        setStatus((await statusRes.json()) as LinkStatus);
       }
     } catch {
-      setError("Could not load Alexa setup details right now.");
+      // silently fail — page still works with fallbacks
     } finally {
       setLoading(false);
     }
   }
- 
+
   useEffect(() => {
     void load();
   }, []);
- 
-  const selectedDeviceCount = Array.isArray(settings?.selectedAlexaDeviceIds)
-    ? settings?.selectedAlexaDeviceIds.length
-    : 0;
-  const selectedTargetCount = Array.isArray(settings?.selectedAlexaTargetEndpointIds)
-    ? settings?.selectedAlexaTargetEndpointIds.length
-    : 0;
- 
-  const sourceLabel = settings?.useMosqueLocation
-    ? settings?.mosqueName || "Mosque timing source"
-    : "Personal location / calculation";
- 
-  const nextStep = useMemo(() => {
-    if (!status?.configured || !status?.appLinkClientConfigured) {
-      return "Backend Alexa configuration is incomplete. Check OAuth and app-link environment variables before testing devices.";
-    }
-    if (!status?.lwaLinked) {
-      return "Connect Amazon in onboarding step 2 so the app can save your Alexa link state.";
-    }
-    if (status?.accountLinkStatus !== "LINKED") {
-      return "Enable and link the Alexa skill from onboarding step 2. After linking succeeds, come back here to verify status.";
-    }
-    if (!selectedTargetCount && !selectedDeviceCount) {
-      return "Pick at least one playback target in Step 5 or Settings so AdhanNow knows which devices or groups should be allowed.";
-    }
-    return "Alexa core setup looks healthy. Next: test voice playback on your Echo Dot and Fire TV, then create routines if you want scheduled playback.";
-  }, [selectedDeviceCount, selectedTargetCount, status]);
- 
+
+  const isAmazonConnected = !!status?.lwaLinked;
+  const isSkillLinked = status?.accountLinkStatus === "LINKED";
+  const invocationName = status?.invocationName || "adhan now";
+
   return (
-    /* overscroll-none prevents pull-to-refresh on mobile */
     <div
       className="min-h-screen bg-slate-950 overscroll-none"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      {/* Sticky header — consistent with other pages */}
+      {/* Sticky header */}
       <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
         <div className="max-w-7xl mx-auto px-4 py-3 md:py-4 md:px-6">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3">
               <Logo />
-              <div>
-                <div className="text-slate-100 font-semibold text-base md:text-lg">
-                  Alexa Setup
-                </div>
-                <div className="text-slate-400 text-xs md:text-sm hidden sm:block">
-                  Guided Alexa status, routine phrases, and app-controlled playback checks.
-                </div>
+              <div className="text-slate-100 font-semibold text-base md:text-lg">
+                Alexa Setup
               </div>
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              {/* touch-manipulation removes 300ms tap delay; min-h-[44px] meets Apple HIG */}
+            <div className="flex items-center gap-2">
               <Button
                 variant="secondary"
                 className="inline-flex items-center gap-2 min-h-[44px] touch-manipulation active:opacity-80"
@@ -242,153 +132,145 @@ export default function AlexaSetup() {
                 disabled={loading}
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-                <span className="hidden sm:inline">Refresh status</span>
+                <span className="hidden sm:inline">Refresh</span>
               </Button>
               <Navigation />
             </div>
           </div>
         </div>
       </div>
- 
-      {/* Main content — safe area bottom so nothing hides behind home indicator */}
+
       <div
-        className="max-w-7xl mx-auto px-4 py-6 md:px-6 md:py-8"
+        className="max-w-3xl mx-auto px-4 py-6 md:px-6 md:py-8 space-y-6"
         style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
       >
-        {error ? (
-          <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-            <div className="inline-flex items-center gap-2 font-medium">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-              {error}
+        {/* Connection status */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+          <h2 className="text-slate-100 font-semibold text-base mb-4">Connection status</h2>
+          <div className="flex flex-wrap gap-3">
+            <div className={`flex items-center gap-2 rounded-xl px-4 py-2.5 border text-sm font-medium ${
+              isAmazonConnected
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-slate-800/60 border-slate-700 text-slate-400"
+            }`}>
+              {isAmazonConnected ? (
+                <CheckCircle2 className="w-4 h-4" />
+              ) : (
+                <AlertTriangle className="w-4 h-4" />
+              )}
+              Amazon {isAmazonConnected ? "connected" : "not connected"}
+            </div>
+
+            <div className={`flex items-center gap-2 rounded-xl px-4 py-2.5 border text-sm font-medium ${
+              isSkillLinked
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-slate-800/60 border-slate-700 text-slate-400"
+            }`}>
+              {isSkillLinked ? (
+                <CheckCircle2 className="w-4 h-4" />
+              ) : (
+                <AlertTriangle className="w-4 h-4" />
+              )}
+              Alexa skill {isSkillLinked ? "linked" : "not linked"}
             </div>
           </div>
-        ) : null}
- 
-        <div className="grid lg:grid-cols-3 gap-4 mb-6">
-          {/* Status card */}
-          <Card className="bg-slate-900/40 border-slate-800 lg:col-span-2">
-            <CardHeader>
-              <CardTitle className="text-slate-100">Current status</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm text-slate-300">
-              <div className="flex flex-wrap gap-2">
-                <Badge variant={statusTone(!!status?.configured)}>
-                  {status?.configured ? "Skill OAuth ready" : "Skill OAuth missing"}
-                </Badge>
-                <Badge variant={statusTone(!!status?.appLinkClientConfigured)}>
-                  {status?.appLinkClientConfigured ? "App link ready" : "App link missing"}
-                </Badge>
-                <Badge variant={statusTone(!!status?.lwaLinked)}>
-                  {status?.lwaLinked ? "Amazon linked" : "Amazon not linked"}
-                </Badge>
-                <Badge variant={statusTone(status?.accountLinkStatus === "LINKED")}>
-                  {status?.accountLinkStatus === "LINKED" ? "Skill linked" : "Skill not linked"}
-                </Badge>
-              </div>
- 
-              <div className="grid md:grid-cols-2 gap-3">
-                {[
-                  { label: "Invocation name", value: status?.invocationName || "adhan now" },
-                  { label: "Skill stage", value: status?.skillStage || "development" },
-                  { label: "Enablement status", value: status?.enablementStatus || "Not enabled yet" },
-                  { label: "Account-link status", value: status?.accountLinkStatus || "Not linked yet" },
-                  { label: "App-link token expiry", value: formatDateTime(status?.lwaExpiresAt) },
-                  { label: "Last Alexa skill use", value: formatDateTime(status?.lastUsedAt) },
-                ].map(({ label, value }) => (
-                  <div key={label} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 min-h-[64px]">
-                    <div className="text-slate-400 text-xs mb-1">{label}</div>
-                    <div className="text-slate-100 font-medium text-sm">{value}</div>
-                  </div>
-                ))}
-              </div>
- 
-              <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-                <div className="text-slate-400 text-xs mb-1">Next recommended step</div>
-                <div className="mt-1 text-slate-100 text-sm leading-relaxed">{nextStep}</div>
-              </div>
-            </CardContent>
-          </Card>
- 
-          {/* Source of truth card */}
-          <Card className="bg-slate-900/40 border-slate-800">
-            <CardHeader>
-              <CardTitle className="text-slate-100">App source of truth</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm text-slate-300">
-              <div>
-                Timing source:
-                <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-slate-100">
-                  {sourceLabel}
-                </div>
-              </div>
-              <div>Sect: <span className="text-slate-100">{settings?.sect || "SUNNI"}</span></div>
-              <div>Method: <span className="text-slate-100">{settings?.calculationMethod || "isna"}</span></div>
-              <div>Madhhab: <span className="text-slate-100">{settings?.madhhab || "hanafi"}</span></div>
-              <div>Playback enabled: <span className="text-slate-100">{settings?.accountEnabled ? "Yes" : "No"}</span></div>
-              <div>Selected playback targets: <span className="text-slate-100">{selectedTargetCount}</span></div>
-              <div>Selected devices: <span className="text-slate-100">{selectedDeviceCount}</span></div>
-              {deviceNames.length ? (
-                <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-xs text-slate-100">
-                  {deviceNames.join(", ")}
-                </div>
-              ) : null}
-              <div>
-                Step 2 callback URL:
-                <div className="mt-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2 font-mono text-xs text-slate-100 break-all">
-                  {accountLinkPage}
-                </div>
-              </div>
-              <Button
-                variant="secondary"
-                className="w-full min-h-[44px] touch-manipulation active:opacity-80"
-                onClick={() => copy(accountLinkPage, "link-url")}
-              >
-                {copiedId === "link-url" ? (
-                  <span className="inline-flex items-center gap-2">
-                    <Check className="w-4 h-4" /> Copied
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-2">
-                    <Link2 className="w-4 h-4" /> Copy callback URL
-                  </span>
-                )}
-              </Button>
-            </CardContent>
-          </Card>
+
+          {!isAmazonConnected && (
+            <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              Connect your Amazon account in Step 2 of onboarding first.{" "}
+              <a href="/onboarding/step2" className="underline text-amber-300">Go to Step 2 →</a>
+            </div>
+          )}
         </div>
- 
-        {/* How to create a routine */}
-        <Card className="bg-slate-900/40 border-slate-800 mb-6">
-          <CardHeader>
-            <CardTitle className="text-slate-100">How to create a routine</CardTitle>
-          </CardHeader>
-          <CardContent className="text-slate-200">
-            <ol className="list-decimal ml-5 space-y-2 text-sm leading-relaxed">
-              <li>Finish Amazon connect + skill linking from onboarding step 2.</li>
-              <li>Open the Alexa app, then go to <b>More → Routines → +</b>.</li>
-              <li>Pick the correct prayer-time trigger for the routine.</li>
-              <li>Choose <b>Add action → Custom</b> and paste one of the phrases below.</li>
-              <li>Under <b>From</b>, pick the Echo device that should speak the command.</li>
-              <li>Save, then run the routine once manually before relying on it daily.</li>
+
+        {/* Step 1 */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+            <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold flex-shrink-0 ${
+              isAmazonConnected && isSkillLinked
+                ? "bg-emerald-500 text-white"
+                : "bg-slate-700 text-slate-300"
+            }`}>
+              {isAmazonConnected && isSkillLinked ? <CheckCircle2 className="w-4 h-4" /> : "1"}
+            </div>
+            <div>
+              <div className="text-slate-100 font-semibold">Connect Amazon &amp; enable the skill</div>
+              <div className="text-slate-400 text-sm">Sign in with Amazon and link the AdhanNow Alexa skill</div>
+            </div>
+          </div>
+          <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed">
+            If you haven't done this yet, go back to onboarding Step 2. Sign in with Amazon,
+            then tap <strong className="text-white">Enable Alexa Skill</strong> and follow the prompts to link your account.
+            Come back here once both badges above show green.
+          </div>
+        </div>
+
+        {/* Step 2 */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
+              2
+            </div>
+            <div>
+              <div className="text-slate-100 font-semibold">Say the wake phrase on each Echo device</div>
+              <div className="text-slate-400 text-sm">This registers your device so AdhanNow can play on it</div>
+            </div>
+          </div>
+          <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed">
+            On each Echo device you want Adhan on, say:
+            <div className="mt-3 rounded-xl bg-slate-950/70 border border-slate-700 px-4 py-3 font-mono text-slate-100 text-sm select-all">
+              "Alexa, open {invocationName}"
+            </div>
+            <p className="mt-3 text-slate-400">
+              Do this on every Echo device in your home. AdhanNow will detect and register each one automatically.
+              You can then select which devices play the Adhan in <strong className="text-white">Settings → Alexa Devices</strong>.
+            </p>
+          </div>
+        </div>
+
+        {/* Step 3 */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
+              3
+            </div>
+            <div>
+              <div className="text-slate-100 font-semibold">Create Alexa Routines for automatic Adhan</div>
+              <div className="text-slate-400 text-sm">One routine per prayer — set once, plays daily</div>
+            </div>
+          </div>
+          <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed space-y-3">
+            <ol className="list-decimal ml-4 space-y-2 text-slate-300">
+              <li>Open the <strong className="text-white">Alexa app</strong> on your phone</li>
+              <li>Go to <strong className="text-white">More → Routines → +</strong></li>
+              <li>Set the trigger: choose <strong className="text-white">Schedule → At time</strong> and enter the prayer time</li>
+              <li>Add action: tap <strong className="text-white">Add action → Alexa Says → Customized</strong></li>
+              <li>Paste one of the phrases below</li>
+              <li>Under <strong className="text-white">From</strong>, select your Echo device</li>
+              <li>Save — repeat for each prayer</li>
             </ol>
-          </CardContent>
-        </Card>
- 
+            <div className="rounded-xl border border-slate-700 bg-slate-950/40 px-4 py-3 text-xs text-slate-400">
+              <strong className="text-slate-300">Tip:</strong> Run each routine manually once after saving to confirm it's working correctly.
+            </div>
+          </div>
+        </div>
+
         {/* Routine phrase templates */}
-        <div className="grid md:grid-cols-2 gap-4">
-          {templates.map((t) => (
-            <Card key={t.id} className="bg-slate-900/40 border-slate-800">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-slate-100 text-base">{t.title}</CardTitle>
-                <div className="text-slate-400 text-sm">
-                  Routine name: <span className="text-slate-200">{t.routineName}</span>
+        <div>
+          <h2 className="text-slate-100 font-semibold text-base mb-3">Routine phrases</h2>
+          <p className="text-slate-400 text-sm mb-4">
+            Copy the phrase for each prayer and paste it into the Alexa Routine action.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {templates.map((t) => (
+              <div key={t.id} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                <div className="text-slate-100 font-medium text-sm mb-1">{t.title}</div>
+                <div className="text-slate-500 text-xs mb-3">
+                  Routine name: <span className="text-slate-400">{t.routineName}</span>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3 font-mono text-sm text-slate-100 select-all">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5 font-mono text-sm text-slate-100 select-all mb-3">
                   {t.phrase}
                 </div>
-                {/* min-h-[44px] + touch-manipulation on every copy button */}
                 <Button
                   variant="secondary"
                   className="w-full min-h-[44px] touch-manipulation active:opacity-80"
@@ -396,7 +278,7 @@ export default function AlexaSetup() {
                 >
                   {copiedId === t.id ? (
                     <span className="inline-flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4" /> Copied
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Copied
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-2">
@@ -404,9 +286,22 @@ export default function AlexaSetup() {
                     </span>
                   )}
                 </Button>
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Help link */}
+        <div className="rounded-2xl border border-slate-800/40 bg-slate-900/20 px-5 py-4 flex items-center justify-between gap-4">
+          <p className="text-slate-400 text-sm">
+            Having trouble? Make sure both connection badges above are green before creating routines.
+          </p>
+          <a
+            href="/onboarding/step2"
+            className="inline-flex items-center gap-1.5 text-emerald-400 text-sm hover:text-emerald-300 transition-colors flex-shrink-0"
+          >
+            Step 2 <ExternalLink className="w-3.5 h-3.5" />
+          </a>
         </div>
       </div>
     </div>

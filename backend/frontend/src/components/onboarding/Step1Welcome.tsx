@@ -6,17 +6,17 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { CheckCircle2 } from "lucide-react";
 import { AlexaIcon, GoogleIcon } from "../shared/BrandIcons";
- 
+
 type OnboardingData = {
   selectedPlatforms?: string[];
   [key: string]: unknown;
 };
- 
+
 type Step1WelcomeProps = {
   onboardingData: OnboardingData;
   setOnboardingData: (data: OnboardingData) => void;
 };
- 
+
 const platforms = [
   {
     id: "alexa",
@@ -34,7 +34,7 @@ const platforms = [
     status: "Coming Soon",
   },
 ] as const;
- 
+
 export default function Step1Welcome({
   onboardingData,
   setOnboardingData,
@@ -45,7 +45,7 @@ export default function Step1Welcome({
       ? onboardingData.selectedPlatforms
       : []
   );
- 
+
   useEffect(() => {
     setSelectedPlatforms(
       Array.isArray(onboardingData.selectedPlatforms)
@@ -53,7 +53,7 @@ export default function Step1Welcome({
         : []
     );
   }, [onboardingData.selectedPlatforms]);
- 
+
   const togglePlatform = (platformId: string, available: boolean) => {
     if (!available) return;
     setSelectedPlatforms((prev) =>
@@ -62,12 +62,12 @@ export default function Step1Welcome({
         : [...prev, platformId]
     );
   };
- 
+
   const handleContinue = () => {
     setOnboardingData({ ...onboardingData, selectedPlatforms });
     navigate("/onboarding/step2");
   };
- 
+
   return (
     <div className="min-h-screen bg-slate-950 overscroll-none">
       {/* Sticky Header */}
@@ -82,39 +82,39 @@ export default function Step1Welcome({
           </div>
         </div>
       </div>
- 
+
       <div
         className="max-w-4xl mx-auto px-4 py-8 md:py-12"
         style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
       >
-        {/* Hero Section */}
+        {/* Hero */}
         <div className="text-center mb-8 md:mb-12">
           <h1 className="text-3xl md:text-4xl font-semibold text-white mb-3">
-            Welcome to My Adhan Now
+            Welcome to AdhanNow
           </h1>
           <p className="text-base md:text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
             Let&apos;s set up your smart home for accurate prayer times and
             automatic Adhan across all your devices.
           </p>
         </div>
- 
-        {/* Main Content Card */}
+
+        {/* Main Card */}
         <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-10">
           <div className="mb-7">
             <h2 className="text-xl font-semibold text-white mb-2">
               Choose your platform
             </h2>
             <p className="text-slate-400 text-sm">
-              Select which smart assistant platform you&apos;d like to connect.
+              Select which smart assistant you&apos;d like to connect.
               You can add more platforms later.
             </p>
           </div>
- 
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
             {platforms.map((platform) => {
               const isSelected = selectedPlatforms.includes(platform.id);
               const isAvailable = platform.available;
- 
+
               return (
                 <button
                   key={platform.id}
@@ -134,7 +134,7 @@ export default function Step1Welcome({
                       <CheckCircle2 className="h-5 w-5 text-white" />
                     </div>
                   )}
- 
+
                   {!isAvailable && platform.status && (
                     <div className="absolute right-4 top-4">
                       <Badge className="border-slate-700/60 bg-slate-800/60 text-slate-300">
@@ -142,7 +142,7 @@ export default function Step1Welcome({
                       </Badge>
                     </div>
                   )}
- 
+
                   <div
                     className={`mb-4 flex h-14 w-14 md:h-16 md:w-16 items-center justify-center rounded-xl ${
                       isSelected && isAvailable
@@ -152,7 +152,7 @@ export default function Step1Welcome({
                   >
                     <platform.Icon className="h-8 w-8 md:h-9 md:w-9" />
                   </div>
- 
+
                   <div className="text-white text-lg font-semibold mb-1">
                     {platform.name}
                   </div>
@@ -161,27 +161,25 @@ export default function Step1Welcome({
               );
             })}
           </div>
- 
-          {/* Helper Text */}
+
           <div className="mb-6 p-4 rounded-xl bg-slate-800/30 border border-slate-700/50">
             <p className="text-slate-400 text-sm leading-relaxed">
               <span className="text-emerald-400 font-medium">Amazon Alexa</span>{" "}
-              is available now with full support for Echo devices.{" "}
+              is available now with full support for Echo and Fire TV devices.{" "}
               <span className="text-slate-500">Google Assistant</span> support is
               coming soon.
             </p>
           </div>
- 
-          {/* Action Buttons */}
+
           <div className="space-y-4">
             <Button
               onClick={handleContinue}
               disabled={selectedPlatforms.length === 0}
               className="w-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white h-11 text-base font-medium touch-manipulation active:opacity-90"
             >
-              Continue to connection
+              Continue
             </Button>
- 
+
             <div className="text-center">
               <button
                 type="button"

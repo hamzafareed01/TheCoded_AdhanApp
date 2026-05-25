@@ -1,39 +1,64 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Calendar, Home, MapPin, BookOpen, Compass, Settings as SettingsIcon, Volume2 } from 'lucide-react';
-
+import {
+  Calendar,
+  Home,
+  MapPin,
+  BookOpen,
+  Compass,
+  Settings as SettingsIcon,
+  Volume2,
+} from 'lucide-react';
 
 const linkBase =
-  'inline-flex items-center gap-2 px-3 py-2 rounded-xl border text-sm transition-colors';
+  'inline-flex items-center justify-center gap-1.5 rounded-xl border text-sm transition-colors touch-manipulation min-h-[44px]';
 
 const inactive =
-  'border-slate-800 bg-slate-900/40 text-slate-200 hover:bg-slate-900/70';
+  'border-slate-800 bg-slate-900/40 text-slate-200 hover:bg-slate-900/70 active:opacity-70';
 
 const active =
   'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
 
-function Item({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+const NAV_ITEMS = [
+  { to: '/dashboard',   icon: Home,         label: 'Dashboard'  },
+  { to: '/calendar',    icon: Calendar,     label: 'Calendar'   },
+  { to: '/mosque',      icon: MapPin,       label: 'Mosque'     },
+  { to: '/dua-quran',   icon: BookOpen,     label: 'Dua & Quran'},
+  { to: '/qiblah',      icon: Compass,      label: 'Qiblah'     },
+  { to: '/alexa-setup', icon: Volume2,      label: 'Alexa Setup'},
+  { to: '/settings',    icon: SettingsIcon, label: 'Settings'   },
+] as const;
+
+function Item({
+  to,
+  icon: Icon,
+  label,
+}: {
+  to: string;
+  icon: React.ElementType;
+  label: string;
+}) {
   return (
     <NavLink
       to={to}
-      className={({ isActive }) => `${linkBase} ${isActive ? active : inactive}`}
+      className={({ isActive }) =>
+        `${linkBase} ${isActive ? active : inactive} px-2 sm:px-3 py-2`
+      }
+      title={label}
     >
-      {icon}
-      <span>{label}</span>
+      <Icon className="w-4 h-4 flex-shrink-0" />
+      {/* Label: hidden on small screens, visible from sm breakpoint */}
+      <span className="hidden sm:inline">{label}</span>
     </NavLink>
   );
 }
 
 export function Navigation() {
   return (
-    <nav className="flex items-center gap-2 flex-wrap">
-      <Item to="/dashboard" icon={<Home className="w-4 h-4" />} label="Dashboard" />
-      <Item to="/calendar" icon={<Calendar className="w-4 h-4" />} label="Calendar" />
-      <Item to="/mosque" icon={<MapPin className="w-4 h-4" />} label="Mosque" />
-      <Item to="/dua-quran" icon={<BookOpen className="w-4 h-4" />} label="Dua & Quran" />
-      <Item to="/qiblah" icon={<Compass className="w-4 h-4" />} label="Qiblah" />
-      <Item to="/alexa-setup" icon={<Volume2 className="w-4 h-4" />} label="Alexa Setup" />
-      <Item to="/settings" icon={<SettingsIcon className="w-4 h-4" />} label="Settings" />
+    <nav className="flex items-center gap-1.5 flex-wrap" aria-label="Main navigation">
+      {NAV_ITEMS.map(({ to, icon, label }) => (
+        <Item key={to} to={to} icon={icon} label={label} />
+      ))}
     </nav>
   );
 }
