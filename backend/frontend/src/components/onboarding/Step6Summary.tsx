@@ -355,8 +355,8 @@ export default function Step6Summary({
   }, [summary.prayerConfigs]);
  
   const isComplete = useMemo(() => {
-    return isConnected("alexa") && summary.accountEnabled && hasReciterConfigured;
-  }, [summary.accountEnabled, hasReciterConfigured, summary.platformsConnected]);
+    return isConnected("alexa") && summary.accountEnabled;
+  }, [summary.accountEnabled, summary.platformsConnected]);
  
   async function finish() {
     setSaving(true);
@@ -372,11 +372,7 @@ export default function Step6Summary({
         throw new Error("City is required before finishing setup.");
       }
  
-      if (!hasReciterConfigured) {
-        throw new Error(
-          "Please choose at least one Adhan reciter before finishing setup."
-        );
-      }
+      // Reciter selection is optional — user can configure in Settings later.
  
       // Verify the session is still valid. The stored token is an adhapp_ session
       // token — use /api/integrations which handles adhapp_ tokens correctly.
@@ -612,11 +608,24 @@ export default function Step6Summary({
                 </div>
               </div>
  
-              {!isComplete && (
+              {!isConnected("alexa") && (
                 <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
                   <p className="text-amber-200 text-sm leading-relaxed">
-                    Please ensure Amazon Alexa is connected, Adhan playback is enabled,
-                    and at least one reciter is selected before completing setup.
+                    Please connect Amazon Alexa in Step 2 before completing setup.
+                  </p>
+                </div>
+              )}
+              {!summary.accountEnabled && isConnected("alexa") && (
+                <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3">
+                  <p className="text-amber-200 text-sm leading-relaxed">
+                    Enable Adhan playback in Step 5 before completing setup.
+                  </p>
+                </div>
+              )}
+              {!hasReciterConfigured && isComplete && (
+                <div className="rounded-lg border border-slate-600/50 bg-slate-800/40 px-4 py-3">
+                  <p className="text-slate-300 text-sm leading-relaxed">
+                    No Adhan reciter selected yet — you can choose one in Settings after setup.
                   </p>
                 </div>
               )}
@@ -805,4 +814,3 @@ export default function Step6Summary({
     </div>
   );
 }
- 
