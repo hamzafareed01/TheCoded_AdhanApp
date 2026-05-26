@@ -34,6 +34,13 @@ const {
   handleSmartHomeDirective,
   loadSmartHomeContext,
 } = require("./services/alexaSmartHome");
+const {
+  scheduleAllReminders,
+  deleteAllReminders,
+} = require("./services/alexaReminders");
+const {
+  createPrayerRoutines,
+} = require("./services/alexaRoutineCreator");
  
 const app = express();
 app.set("trust proxy", 1);
@@ -1298,7 +1305,6 @@ const DEFAULT_APP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 function getAppSessionSecret() {
   return String(
     process.env.APP_SESSION_SECRET ||
-      process.env.ADHANCAST_SESSION_SECRET ||
       process.env.ALEXA_APP_LINK_STATE_SECRET ||
       process.env.ALEXA_OAUTH_CLIENT_SECRET ||
       "adhannow-dev-session-secret"
@@ -4214,7 +4220,236 @@ app.delete(
     res.json({ ok: true });
   })
 );
- //trigger, delete later
+
+// ─── Automation: full schedule for Lambda ────────────────────────────────────
+app.get(
+  "/api/alexa/skill/full-schedule",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const userId = req.skillAuth.userId;
+
+    const { profile, prayers } = await getUserProfileAndPrayersByUserId(pool, userId);
+    const prayerData = await computePrayerTimesForProfile(profile, prayers, new Date());
+
+    const schedulesResult = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        SELECT id, schedule_type, time_of_day, days_mask, enabled, device_id, payload_json
+        FROM dbo.schedules
+        WHERE user_id = @user_id AND enabled = 1
+        ORDER BY time_of_day ASC
+      `);
+
+    const tilawatSchedules = schedulesResult.recordset.map((x) => {
+      let payload = null;
+      try { payload = x.payload_json ? JSON.parse(x.payload_json) : null; } catch { payload = null; }
+      return {
+        id: x.id,
+        scheduleType: x.schedule_type,
+        timeOfDay: String(x.time_of_day).slice(0, 5),
+        days: maskToDaysArray(x.days_mask),
+        enabled: !!x.enabled,
+        deviceId: x.device_id || null,
+        payload,
+      };
+    });
+
+    const quietHours = {
+      enabled:   !!profile.quiet_hours_enabled,
+      from:      profile.quiet_hours_from  || "22:00",
+      to:        profile.quiet_hours_to    || "07:00",
+      muteFajr:  !!profile.quiet_hours_mute_fajr,
+    };
+
+    res.json({
+      prayerTimes:           prayerData.prayers24 || {},
+      timezone:              profile.timezone || "Etc/UTC",
+      invocationName:        process.env.ALEXA_SKILL_INVOCATION_NAME || "adhan now",
+      prePrayerReminderMin:  profile.pre_prayer_reminder_min || null,
+      remindersEnabled:      profile.reminders_enabled !== false,
+      quietHours,
+      tilawatSchedules,
+      userContext: {
+        city:     profile.city    || "Chicago",
+        country:  profile.country || "US",
+        timezone: profile.timezone || "Etc/UTC",
+      },
+    });
+  })
+);
+
+// ─── Automation: schedule reminders (called by Lambda) ───────────────────────
+app.post(
+  "/api/alexa/skill/reminders/setup",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.skillAuth.userId;
+    const body   = req.body || {};
+
+    const {
+      apiEndpoint, apiAccessToken, prayerTimes,
+      timezone, invocationName, prePrayerMinutes,
+      quietHours, tilawatSchedules,
+    } = body;
+
+    if (!apiEndpoint || !apiAccessToken) {
+      return res.status(400).json({ error: "apiEndpoint and apiAccessToken are required" });
+    }
+    if (!prayerTimes || typeof prayerTimes !== "object") {
+      return res.status(400).json({ error: "prayerTimes object is required" });
+    }
+
+    const result = await scheduleAllReminders(
+      pool,
+      userId,
+      apiAccessToken,
+      apiEndpoint,
+      prayerTimes,
+      timezone || "Etc/UTC",
+      invocationName || process.env.ALEXA_SKILL_INVOCATION_NAME || "adhan now",
+      {
+        prePrayerMinutes:  prePrayerMinutes  || null,
+        tilawatSchedules:  tilawatSchedules  || [],
+        quietHours:        quietHours        || { enabled: false },
+      }
+    );
+
+    res.json({ ok: true, ...result });
+  })
+);
+
+// ─── Automation: delete all reminders ────────────────────────────────────────
+app.delete(
+  "/api/alexa/skill/reminders",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.skillAuth.userId;
+    const { apiEndpoint, apiAccessToken } = req.body || {};
+
+    if (!apiEndpoint || !apiAccessToken) {
+      return res.status(400).json({ error: "apiEndpoint and apiAccessToken are required" });
+    }
+
+    const result = await deleteAllReminders(pool, userId, apiAccessToken, apiEndpoint);
+    res.json({ ok: true, ...result });
+  })
+);
+
+// ─── Automation: get reminder status (for app UI) ────────────────────────────
+app.get(
+  "/api/alexa/skill/reminders",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.skillAuth.userId;
+
+    const result = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        SELECT reminder_type, prayer_name, schedule_id,
+               alexa_reminder_id, scheduled_time_utc, timezone,
+               status, last_scheduled_at, error_message
+        FROM dbo.alexa_reminders
+        WHERE user_id = @user_id
+        ORDER BY reminder_type, prayer_name
+      `);
+
+    res.json({ reminders: result.recordset || [] });
+  })
+);
+
+// ─── Onboarding complete — auto-create prayer routines ───────────────────────
+// Called by Step 6 after saveSettings succeeds.
+// Attempts to create 5 Alexa Routines automatically using the stored Amazon token.
+// Falls back gracefully if the Behaviors API is unavailable.
+
+app.post(
+  "/api/alexa/onboarding/complete",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.user.userId || req.user.user_id;
+
+    // Get user profile for timezone + prayer times
+    const { profile, prayers } = await getUserProfileAndPrayersByUserId(pool, userId);
+    const prayerData = await computePrayerTimesForProfile(profile, prayers, new Date());
+    const prayerTimes = prayerData.prayers24 || {};
+    const timezone    = profile.timezone || "Etc/UTC";
+
+    // Mark onboarding as complete
+    await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        UPDATE dbo.user_profiles
+        SET onboarding_complete = 1,
+            onboarding_completed_at = SYSUTCDATETIME(),
+            updated_at = SYSUTCDATETIME()
+        WHERE user_id = @user_id
+      `);
+
+    // Attempt automatic routine creation via Amazon Behaviors API
+    let routineResult = null;
+    let activationRequired = false;
+    let activationPhrase = process.env.ALEXA_SKILL_INVOCATION_NAME || "adhan now";
+
+    try {
+      routineResult = await createPrayerRoutines(pool, userId, prayerTimes, timezone);
+
+      if (routineResult.unsupported) {
+        // Behaviors API not available — user needs to say activation phrase once
+        activationRequired = true;
+      }
+    } catch (err) {
+      console.error("[onboarding/complete] Routine creation failed:", err.message);
+      // Non-fatal — fall back to manual activation
+      activationRequired = true;
+    }
+
+    const prayerCount = routineResult?.created?.length || 0;
+
+    res.json({
+      ok: true,
+      automationStatus: prayerCount > 0 ? "active" : "pending_activation",
+      routinesCreated: prayerCount,
+      activationRequired,
+      // Shown to user if activationRequired === true
+      activationMessage: activationRequired
+        ? `Say "Alexa, open ${activationPhrase}" on any Echo device to activate automatic Adhan.`
+        : null,
+      activationPhrase: activationRequired ? activationPhrase : null,
+      prayerTimes,
+    });
+  })
+);
+
+// ─── Automation: enable / disable ────────────────────────────────────────────
+app.post(
+  "/api/alexa/skill/automation/enable",
+  asyncHandler(async (req, res) => {
+    const pool    = await getPool();
+    const userId  = req.skillAuth.userId;
+    const enabled = req.body?.enabled !== false;
+
+    await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("enabled",  sql.Bit, enabled ? 1 : 0)
+      .query(`
+        UPDATE dbo.user_profiles
+        SET reminders_enabled = @enabled, updated_at = SYSUTCDATETIME()
+        WHERE user_id = @user_id
+      `);
+
+    res.json({ ok: true, remindersEnabled: enabled });
+  })
+);
+
 // Error handler
 app.use((err, req, res, next) => {
   console.error(err);

@@ -439,7 +439,25 @@ export default function Step6Summary({
         const text = await resp.text().catch(() => "");
         throw new Error(text || "Failed to save settings.");
       }
- 
+
+      // Automatically create Alexa prayer routines after onboarding completes.
+      // Non-fatal — dashboard shows activation prompt if this doesn't fully succeed.
+      let activationPhrase: string | null = null;
+      try {
+        const routineResp = await apiFetch("/api/alexa/onboarding/complete", {
+          method: "POST",
+        });
+        if (routineResp.ok) {
+          const routineData = await routineResp.json() as {
+            automationStatus?: string;
+            activationPhrase?: string | null;
+          };
+          activationPhrase = routineData.activationPhrase || null;
+        }
+      } catch {
+        // Silently ignore — dashboard will show activation prompt if needed
+      }
+
       setOnboardingData({
         ...onboardingData,
         connectedPlatforms: summary.platformsConnected,
@@ -455,6 +473,7 @@ export default function Step6Summary({
         devices: summary.selectedDeviceIds,
         accountEnabled: summary.accountEnabled,
         prayerConfigs: summary.prayerConfigs,
+        activationPhrase: activationPhrase || null,
       });
  
       navigate("/dashboard");
@@ -814,3 +833,4 @@ export default function Step6Summary({
     </div>
   );
 }
+ 
