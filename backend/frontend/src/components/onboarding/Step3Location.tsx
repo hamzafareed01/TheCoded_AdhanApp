@@ -43,26 +43,133 @@ type CountryOption = {
 const DEVICE_LOCATION_MAX_ACCURACY_METERS = 250;
  
 const COUNTRIES: CountryOption[] = [
+  // North America
   { code: "US", label: "United States" },
   { code: "CA", label: "Canada" },
+  { code: "MX", label: "Mexico" },
+  // Europe
   { code: "GB", label: "United Kingdom" },
+  { code: "DE", label: "Germany" },
+  { code: "FR", label: "France" },
+  { code: "NL", label: "Netherlands" },
+  { code: "BE", label: "Belgium" },
+  { code: "SE", label: "Sweden" },
+  { code: "NO", label: "Norway" },
+  { code: "DK", label: "Denmark" },
+  { code: "FI", label: "Finland" },
+  { code: "IT", label: "Italy" },
+  { code: "ES", label: "Spain" },
+  { code: "CH", label: "Switzerland" },
+  { code: "AT", label: "Austria" },
+  // Middle East
+  { code: "SA", label: "Saudi Arabia" },
+  { code: "AE", label: "United Arab Emirates" },
+  { code: "QA", label: "Qatar" },
+  { code: "KW", label: "Kuwait" },
+  { code: "BH", label: "Bahrain" },
+  { code: "OM", label: "Oman" },
+  { code: "YE", label: "Yemen" },
+  { code: "IQ", label: "Iraq" },
+  { code: "IR", label: "Iran" },
+  { code: "JO", label: "Jordan" },
+  { code: "LB", label: "Lebanon" },
+  { code: "PS", label: "Palestine" },
+  { code: "SY", label: "Syria" },
+  { code: "IL", label: "Israel" },
+  // South Asia
   { code: "IN", label: "India" },
   { code: "PK", label: "Pakistan" },
   { code: "BD", label: "Bangladesh" },
-  { code: "AE", label: "United Arab Emirates" },
-  { code: "SA", label: "Saudi Arabia" },
-  { code: "QA", label: "Qatar" },
-  { code: "KW", label: "Kuwait" },
-  { code: "OM", label: "Oman" },
-  { code: "BH", label: "Bahrain" },
-  { code: "TR", label: "Turkey" },
-  { code: "EG", label: "Egypt" },
+  { code: "LK", label: "Sri Lanka" },
+  { code: "NP", label: "Nepal" },
+  { code: "AF", label: "Afghanistan" },
+  // Southeast Asia
   { code: "MY", label: "Malaysia" },
+  { code: "ID", label: "Indonesia" },
   { code: "SG", label: "Singapore" },
+  { code: "PH", label: "Philippines" },
+  { code: "TH", label: "Thailand" },
+  { code: "BN", label: "Brunei" },
+  // Central Asia
+  { code: "TR", label: "Turkey" },
+  { code: "AZ", label: "Azerbaijan" },
+  { code: "KZ", label: "Kazakhstan" },
+  { code: "UZ", label: "Uzbekistan" },
+  { code: "TM", label: "Turkmenistan" },
+  { code: "TJ", label: "Tajikistan" },
+  { code: "KG", label: "Kyrgyzstan" },
+  // Africa
+  { code: "EG", label: "Egypt" },
+  { code: "MA", label: "Morocco" },
+  { code: "DZ", label: "Algeria" },
+  { code: "TN", label: "Tunisia" },
+  { code: "LY", label: "Libya" },
+  { code: "SD", label: "Sudan" },
+  { code: "ET", label: "Ethiopia" },
+  { code: "SO", label: "Somalia" },
+  { code: "NG", label: "Nigeria" },
+  { code: "SN", label: "Senegal" },
+  { code: "ML", label: "Mali" },
+  { code: "NE", label: "Niger" },
+  { code: "TZ", label: "Tanzania" },
+  { code: "KE", label: "Kenya" },
+  { code: "GH", label: "Ghana" },
+  { code: "ZA", label: "South Africa" },
+  // Oceania
   { code: "AU", label: "Australia" },
   { code: "NZ", label: "New Zealand" },
-  { code: "DE", label: "Germany" },
-  { code: "FR", label: "France" },
+  // Other
+  { code: "RU", label: "Russia" },
+  { code: "CN", label: "China" },
+  { code: "JP", label: "Japan" },
+  { code: "KR", label: "South Korea" },
+  { code: "BR", label: "Brazil" },
+  { code: "AR", label: "Argentina" },
+];
+
+// Malaysia prayer zones — government-mandated
+const MALAYSIA_ZONES: { code: string; label: string }[] = [
+  { code: "WLY01", label: "Kuala Lumpur & Putrajaya" },
+  { code: "WLY02", label: "Labuan" },
+  { code: "JHR01", label: "Johor — Pulau Aur & Pemanggil" },
+  { code: "JHR02", label: "Johor — Batu Pahat, Johor Bahru, Pontian" },
+  { code: "JHR03", label: "Johor — Mersing" },
+  { code: "JHR04", label: "Johor — Kluang, Kota Tinggi, Segamat" },
+  { code: "KDH01", label: "Kedah — Kota Setar, Kubang Pasu, Padang Terap" },
+  { code: "KDH02", label: "Kedah — Pokok Sena" },
+  { code: "KDH03", label: "Kedah — Kulim, Bandar Baharu, Sik" },
+  { code: "KDH04", label: "Kedah — Baling, Yan, Pendang" },
+  { code: "KDH05", label: "Kedah — Langkawi" },
+  { code: "KDH06", label: "Kedah — Gunung Jerai" },
+  { code: "KTN01", label: "Kelantan — Kota Bharu, Bachok, Pasir Mas" },
+  { code: "KTN02", label: "Kelantan — Gua Musang" },
+  { code: "MLK01", label: "Melaka" },
+  { code: "NGS01", label: "Negeri Sembilan" },
+  { code: "PHG01", label: "Pahang — Cameron Highlands" },
+  { code: "PHG02", label: "Pahang — Rompin, Maran, Pekan" },
+  { code: "PHG03", label: "Pahang — Temerloh, Lipis, Raub" },
+  { code: "PHG04", label: "Pahang — Bentong, Jerantut, Kuantan" },
+  { code: "PRK01", label: "Perak — Manjung, Larut, Perak Tengah" },
+  { code: "PRK02", label: "Perak — Kinta" },
+  { code: "PRK03", label: "Perak — Batang Padang" },
+  { code: "PRK04", label: "Perak — Hulu Perak" },
+  { code: "PLT01", label: "Putrajaya" },
+  { code: "PLS01", label: "Perlis" },
+  { code: "PNG01", label: "Penang" },
+  { code: "SBH01", label: "Sabah — Kota Kinabalu" },
+  { code: "SBH02", label: "Sabah — Kudat, Kota Belud" },
+  { code: "SBH03", label: "Sabah — Lahad Datu, Semporna" },
+  { code: "SBH04", label: "Sabah — Tawau, Sandakan" },
+  { code: "SRW01", label: "Sarawak — Kuching, Sri Aman" },
+  { code: "SRW02", label: "Sarawak — Sibu, Sarikei" },
+  { code: "SRW03", label: "Sarawak — Miri, Limbang" },
+  { code: "SEL01", label: "Selangor — Gombak, Hulu Langat, Sepang" },
+  { code: "SEL02", label: "Selangor — Klang, Kuala Selangor" },
+  { code: "SEL03", label: "Selangor — Sabak Bernam" },
+  { code: "TRG01", label: "Terengganu — Kuala Terengganu, Marang" },
+  { code: "TRG02", label: "Terengganu — Dungun, Kemaman" },
+  { code: "TRG03", label: "Terengganu — Hulu Terengganu" },
+  { code: "TRG04", label: "Terengganu — Besut" },
 ];
  
 function normalizeCity(value: string) {
@@ -123,6 +230,9 @@ export default function Step3Location({
   });
  
   const [timezoneManuallyEdited, setTimezoneManuallyEdited] = useState(false);
+  const [malaysiaZone, setMalaysiaZone] = useState<string>(
+    String(onboardingData?.location?.malaysiaZone || "")
+  );
   const [geocoding, setGeocoding] = useState(false);
   const [usingDeviceLocation, setUsingDeviceLocation] = useState(false);
   const [geocodeError, setGeocodeError] = useState<string | null>(null);
@@ -164,6 +274,7 @@ export default function Step3Location({
  
   const handleCountryChange = (value: string) => {
     setLocation((prev) => ({ ...prev, country: value }));
+    if (value !== "MY") setMalaysiaZone("");
     setTimezoneManuallyEdited(false);
     if (resolvedKey) clearResolvedCoordinates();
     setGeocodeError(null);
@@ -229,6 +340,7 @@ export default function Step3Location({
         lng,
         city: cityTrimmed,
         country: countryTrimmed,
+          malaysiaZone: countryTrimmed === "MY" ? malaysiaZone : undefined,
         formatted:
           typeof data?.formatted === "string" && data.formatted.trim()
             ? data.formatted
@@ -602,6 +714,30 @@ export default function Step3Location({
               </div>
             </div>
           </div>
+
+          {/* Malaysia prayer zone selector */}
+          {location.country === "MY" && (
+            <div className="mb-8 p-5 bg-slate-800/30 rounded-2xl border border-slate-700/60">
+              <Label className="text-white font-medium mb-2 block">
+                Malaysia Prayer Zone
+              </Label>
+              <Select value={malaysiaZone} onValueChange={setMalaysiaZone}>
+                <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                  <SelectValue placeholder="Select your prayer zone" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-700 text-slate-100 max-h-64">
+                  {MALAYSIA_ZONES.map((z) => (
+                    <SelectItem key={z.code} value={z.code}>
+                      {z.code} — {z.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-slate-500 mt-1.5">
+                Malaysia uses government-mandated prayer zones. Select your zone for accurate times.
+              </p>
+            </div>
+          )}
  
           {/* Mosque Location Toggle */}
           <div className="mb-8 p-5 bg-slate-800/30 rounded-2xl border border-slate-700/60">

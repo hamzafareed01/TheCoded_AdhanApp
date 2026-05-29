@@ -15,6 +15,7 @@ import {
   Sunset,
 } from "lucide-react";
 import { apiFetch } from "../../lib/api";
+import { toHijri, prayerName, getCurrentLang } from "../../lib/i18n";
 
 type PrayerTimes = {
   fajr: string;
@@ -200,6 +201,9 @@ export default function CalendarView() {
 
                 <div className="rounded-lg border border-slate-700 bg-slate-900/70 px-4 py-2 min-w-[160px] text-center">
                   <div className="text-white font-semibold text-sm md:text-base">{monthLabel}</div>
+                  {toHijri(currentDate, getCurrentLang()) && (
+                    <div className="text-slate-500 text-xs mt-0.5">{toHijri(currentDate, getCurrentLang())}</div>
+                  )}
                 </div>
 
                 <Button

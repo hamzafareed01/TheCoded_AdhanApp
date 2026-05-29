@@ -54,3 +54,24 @@ BEGIN
     ADD pre_prayer_reminder_min INT NULL DEFAULT NULL; -- NULL = disabled, 5/10/15 = enabled
 END;
 GO
+
+-- Migration 012 addendum: Mosque iqamah times table
+IF NOT EXISTS (
+  SELECT 1 FROM sys.tables WHERE name = 'mosque_iqamah_times' AND schema_id = SCHEMA_ID('dbo')
+)
+BEGIN
+  CREATE TABLE dbo.mosque_iqamah_times (
+    id           UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+    user_id      UNIQUEIDENTIFIER NOT NULL,
+    mosque_id    NVARCHAR(255)    NOT NULL,
+    mosque_name  NVARCHAR(500)    NULL,
+    prayer_name  NVARCHAR(20)     NOT NULL,
+    iqamah_time  NVARCHAR(8)      NOT NULL,
+    created_at   DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at   DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+
+  CREATE UNIQUE INDEX UX_mosque_iqamah_user_mosque_prayer
+    ON dbo.mosque_iqamah_times (user_id, mosque_id, prayer_name);
+END;
+GO

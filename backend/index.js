@@ -4221,6 +4221,121 @@ app.delete(
   })
 );
 
+// ─── Mosque iqamah (community) times ─────────────────────────────────────────
+// Stores and retrieves official mosque prayer/iqamah times set by the user.
+
+app.get(
+  "/api/mosque/iqamah-times",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.user.userId || req.user.user_id;
+    const mosqueId = String(req.query.mosqueId || "").trim();
+
+    if (!mosqueId) return res.json({ times: {} });
+
+    const result = await pool
+      .request()
+      .input("user_id",   sql.UniqueIdentifier, userId)
+      .input("mosque_id", sql.NVarChar(255),     mosqueId)
+      .query(`
+        SELECT prayer_name, iqamah_time
+        FROM dbo.mosque_iqamah_times
+        WHERE user_id = @user_id AND mosque_id = @mosque_id
+      `);
+
+    const times = {};
+    for (const row of result.recordset || []) {
+      times[row.prayer_name] = row.iqamah_time;
+    }
+
+    res.json({ times });
+  })
+);
+
+app.post(
+  "/api/mosque/iqamah-times",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool      = await getPool();
+    const userId    = req.user.userId || req.user.user_id;
+    const { mosqueId, mosqueName, times } = req.body || {};
+
+    if (!mosqueId || typeof times !== "object") {
+      return res.status(400).json({ error: "mosqueId and times are required" });
+    }
+
+    const prayers = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+
+    for (const prayer of prayers) {
+      const time = times[prayer];
+      if (!time || typeof time !== "string") continue;
+
+      await pool
+        .request()
+        .input("user_id",     sql.UniqueIdentifier, userId)
+        .input("mosque_id",   sql.NVarChar(255),     mosqueId)
+        .input("mosque_name", sql.NVarChar(500),     mosqueName || "")
+        .input("prayer_name", sql.NVarChar(20),      prayer)
+        .input("iqamah_time", sql.NVarChar(8),       time.slice(0, 5))
+        .query(`
+          MERGE dbo.mosque_iqamah_times AS target
+          USING (SELECT @user_id AS user_id, @mosque_id AS mosque_id, @prayer_name AS prayer_name) AS src
+          ON target.user_id = src.user_id
+            AND target.mosque_id = src.mosque_id
+            AND target.prayer_name = src.prayer_name
+          WHEN MATCHED THEN UPDATE SET
+            iqamah_time = @iqamah_time,
+            mosque_name = @mosque_name,
+            updated_at  = SYSUTCDATETIME()
+          WHEN NOT MATCHED THEN INSERT (user_id, mosque_id, mosque_name, prayer_name, iqamah_time)
+            VALUES (@user_id, @mosque_id, @mosque_name, @prayer_name, @iqamah_time);
+        `);
+    }
+
+    res.json({ ok: true });
+  })
+);
+
+// ─── Alexa speaker groups ────────────────────────────────────────────────────
+// Returns the user's Alexa speaker groups so multi-room sync can be configured.
+app.get(
+  "/api/alexa/devices/groups",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.user.userId || req.user.user_id;
+
+    let amazonAccessToken = null;
+    try {
+      const { getAmazonAccessToken } = require("./services/alexaRoutineCreator");
+      amazonAccessToken = await getAmazonAccessToken(pool, userId);
+    } catch {
+      return res.json({ groups: [] });
+    }
+
+    try {
+      const resp = await fetch("https://api.amazonalexa.com/v1/endpointGroups", {
+        headers: { Authorization: `Bearer ${amazonAccessToken}` },
+      });
+
+      if (!resp.ok) {
+        return res.json({ groups: [] });
+      }
+
+      const data = await resp.json();
+      const groups = (data.endpointGroups || data.groups || []).map((g) => ({
+        id: g.endpointGroupId || g.id,
+        name: g.friendlyName || g.name || "Speaker Group",
+      })).filter((g) => g.id);
+
+      res.json({ groups });
+    } catch {
+      res.json({ groups: [] });
+    }
+  })
+);
+
 // ─── Automation: full schedule for Lambda ────────────────────────────────────
 app.get(
   "/api/alexa/skill/full-schedule",

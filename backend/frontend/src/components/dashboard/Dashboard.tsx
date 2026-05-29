@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { t, prayerName, toHijri, getCurrentLang, setLanguage } from "../lib/i18n";
 import { useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
 import {
@@ -682,6 +683,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   }, [userSettings?.prayerConfigs]);
  
   const automationOn = !!userSettings?.accountEnabled;
+  const lang = getCurrentLang();
+  const hijriDate = useMemo(() => toHijri(new Date(), lang), [lang]);
  
   const mosque = useMemo(() => {
     if (!userSettings?.mosqueId && !userSettings?.mosqueName) return null;
@@ -864,6 +867,26 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         className="max-w-7xl mx-auto px-4 py-5 space-y-5 md:px-6 md:py-6 md:space-y-6"
         style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom))" }}
       >
+        {/* ── Activation banner — shown when automation needs one voice command ── */}
+        {onboardingData.activationPhrase && !automationOn && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
+            <div className="flex items-start gap-3">
+              <Volume2 className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-amber-200 font-semibold text-sm mb-1">
+                  One step to activate automatic Adhan
+                </div>
+                <p className="text-amber-300/80 text-xs leading-relaxed mb-2">
+                  Say this on any Echo device to schedule your daily Adhan reminders:
+                </p>
+                <div className="rounded-xl bg-slate-900/60 border border-amber-500/20 px-4 py-2.5 font-mono text-sm text-white select-all">
+                  "Alexa, open {String(onboardingData.activationPhrase)}"
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Status bar ── */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 min-h-[44px]">
@@ -887,7 +910,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               ) : (
                 <WifiOff className="w-3 h-3" />
               )}
-              {automationOn ? "Automation Active" : "Automation Paused"}
+              {automationOn ? t(lang, "dashboard.automationActive") : t(lang, "dashboard.automationPaused")}
             </Badge>
  
             <Badge
@@ -920,6 +943,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
  
               <div className="text-right">
                 <p className="text-slate-400 text-xs md:text-sm mb-1.5">{gregorianDate}</p>
+                {hijriDate && (
+                  <p className="text-slate-500 text-xs mb-1.5">{hijriDate}</p>
+                )}
                 <div className="flex justify-end gap-1.5 flex-wrap">
                   <Badge className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-xs">
                     {sectLabel}
@@ -1005,7 +1031,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   className="border-slate-700 text-slate-300 hover:bg-slate-800/50 min-h-[44px] touch-manipulation active:scale-95 transition-transform duration-100"
                   onClick={handleToggleAutomation}
                 >
-                  {automationOn ? "Pause" : "Resume"} Automation
+                  {automationOn ? t(lang, "dashboard.pauseAutomation") : t(lang, "dashboard.resumeAutomation")}
                 </Button>
               </div>
               {locationCoords && (

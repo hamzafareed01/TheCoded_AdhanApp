@@ -1,3 +1,4 @@
+import React from 'react';
 import {
   useEffect,
   useMemo,
@@ -205,6 +206,72 @@ function getSectBadgeClass(sect?: string) {
 function getEffectiveSectFilter(filter: SectFilter, settings: UserSettings | null): SectFilter {
   if (filter !== "AUTO") return filter;
   return settings?.sect || "SUNNI";
+}
+
+// ─── Iqamah Times Editor ─────────────────────────────────────────────────────
+
+const PRAYERS_LIST = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const;
+
+function IqamahTimesEditor({ mosqueName, mosqueId }: { mosqueName: string; mosqueId: string | null }) {
+  const [times, setTimes] = React.useState<Record<string, string>>({
+    fajr: "", dhuhr: "", asr: "", maghrib: "", isha: "",
+  });
+  const [saving, setSaving] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!mosqueId) return;
+    apiFetch(`/api/mosque/iqamah-times?mosqueId=${encodeURIComponent(mosqueId)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.times) setTimes((prev) => ({ ...prev, ...data.times }));
+      })
+      .catch(() => {});
+  }, [mosqueId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await apiFetch("/api/mosque/iqamah-times", {
+        method: "POST",
+        body: JSON.stringify({ mosqueId, mosqueName, times }),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch { /* ignore */ } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {PRAYERS_LIST.map((prayer) => (
+          <div key={prayer}>
+            <label className="text-slate-300 text-xs font-medium capitalize mb-1 block">{prayer}</label>
+            <input
+              type="time"
+              value={times[prayer] ?? ""}
+              onChange={(e) => setTimes((prev) => ({ ...prev, [prayer]: e.target.value }))}
+              className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 touch-manipulation"
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <p className="text-slate-500 text-xs leading-relaxed">
+          Leave blank for calculated times. Only filled prayers will be overridden.
+        </p>
+        <Button
+          onClick={handleSave}
+          disabled={saving}
+          className="bg-emerald-600 hover:bg-emerald-700 text-white min-h-[44px] touch-manipulation flex-shrink-0"
+        >
+          {saved ? "Saved ✓" : saving ? "Saving…" : "Save times"}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export default function MosqueSelector({ onboardingData, setOnboardingData }: MosqueSelectorProps) {
@@ -636,6 +703,19 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
                   {saving ? "Saving…" : "Save mosque"}
                 </Button>
               </div>
+
+              {/* Community Prayer Times — iqamah times from selected mosque */}
+              {settings.mosqueName && (
+                <div className="mt-6 rounded-xl border border-slate-700/50 bg-slate-800/30 p-5">
+                  <h3 className="text-white font-semibold text-sm mb-1">
+                    Community prayer times
+                  </h3>
+                  <p className="text-slate-400 text-xs mb-4 leading-relaxed">
+                    Enter your mosque's official iqamah (congregation) times. These will override calculated times when mosque timing is enabled.
+                  </p>
+                  <IqamahTimesEditor mosqueName={settings.mosqueName} mosqueId={settings.mosqueId ?? null} />
+                </div>
+              )}
             </>
           )}
         </div>

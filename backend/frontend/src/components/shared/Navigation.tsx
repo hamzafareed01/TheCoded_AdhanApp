@@ -9,6 +9,7 @@ import {
   Settings as SettingsIcon,
   Volume2,
 } from 'lucide-react';
+import { t, getCurrentLang } from '../lib/i18n';
 
 const linkBase =
   'inline-flex items-center justify-center gap-1.5 rounded-xl border text-sm transition-colors touch-manipulation min-h-[44px]';
@@ -19,14 +20,14 @@ const inactive =
 const active =
   'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
 
-const NAV_ITEMS = [
-  { to: '/dashboard',   icon: Home,         label: 'Dashboard'  },
-  { to: '/calendar',    icon: Calendar,     label: 'Calendar'   },
-  { to: '/mosque',      icon: MapPin,       label: 'Mosque'     },
-  { to: '/dua-quran',   icon: BookOpen,     label: 'Dua & Quran'},
-  { to: '/qiblah',      icon: Compass,      label: 'Qiblah'     },
-  { to: '/alexa-setup', icon: Volume2,      label: 'Alexa Setup'},
-  { to: '/settings',    icon: SettingsIcon, label: 'Settings'   },
+const NAV_ITEM_DEFS = [
+  { to: '/dashboard',   icon: Home,         key: 'nav.dashboard' as const },
+  { to: '/calendar',    icon: Calendar,     key: 'nav.calendar'  as const },
+  { to: '/mosque',      icon: MapPin,       key: 'nav.mosque'    as const },
+  { to: '/dua-quran',   icon: BookOpen,     key: 'nav.quran'     as const },
+  { to: '/qiblah',      icon: Compass,      key: 'nav.qiblah'    as const },
+  { to: '/alexa-setup', icon: Volume2,      key: 'nav.alexa'     as const },
+  { to: '/settings',    icon: SettingsIcon, key: 'nav.settings'  as const },
 ] as const;
 
 function Item({
@@ -56,8 +57,8 @@ function Item({
 export function Navigation() {
   return (
     <nav className="flex items-center gap-1.5 flex-wrap" aria-label="Main navigation">
-      {NAV_ITEMS.map(({ to, icon, label }) => (
-        <Item key={to} to={to} icon={icon} label={label} />
+      {NAV_ITEM_DEFS.map(({ to, icon, key }) => (
+        <Item key={to} to={to} icon={icon} label={t(getCurrentLang(), key)} />
       ))}
     </nav>
   );

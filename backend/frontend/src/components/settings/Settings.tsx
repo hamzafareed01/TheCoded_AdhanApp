@@ -69,6 +69,8 @@ type UserSettings = {
   mosqueLat?: number | null;
   mosqueLng?: number | null;
   selectedAlexaDeviceIds?: string[];
+  speakerGroupIds?: string[];
+  prePrayerReminderMin?: number | null;
   accountEnabled: boolean;
   globalOffsets: Offsets;
   prayerConfigs: PrayerConfig[];
@@ -96,6 +98,11 @@ type SurahItem = {
 };
  
 type Device = {
+  id: string;
+  name: string;
+};
+
+type SpeakerGroup = {
   id: string;
   name: string;
 };
@@ -336,6 +343,12 @@ function normalizeSettings(payload: unknown): UserSettings {
           (id): id is string => typeof id === "string" && id.trim().length > 0
         )
       : [],
+    speakerGroupIds: Array.isArray(src.speakerGroupIds)
+      ? (src.speakerGroupIds as unknown[]).filter((x): x is string => typeof x === "string")
+      : [],
+    prePrayerReminderMin: typeof src.prePrayerReminderMin === "number"
+      ? src.prePrayerReminderMin
+      : null,
     accountEnabled:
       asBoolean(src.accountEnabled) ??
       asBoolean(src.account_enabled) ??
@@ -538,6 +551,7 @@ export default function Settings({
   const [duas, setDuas] = useState<DuaItem[]>([]);
   const [surahs, setSurahs] = useState<SurahItem[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [speakerGroups, setSpeakerGroups] = useState<SpeakerGroup[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
  
   const [saving, setSaving] = useState(false);
@@ -580,13 +594,14 @@ export default function Settings({
       try {
         setError(null);
  
-        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes] =
+        const [settingsRes, recitersRes, duasRes, surahsRes, devicesRes, groupsRes] =
           await Promise.all([
             apiFetch("/api/user/settings"),
             apiFetch("/api/library/reciters?type=adhan"),
             apiFetch("/api/duas"),
             apiFetch("/api/quran/surahs"),
             apiFetch("/api/alexa/devices"),
+            apiFetch("/api/alexa/devices/groups"),
           ]);
  
         if (!settingsRes.ok) {
@@ -621,6 +636,17 @@ export default function Settings({
         if (devicesRes.ok) {
           const devicesJson = await devicesRes.json();
           setDevices(normalizeDevices(devicesJson));
+        }
+
+        if (groupsRes.ok) {
+          const groupsJson = await groupsRes.json() as { groups?: unknown[] };
+          const normalized = (groupsJson.groups ?? [])
+            .filter((g): g is { id: string; name: string } =>
+              typeof (g as { id?: unknown }).id === "string" &&
+              typeof (g as { name?: unknown }).name === "string"
+            )
+            .map((g) => ({ id: g.id, name: g.name }));
+          setSpeakerGroups(normalized);
         }
  
         await loadSchedules();
@@ -684,6 +710,16 @@ export default function Settings({
     });
   };
  
+  const toggleSpeakerGroup = (groupId: string, checked: boolean) => {
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const next = checked
+        ? Array.from(new Set([...(prev.speakerGroupIds ?? []), groupId]))
+        : (prev.speakerGroupIds ?? []).filter((id) => id !== groupId);
+      return { ...prev, speakerGroupIds: next };
+    });
+  };
+
   const toggleSelectedDevice = (deviceId: string, checked: boolean) => {
     setSettings((prev) => {
       if (!prev) return prev;
@@ -772,6 +808,8 @@ export default function Settings({
           muteFajr: syncedSettings.quietHours.muteFajr,
         },
         selectedAlexaDeviceIds: syncedSettings.selectedAlexaDeviceIds ?? [],
+        speakerGroupIds: syncedSettings.speakerGroupIds ?? [],
+        prePrayerReminderMin: syncedSettings.prePrayerReminderMin ?? null,
         globalOffsets: sanitizedGlobalOffsets,
         prayerConfigs: syncedSettings.prayerConfigs.map((pc) => ({
           prayerName: pc.prayerName,
@@ -1038,6 +1076,34 @@ export default function Settings({
                   </div>
                 </div>
  
+                {/* Language */}
+                <div>
+                  <Label className="text-white mb-2 block text-sm font-medium">
+                    App &amp; Alexa language
+                  </Label>
+                  <Select
+                    value={settings.language || "en"}
+                    onValueChange={(v: string) => updateField("language", v)}
+                  >
+                    <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                      <SelectItem value="en">🇺🇸 English</SelectItem>
+                      <SelectItem value="ar">🇸🇦 العربية (Arabic)</SelectItem>
+                      <SelectItem value="fr">🇫🇷 Français (French)</SelectItem>
+                      <SelectItem value="de">🇩🇪 Deutsch (German)</SelectItem>
+                      <SelectItem value="ur">🇵🇰 اردو (Urdu)</SelectItem>
+                      <SelectItem value="tr">🇹🇷 Türkçe (Turkish)</SelectItem>
+                      <SelectItem value="es">🇪🇸 Español (Spanish)</SelectItem>
+                      <SelectItem value="id">🇮🇩 Bahasa Indonesia</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-slate-500 text-xs mt-1.5 leading-relaxed">
+                    Sets the language for Alexa responses and prayer name display.
+                  </p>
+                </div>
+
                 {/* Calculation Method */}
                 <div>
                   <Label className="text-white mb-2 block text-sm font-medium">
@@ -1316,6 +1382,43 @@ export default function Settings({
                   </div>
                 )}
  
+                {/* Speaker Groups */}
+                {speakerGroups.length > 0 && (
+                  <div className="mt-6">
+                    <h3 className="text-white font-semibold text-sm mb-3">Speaker Groups (multi-room)</h3>
+                    <p className="text-slate-400 text-xs mb-3 leading-relaxed">
+                      Select an Alexa Speaker Group to play Adhan on all grouped devices simultaneously.
+                    </p>
+                    <div className="space-y-3">
+                      {speakerGroups.map((group) => {
+                        const checked = (settings.speakerGroupIds ?? []).includes(group.id);
+                        return (
+                          <label
+                            key={group.id}
+                            className={`flex items-center gap-4 p-5 rounded-xl border-2 cursor-pointer transition-all min-h-[72px] touch-manipulation ${
+                              checked
+                                ? "border-emerald-500/50 bg-emerald-500/10"
+                                : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
+                            }`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(value) =>
+                                toggleSpeakerGroup(group.id, value === true)
+                              }
+                              className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-white font-medium truncate">{group.name}</div>
+                              <div className="text-slate-400 text-sm">Speaker group · plays on all devices in group</div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-6 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
                   <div className="flex items-start gap-3">
                     <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
@@ -1833,6 +1936,33 @@ export default function Settings({
                   </div>
                 </div>
  
+                {/* Pre-Prayer Reminder */}
+                <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-5">
+                  <div className="mb-3">
+                    <div className="text-white font-semibold text-sm">Pre-prayer reminder</div>
+                    <p className="text-slate-400 text-xs mt-1 leading-relaxed">
+                      Alexa announces a reminder on your Echo device before each prayer time.
+                    </p>
+                  </div>
+                  <Select
+                    value={settings.prePrayerReminderMin != null ? String(settings.prePrayerReminderMin) : "0"}
+                    onValueChange={(v: string) =>
+                      updateField("prePrayerReminderMin", v === "0" ? null : Number(v))
+                    }
+                  >
+                    <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-900 border-slate-700 text-slate-100">
+                      <SelectItem value="0">Off</SelectItem>
+                      <SelectItem value="5">5 minutes before</SelectItem>
+                      <SelectItem value="10">10 minutes before</SelectItem>
+                      <SelectItem value="15">15 minutes before</SelectItem>
+                      <SelectItem value="20">20 minutes before</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {/* Info */}
                 <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
                   <p className="text-slate-400 text-xs leading-relaxed">

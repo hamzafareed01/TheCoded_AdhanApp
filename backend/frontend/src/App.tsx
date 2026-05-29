@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { applyDocumentDirection, getCurrentLang } from "./lib/i18n";
 import RootShell from "./RootShell";
 import type { AppUser } from "./types/AppUser";
 import {
@@ -37,6 +38,11 @@ export default function App() {
     } catch {
       setUser(null);
     }
+  }, []);
+
+  useEffect(() => {
+    // Apply RTL/LTR direction based on stored language preference
+    applyDocumentDirection(getCurrentLang());
   }, []);
 
   useEffect(() => {

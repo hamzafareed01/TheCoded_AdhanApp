@@ -27,7 +27,14 @@ export type PrayerMethod =
   | "egypt"
   | "ummAlQura"
   | "tehran"
-  | "jafari";
+  | "jafari"
+  | "diyanet"
+  | "jakim"
+  | "singapore"
+  | "morocco"
+  | "dubai"
+  | "france"
+  | "russia";
  
 export type HighLatitudeMode =
   | "automatic"
@@ -96,19 +103,52 @@ function getDefaultMethodForCountry(country: string, sect: Sect): PrayerMethod {
   if (sect === "SHIA") {
     return country === "IR" ? "tehran" : "jafari";
   }
-  if (country === "PK") return "karachi";
-  if (country === "SA") return "ummAlQura";
-  if (country === "EG") return "egypt";
-  if (country === "US" || country === "CA") return "isna";
-  return "mwl";
+
+  const methodMap: Record<string, PrayerMethod> = {
+    // North America
+    US: "isna", CA: "isna", MX: "mwl",
+    // South Asia
+    PK: "karachi", BD: "karachi", IN: "karachi", AF: "karachi",
+    LK: "karachi", NP: "karachi",
+    // Southeast Asia
+    MY: "jakim", SG: "singapore", ID: "mwl", BN: "mwl",
+    PH: "mwl",
+    // Middle East / Gulf
+    SA: "ummAlQura", AE: "dubai", KW: "mwl", BH: "mwl",
+    QA: "mwl", OM: "makkah", YE: "makkah", IQ: "makkah",
+    JO: "mwl", SY: "mwl", LB: "mwl", PS: "mwl",
+    // Africa
+    EG: "egypt", MA: "morocco", DZ: "mwl", TN: "mwl",
+    LY: "mwl", SD: "mwl", SO: "mwl", NG: "mwl",
+    SN: "mwl", ML: "mwl", NE: "mwl", ET: "mwl",
+    TZ: "mwl", KE: "mwl", GH: "mwl",
+    // Europe
+    TR: "diyanet", DE: "mwl", FR: "france", GB: "mwl",
+    NL: "mwl", BE: "mwl", SE: "mwl", NO: "mwl",
+    DK: "mwl", FI: "mwl", IT: "mwl", ES: "mwl",
+    CH: "mwl", AT: "mwl",
+    // Central Asia
+    KZ: "russia", UZ: "russia", TM: "russia",
+    TJ: "russia", KG: "russia", AZ: "mwl",
+    // Oceania
+    AU: "mwl", NZ: "mwl",
+  };
+
+  return methodMap[country] ?? "mwl";
 }
+
+// Countries that need high-latitude adjustment suggestions
+const HIGH_LATITUDE_COUNTRIES = new Set([
+  "SE", "NO", "FI", "DK", "IS", "RU", "CA", "GL"
+]);
  
 function normalizeMethod(value: unknown, country: string, sect: Sect): PrayerMethod {
   const raw = String(value ?? "").trim();
   const allowed: PrayerMethod[] =
     sect === "SHIA"
       ? ["jafari", "tehran"]
-      : ["isna", "karachi", "mwl", "makkah", "egypt", "ummAlQura"];
+      : ["isna", "karachi", "mwl", "makkah", "egypt", "ummAlQura",
+         "diyanet", "jakim", "singapore", "morocco", "dubai", "france", "russia"];
  
   if (allowed.includes(raw as PrayerMethod)) {
     return raw as PrayerMethod;
@@ -233,13 +273,20 @@ export default function Step4PrayerSettings({
     }
  
     return [
-      { value: "isna", label: "ISNA (North America)" },
-      { value: "mwl", label: "Muslim World League" },
-      { value: "karachi", label: "Karachi" },
-      { value: "ummAlQura", label: "Umm Al-Qura" },
-      { value: "makkah", label: "Makkah" },
-      { value: "egypt", label: "Egyptian Survey" },
-    ] as const;
+      { value: "isna",      label: "ISNA — North America" },
+      { value: "mwl",       label: "Muslim World League" },
+      { value: "karachi",   label: "Karachi — South Asia" },
+      { value: "ummAlQura", label: "Umm Al-Qura — Saudi Arabia" },
+      { value: "makkah",    label: "Makkah" },
+      { value: "egypt",     label: "Egyptian Survey Authority" },
+      { value: "diyanet",   label: "Diyanet — Turkey" },
+      { value: "jakim",     label: "JAKIM — Malaysia" },
+      { value: "singapore", label: "Majlis Ugama Islam — Singapore" },
+      { value: "morocco",   label: "Ministère des Habous — Morocco" },
+      { value: "dubai",     label: "Dubai — UAE" },
+      { value: "france",    label: "UOIF — France" },
+      { value: "russia",    label: "Russia — Central Asia" },
+    ];
   }, [sect]);
  
   const updateOffset = (prayer: PrayerName, rawValue: string) => {
