@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { t, prayerName, toHijri, getCurrentLang, setLanguage } from "../lib/i18n";
+import { t, prayerName, toHijri, getCurrentLang, setLanguage } from "../../lib/i18n";
 import { useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
 import {

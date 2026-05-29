@@ -9,7 +9,7 @@ import {
   Settings as SettingsIcon,
   Volume2,
 } from 'lucide-react';
-import { t, getCurrentLang } from '../lib/i18n';
+import { t, getCurrentLang } from '../../lib/i18n';
 
 const linkBase =
   'inline-flex items-center justify-center gap-1.5 rounded-xl border text-sm transition-colors touch-manipulation min-h-[44px]';

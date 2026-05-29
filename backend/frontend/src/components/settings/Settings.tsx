@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { t, setLanguage, getCurrentLang } from "../../lib/i18n";
 import { useNavigate } from "react-router-dom";
 import { Logo } from "../shared/Logo";
 import { Button } from "../ui/button";
@@ -1083,7 +1084,10 @@ export default function Settings({
                   </Label>
                   <Select
                     value={settings.language || "en"}
-                    onValueChange={(v: string) => updateField("language", v)}
+                    onValueChange={(v: string) => {
+                      updateField("language", v);
+                      setLanguage(v);
+                    }}
                   >
                     <SelectTrigger className="bg-slate-800/60 border-slate-700/60 text-white h-11">
                       <SelectValue />
@@ -1984,7 +1988,7 @@ export default function Settings({
               className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white min-h-[52px] px-8 font-medium shadow-lg touch-manipulation active:opacity-90"
             >
               <Save className="w-4 h-4 mr-2" />
-              {saving ? "Saving settings…" : "Save all settings"}
+              {saving ? t(settings.language || "en", "settings.saving") : t(settings.language || "en", "settings.save")}
             </Button>
           </div>
         )}
