@@ -558,7 +558,17 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         }
  
         const data = await res.json();
-        setTodayData(normalizeToday(data));
+        const normalized = normalizeToday(data);
+        setTodayData(normalized);
+
+        // Schedule local notifications for all prayer times
+        if (normalized?.prayers24) {
+          const notifSettings = getNotificationSettings();
+          void scheduleAllPrayerNotifications(
+            normalized.prayers24 as Parameters<typeof scheduleAllPrayerNotifications>[0],
+            { ...notifSettings, language: getCurrentLang() }
+          );
+        }
       } catch (err) {
         console.error("Failed to load prayer times:", err);
         setTodayError(
@@ -816,22 +826,31 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       navigate("/settings");
       return;
     }
- 
+
     const newEnabled = !automationOn;
- 
+
     try {
+      // Update accountEnabled in settings
       const res = await apiFetch("/api/user/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountEnabled: newEnabled }),
       });
- 
+
       if (!res.ok) {
         throw new Error(`Failed to update automation (${res.status})`);
       }
- 
+
       const updatedPayload = await res.json();
       setUserSettings(normalizeSettings(updatedPayload));
+
+      // Also update reminder status in backend
+      await apiFetch("/api/alexa/skill/automation/enable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: newEnabled }),
+      }).catch(() => {}); // Non-fatal
+
     } catch (err) {
       console.error("Failed to toggle automation:", err);
       alert(
@@ -1031,7 +1050,17 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   className="border-slate-700 text-slate-300 hover:bg-slate-800/50 min-h-[44px] touch-manipulation active:scale-95 transition-transform duration-100"
                   onClick={handleToggleAutomation}
                 >
-                  {automationOn ? t(lang, "dashboard.pauseAutomation") : t(lang, "dashboard.resumeAutomation")}
+                  {automationOn ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                      {t(lang, "dashboard.pauseAutomation")}
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+                      {t(lang, "dashboard.resumeAutomation")}
+                    </span>
+                  )}
                 </Button>
               </div>
               {locationCoords && (

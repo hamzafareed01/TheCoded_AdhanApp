@@ -41,6 +41,10 @@ const {
 const {
   createPrayerRoutines,
 } = require("./services/alexaRoutineCreator");
+// fcmNotifications not needed — notifications handled locally by the app
+const {
+  triggerPrayerDoorbell,
+} = require("./services/alexaProactiveEvents");
  
 const app = express();
 app.set("trust proxy", 1);
@@ -4221,6 +4225,71 @@ app.delete(
   })
 );
 
+// ─── FCM token registration ───────────────────────────────────────────────────
+// Called by the Android app on startup to register/update the FCM push token.
+
+app.post(
+  "/api/user/fcm-token",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.user.userId || req.user.user_id;
+    const { token, enabled } = req.body || {};
+
+    if (!token || typeof token !== "string") {
+      return res.status(400).json({ error: "token is required" });
+    }
+
+    await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("fcm_token", sql.NVarChar(500), token)
+      .input("push_enabled", sql.Bit, enabled !== false ? 1 : 0)
+      .query(`
+        UPDATE dbo.user_profiles
+        SET fcm_token = @fcm_token,
+            push_notifications_enabled = @push_enabled,
+            updated_at = SYSUTCDATETIME()
+        WHERE user_id = @user_id
+      `);
+
+    res.json({ ok: true });
+  })
+);
+
+// ─── Notification preferences ─────────────────────────────────────────────────
+
+app.post(
+  "/api/user/notification-prefs",
+  requireAmazonAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.user.userId || req.user.user_id;
+    const {
+      pushEnabled,
+      pushBeforePrayerMin,
+      pushAfterPrayerMin,
+    } = req.body || {};
+
+    await pool
+      .request()
+      .input("user_id",              sql.UniqueIdentifier, userId)
+      .input("push_enabled",         sql.Bit,              pushEnabled !== false ? 1 : 0)
+      .input("push_before_min",      sql.Int,              pushBeforePrayerMin ?? 10)
+      .input("push_after_min",       sql.Int,              pushAfterPrayerMin  ?? 30)
+      .query(`
+        UPDATE dbo.user_profiles
+        SET push_notifications_enabled = @push_enabled,
+            push_before_prayer_min     = @push_before_min,
+            push_after_prayer_min      = @push_after_min,
+            updated_at                 = SYSUTCDATETIME()
+        WHERE user_id = @user_id
+      `);
+
+    res.json({ ok: true });
+  })
+);
+
 // ─── Mosque iqamah (community) times ─────────────────────────────────────────
 // Stores and retrieves official mosque prayer/iqamah times set by the user.
 
@@ -4564,6 +4633,131 @@ app.post(
     res.json({ ok: true, remindersEnabled: enabled });
   })
 );
+
+// ─── Prayer time scheduler (node-cron) ───────────────────────────────────────
+// Runs every minute. Finds prayers due now and sends FCM + Alexa doorbell.
+// Install: npm install node-cron
+
+(function startPrayerScheduler() {
+  let cron;
+  try { cron = require("node-cron"); } catch { return; } // skip if not installed yet
+
+  const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
+
+  // Populate daily_prayer_schedule for all active users — runs once at startup + midnight
+  async function populateDailySchedule() {
+    let pool;
+    try {
+      pool = await getPool();
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Get all active users with their prayer settings
+      const users = await pool.request().query(`
+        SELECT DISTINCT u.user_id, u.fcm_token, u.push_notifications_enabled,
+               u.push_before_prayer_min, u.push_after_prayer_min,
+               u.timezone, u.city, u.country, u.latitude, u.longitude,
+               u.calculation_method, u.sect
+        FROM dbo.user_profiles u
+        WHERE (u.fcm_token IS NOT NULL OR EXISTS (
+          SELECT 1 FROM dbo.alexa_app_link_tokens a WHERE a.user_id = u.user_id
+        ))
+      `);
+
+      for (const user of users.recordset || []) {
+        try {
+          const { profile, prayers } = await getUserProfileAndPrayersByUserId(pool, user.user_id);
+          const prayerData = await computePrayerTimesForProfile(profile, prayers, new Date());
+          const times24 = prayerData.prayers24 || {};
+          const tz = profile.timezone || "Etc/UTC";
+
+          for (const prayer of PRAYERS) {
+            const timeHHMM = times24[prayer];
+            if (!timeHHMM) continue;
+
+            // Convert prayer time to UTC
+            const [hh, mm] = timeHHMM.split(":").map(Number);
+            const local = new Date(`${today}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`);
+            const formatter = new Intl.DateTimeFormat("en-US", {
+              timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+              hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+            });
+            // Use the DB to do the timezone conversion safely
+            const utcStr = new Date(
+              Date.UTC(local.getFullYear(), local.getMonth(), local.getDate(), hh, mm, 0)
+            ).toISOString();
+
+            await pool.request()
+              .input("user_id",     sql.UniqueIdentifier, user.user_id)
+              .input("date",        sql.Date,             today)
+              .input("prayer",      sql.NVarChar(10),     prayer)
+              .input("fire_at_utc", sql.DateTime2,        new Date(utcStr))
+              .query(`
+                MERGE dbo.daily_prayer_schedule AS t
+                USING (SELECT @user_id u, @date d, @prayer p) AS s
+                ON t.user_id = s.u AND t.schedule_date = s.d AND t.prayer_name = s.p
+                WHEN NOT MATCHED THEN
+                  INSERT (user_id, schedule_date, prayer_name, fire_at_utc)
+                  VALUES (@user_id, @date, @prayer, @fire_at_utc);
+              `);
+          }
+        } catch { /* skip user on error */ }
+      }
+      console.log("[scheduler] Daily prayer schedule populated");
+    } catch (err) {
+      console.error("[scheduler] populateDailySchedule error:", err.message);
+    }
+  }
+
+  // Fire notifications for prayers due in this minute
+  async function fireNotifications() {
+    let pool;
+    try {
+      pool = await getPool();
+      const now = new Date();
+      const windowStart = new Date(now.getTime() - 30000);  // 30s ago
+      const windowEnd   = new Date(now.getTime() + 30000);  // 30s ahead
+
+      // Get due entries not yet sent
+      const due = await pool.request()
+        .input("start", sql.DateTime2, windowStart)
+        .input("end",   sql.DateTime2, windowEnd)
+        .query(`
+          SELECT s.id, s.user_id, s.prayer_name,
+                 p.fcm_token, p.push_notifications_enabled,
+                 p.push_before_prayer_min, p.push_after_prayer_min
+          FROM dbo.daily_prayer_schedule s
+          JOIN dbo.user_profiles p ON s.user_id = p.user_id
+          WHERE s.fire_at_utc BETWEEN @start AND @end
+            AND s.notif_sent = 0
+        `);
+
+      for (const row of due.recordset || []) {
+        // Phone notifications are handled locally by the app (local-notifications)
+        // Backend only triggers Alexa virtual doorbell here
+        try {
+          await triggerPrayerDoorbell(pool, row.user_id);
+        } catch { /* non-fatal */ }
+
+        // Mark as sent
+        await pool.request()
+          .input("id", sql.UniqueIdentifier, row.id)
+          .query("UPDATE dbo.daily_prayer_schedule SET notif_sent = 1, alexa_sent = 1 WHERE id = @id");
+      }
+
+    } catch (err) {
+      console.error("[scheduler] fireNotifications error:", err.message);
+    }
+  }
+
+  // Run every minute
+  cron.schedule("* * * * *", fireNotifications);
+
+  // Populate schedule at startup and every day at midnight
+  cron.schedule("0 0 * * *", populateDailySchedule);
+  setTimeout(populateDailySchedule, 5000); // 5s after startup
+
+  console.log("[scheduler] Prayer notification scheduler started");
+})();
 
 // Error handler
 app.use((err, req, res, next) => {

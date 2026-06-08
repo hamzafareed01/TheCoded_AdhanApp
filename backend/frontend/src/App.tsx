@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { applyDocumentDirection, getCurrentLang } from "./lib/i18n";
+import { registerFCMToken } from "./lib/pushNotifications";
+import { createNotificationChannels } from "./lib/notifications";
 import RootShell from "./RootShell";
 import type { AppUser } from "./types/AppUser";
 import {
@@ -43,6 +45,8 @@ export default function App() {
   useEffect(() => {
     // Apply RTL/LTR direction based on stored language preference
     applyDocumentDirection(getCurrentLang());
+    // Create Android notification channels
+    void createNotificationChannels();
   }, []);
 
   useEffect(() => {

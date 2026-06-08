@@ -11,10 +11,11 @@ const DEFAULT_QUIET_DOWN_POLICY = {
 };
 
 const ENDPOINT_IDS = {
-  automation: "adhannow:automation",
-  quietMode: "adhannow:quiet-mode",
+  automation:  "adhannow:automation",
+  quietMode:   "adhannow:quiet-mode",
   quietVolume: "adhannow:quiet-volume",
   fireTvQuiet: "adhannow:firetv-quiet",
+  doorbell:    "adhannow-prayer-doorbell",
 };
 
 function safeParseJson(value, fallback = null) {
@@ -211,6 +212,22 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
       ],
     });
   }
+
+  // Virtual prayer doorbell — triggers user's Alexa Routine at prayer times
+  endpoints.push({
+    endpointId:       ENDPOINT_IDS.doorbell,
+    manufacturerName: "AdhanNow",
+    friendlyName:     "AdhanNow Prayer Doorbell",
+    description:      "Virtual doorbell that rings at each prayer time. Use as a trigger in Alexa Routines to play Adhan automatically.",
+    displayCategories: ["DOORBELL"],
+    cookie: { kind: "doorbell" },
+    capabilities: [
+      { type: "AlexaInterface", interface: "Alexa",                     version: "3" },
+      { type: "AlexaInterface", interface: "Alexa.DoorbellEventSource", version: "3",
+        proactivelyReported: true, properties: {} },
+      buildHealthCapability(),
+    ],
+  });
 
   return endpoints;
 }
