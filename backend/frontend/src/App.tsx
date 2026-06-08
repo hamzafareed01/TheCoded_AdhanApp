@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { applyDocumentDirection, getCurrentLang } from "./lib/i18n";
 import { registerFCMToken } from "./lib/pushNotifications";
-import { createNotificationChannels } from "./lib/notifications";
 import RootShell from "./RootShell";
 import type { AppUser } from "./types/AppUser";
 import {
@@ -11,17 +10,17 @@ import {
   restoreAmazonTokenFromUrl,
   subscribeToAmazonAuthChanges,
 } from "./lib/api";
-
+ 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null);
-
+ 
   const loadUser = useCallback(async () => {
     const token = getStoredAmazonToken();
     if (!token) {
       setUser(null);
       return;
     }
-
+ 
     try {
       const res = await apiFetch("/api/integrations");
       if (!res.ok) {
@@ -31,7 +30,7 @@ export default function App() {
         setUser(null);
         return;
       }
-
+ 
       const data = await res.json();
       setUser({
         userId: data.userKey,
@@ -41,33 +40,33 @@ export default function App() {
       setUser(null);
     }
   }, []);
-
+ 
   useEffect(() => {
     // Apply RTL/LTR direction based on stored language preference
     applyDocumentDirection(getCurrentLang());
-    // Create Android notification channels
-    void createNotificationChannels();
+    // Schedule local prayer notifications
+    void registerFCMToken();
   }, []);
-
+ 
   useEffect(() => {
     console.log("App mounted. Current URL:", window.location.href);
-
+ 
     // Initial restoration on mount
     restoreAmazonTokenFromUrl();
     void loadUser();
-
+ 
     return subscribeToAmazonAuthChanges(() => {
       console.log("Amazon auth changed. Refreshing user...");
       // Only refresh user, don't call restoreAmazonTokenFromUrl here to avoid loops
       void loadUser();
     });
   }, [loadUser]);
-
+ 
   const onLogout = () => {
     clearStoredAmazonToken();
     setUser(null);
     window.location.href = "/onboarding/step2";
   };
-
+ 
   return <RootShell user={user} onLogout={onLogout} />;
 }
