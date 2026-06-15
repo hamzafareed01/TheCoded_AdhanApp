@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+mport { useEffect, useMemo, useState } from "react";
+import { schedulePrayerNotifications } from "../../lib/pushNotifications";
 import { t, prayerName, toHijri, getCurrentLang, setLanguage } from "../../lib/i18n";
 import { useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
@@ -560,15 +561,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         const data = await res.json();
         const normalized = normalizeToday(data);
         setTodayData(normalized);
-
+ 
         // Schedule local notifications for all prayer times
-        if (normalized?.prayers24) {
-          const notifSettings = getNotificationSettings();
-          void scheduleAllPrayerNotifications(
-            normalized.prayers24 as Parameters<typeof scheduleAllPrayerNotifications>[0],
-            { ...notifSettings, language: getCurrentLang() }
-          );
-        }
+        void schedulePrayerNotifications();
       } catch (err) {
         console.error("Failed to load prayer times:", err);
         setTodayError(
@@ -826,9 +821,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       navigate("/settings");
       return;
     }
-
+ 
     const newEnabled = !automationOn;
-
+ 
     try {
       // Update accountEnabled in settings
       const res = await apiFetch("/api/user/settings", {
@@ -836,21 +831,21 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountEnabled: newEnabled }),
       });
-
+ 
       if (!res.ok) {
         throw new Error(`Failed to update automation (${res.status})`);
       }
-
+ 
       const updatedPayload = await res.json();
       setUserSettings(normalizeSettings(updatedPayload));
-
+ 
       // Also update reminder status in backend
       await apiFetch("/api/alexa/skill/automation/enable", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: newEnabled }),
       }).catch(() => {}); // Non-fatal
-
+ 
     } catch (err) {
       console.error("Failed to toggle automation:", err);
       alert(
@@ -905,7 +900,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
           </div>
         )}
-
+ 
         {/* ── Status bar ── */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 min-h-[44px]">
