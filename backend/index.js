@@ -4233,7 +4233,7 @@ app.post(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const pool   = await getPool();
-    const userId = req.user.userId || req.user.user_id;
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const { token, enabled } = req.body || {};
 
     if (!token || typeof token !== "string") {
@@ -4264,7 +4264,7 @@ app.post(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const pool   = await getPool();
-    const userId = req.user.userId || req.user.user_id;
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const {
       pushEnabled,
       pushBeforePrayerMin,
@@ -4298,7 +4298,7 @@ app.get(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const pool   = await getPool();
-    const userId = req.user.userId || req.user.user_id;
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
     const mosqueId = String(req.query.mosqueId || "").trim();
 
     if (!mosqueId) return res.json({ times: {} });
@@ -4327,7 +4327,7 @@ app.post(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const pool      = await getPool();
-    const userId    = req.user.userId || req.user.user_id;
+    const userId    = await ensureUser(pool, req.amazonProfile.user_id);
     const { mosqueId, mosqueName, times } = req.body || {};
 
     if (!mosqueId || typeof times !== "object") {
@@ -4373,7 +4373,7 @@ app.get(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const pool   = await getPool();
-    const userId = req.user.userId || req.user.user_id;
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
 
     let amazonAccessToken = null;
     try {
@@ -4557,7 +4557,7 @@ app.post(
   requireAmazonAuth,
   asyncHandler(async (req, res) => {
     const pool   = await getPool();
-    const userId = req.user.userId || req.user.user_id;
+    const userId = await ensureUser(pool, req.amazonProfile.user_id);
 
     // Get user profile for timezone + prayer times
     const { profile, prayers } = await getUserProfileAndPrayersByUserId(pool, userId);
