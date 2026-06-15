@@ -1,1338 +1,307 @@
-mport { useEffect, useMemo, useState } from "react";
-import { schedulePrayerNotifications } from "../../lib/pushNotifications";
-import { t, prayerName, toHijri, getCurrentLang, setLanguage } from "../../lib/i18n";
-import { useNavigate } from "react-router-dom";
-import type { AppUser } from "../../types/AppUser";
-import {
-  apiFetch,
-  getStoredAmazonToken,
-  subscribeToAmazonAuthChanges,
-} from "../../lib/api";
+import { useEffect, useState } from "react";
 import { Logo } from "../shared/Logo";
 import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import {
-  Building2,
-  CheckCircle,
-  MoonStar,
-  MapPin,
-  Clock3,
-  BookOpen,
-  Clock,
-  Calendar as CalendarIcon,
-  Wifi,
-  WifiOff,
-  AlertCircle,
-  Volume2,
-} from "lucide-react";
+import { CheckCircle2, Copy, RefreshCw, AlertTriangle, ExternalLink } from "lucide-react";
+import { apiFetch } from "../../lib/api";
+//Workflow trigger, delete comment later
+type Template = {
+  id: string;
+  title: string;
+  routineName: string;
+  phrase: string;
+};
  
-const PRAYER_ORDER = [
-  "fajr",
-  "sunrise",
-  "dhuhr",
-  "asr",
-  "maghrib",
-  "isha",
-] as const;
+type LinkStatus = {
+  configured?: boolean;
+  appLinkClientConfigured?: boolean;
+  linked?: boolean;
+  lwaLinked?: boolean;
+  invocationName?: string | null;
+  accountLinkStatus?: string | null;
+};
  
-type PrayerCode = (typeof PRAYER_ORDER)[number];
- 
-const COUNTDOWN_PRAYERS: PrayerCode[] = [
-  "fajr",
-  "dhuhr",
-  "asr",
-  "maghrib",
-  "isha",
+const FALLBACK_TEMPLATES: Template[] = [
+  {
+    id: "fajr",
+    title: "Fajr Adhan",
+    routineName: "Adhan Now – Fajr Adhan",
+    phrase: "open adhan now and play fajr adhan",
+  },
+  {
+    id: "dhuhr",
+    title: "Dhuhr Adhan",
+    routineName: "Adhan Now – Dhuhr Adhan",
+    phrase: "open adhan now and play dhuhr adhan",
+  },
+  {
+    id: "asr",
+    title: "Asr Adhan",
+    routineName: "Adhan Now – Asr Adhan",
+    phrase: "open adhan now and play asr adhan",
+  },
+  {
+    id: "maghrib",
+    title: "Maghrib Adhan",
+    routineName: "Adhan Now – Maghrib Adhan",
+    phrase: "open adhan now and play maghrib adhan",
+  },
+  {
+    id: "isha",
+    title: "Isha Adhan",
+    routineName: "Adhan Now – Isha Adhan",
+    phrase: "open adhan now and play isha adhan",
+  },
 ];
  
-const PRAYER_LABELS: Record<PrayerCode, string> = {
-  fajr: "Fajr",
-  sunrise: "Sunrise",
-  dhuhr: "Dhuhr",
-  asr: "Asr",
-  maghrib: "Maghrib",
-  isha: "Isha",
-};
- 
-const PLATFORM_ICONS: Record<string, string> = {
-  alexa: "🔵",
-  google: "🔴",
-  apple: "⚫",
-  samsung: "🔵",
-  sonos: "⚫",
-};
- 
-const PLATFORM_NAMES: Record<string, string> = {
-  alexa: "Alexa",
-  google: "Google",
-  apple: "Apple",
-  samsung: "Samsung",
-  sonos: "Sonos",
-};
- 
-type JsonObject = Record<string, unknown>;
-type PrayerMap = Partial<Record<PrayerCode, string>>;
- 
-type PrayerConfig = {
-  prayerName: string;
-  enabled: boolean;
-  quietEnabled?: boolean;
-  quietFrom?: string;
-  quietTo?: string;
-  adhanReciterId?: string | null;
-};
- 
-type QuietHours = {
-  enabled: boolean;
-  from: string;
-  to: string;
-};
- 
-type SettingsShape = {
-  city?: string;
-  country?: string;
-  timezone?: string;
-  latitude?: number | null;
-  longitude?: number | null;
-  useMosqueLocation?: boolean;
-  accountEnabled?: boolean;
-  prayerConfigs?: PrayerConfig[];
-  mosqueId?: string | null;
-  mosqueName?: string | null;
-  mosqueAddress?: string | null;
-  mosqueCity?: string | null;
-  sect?: string;
-  madhhab?: string;
-  calculationMethod?: string;
-};
- 
-type TodayShape = {
-  location?: {
-    city?: string;
-    country?: string;
-    timezone?: string;
-    latitude?: number | null;
-    longitude?: number | null;
-    label?: string;
-  };
-  prayers12?: PrayerMap;
-  prayers24?: PrayerMap;
-  enabled?: Partial<Record<PrayerCode, boolean>>;
-  source?: string;
-  sourceDetail?: {
-    preferred?: string;
-    actual?: string;
-    useMosqueLocation?: boolean;
-    label?: string;
-    fallbackReason?: string | null;
-  };
-  method?: {
-    sect?: string;
-    calculationMethod?: string;
-    madhhab?: string;
-  };
-  date?: unknown;
-  meta?: unknown;
-};
- 
-type Device = {
-  id: string;
-  name: string;
-  platform?: string;
-};
- 
-type HadithShape = {
-  id: string;
-  sect: "SUNNI" | "SHIA";
-  title: string;
-  reference: string;
-  narrator?: string | null;
-  textEnglish: string;
-  textArabic?: string | null;
-  source?: string | null;
-  dateKey?: string;
-};
- 
-type DashboardProps = {
-  onboardingData: Record<string, unknown>;
-  user?: AppUser | null;
-};
- 
-function isObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
- 
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
- 
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
- 
-function safeReadJson<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
- 
-function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
-  if (!Array.isArray(value)) return [];
- 
-  return value
-    .filter((item): item is JsonObject => isObject(item))
-    .map((item) => ({
-      prayerName: asString(item.prayerName) ?? "",
-      enabled: item.enabled !== false,
-      quietEnabled:
-        typeof item.quietEnabled === "boolean" ? item.quietEnabled : false,
-      quietFrom: asString(item.quietFrom),
-      quietTo: asString(item.quietTo),
-      adhanReciterId:
-        typeof item.adhanReciterId === "string" ? item.adhanReciterId : null,
-    }))
-    .filter((item) => !!item.prayerName);
-}
- 
-function normalizeSettings(payload: unknown): SettingsShape | null {
-  if (!isObject(payload)) return null;
- 
-  const root = payload;
-  const src = isObject(root.settings) ? root.settings : root;
- 
-  return {
-    city: asString(src.city),
-    country: asString(src.country),
-    timezone: asString(src.timezone),
-    latitude: asNumber(src.latitude),
-    longitude: asNumber(src.longitude),
-    useMosqueLocation: src.useMosqueLocation === true,
-    accountEnabled: src.accountEnabled === true,
-    prayerConfigs: normalizePrayerConfigs(src.prayerConfigs),
-    mosqueId: typeof src.mosqueId === "string" ? src.mosqueId : null,
-    mosqueName: typeof src.mosqueName === "string" ? src.mosqueName : null,
-    mosqueAddress:
-      typeof src.mosqueAddress === "string" ? src.mosqueAddress : null,
-    mosqueCity: typeof src.mosqueCity === "string" ? src.mosqueCity : null,
-    sect: asString(src.sect) ?? "SUNNI",
-    madhhab: asString(src.madhhab) ?? "hanafi",
-    calculationMethod: asString(src.calculationMethod) ?? "isna",
-  };
-}
- 
-function normalizeToday(payload: unknown): TodayShape | null {
-  if (!isObject(payload)) return null;
- 
-  const src = payload;
-  const location = isObject(src.location) ? src.location : null;
-  const method = isObject(src.method) ? src.method : null;
- 
-  return {
-    location: location
-      ? {
-          city: asString(location.city),
-          country: asString(location.country),
-          timezone: asString(location.timezone),
-          latitude: asNumber(location.latitude),
-          longitude: asNumber(location.longitude),
-          label: asString(location.label),
-        }
-      : undefined,
-    prayers12: isObject(src.prayers12) ? (src.prayers12 as PrayerMap) : undefined,
-    prayers24: isObject(src.prayers24) ? (src.prayers24 as PrayerMap) : undefined,
-    enabled: isObject(src.enabled)
-      ? (src.enabled as Partial<Record<PrayerCode, boolean>>)
-      : undefined,
-    source: asString(src.source),
-    sourceDetail: isObject(src.sourceDetail)
-      ? {
-          preferred: asString(src.sourceDetail.preferred),
-          actual: asString(src.sourceDetail.actual),
-          useMosqueLocation:
-            typeof src.sourceDetail.useMosqueLocation === "boolean"
-              ? src.sourceDetail.useMosqueLocation
-              : undefined,
-          label: asString(src.sourceDetail.label),
-          fallbackReason:
-            typeof src.sourceDetail.fallbackReason === "string"
-              ? src.sourceDetail.fallbackReason
-              : null,
-        }
-      : undefined,
-    method: method
-      ? {
-          sect: asString(method.sect),
-          calculationMethod: asString(method.calculationMethod),
-          madhhab: asString(method.madhhab),
-        }
-      : undefined,
-    date: src.date,
-    meta: src.meta,
-  };
-}
- 
-function normalizeDevices(payload: unknown): Device[] {
-  const list = Array.isArray(payload)
-    ? payload
-    : isObject(payload) && Array.isArray(payload.devices)
-    ? payload.devices
-    : [];
- 
-  return list
-    .filter((item): item is JsonObject => isObject(item))
-    .map((item) => ({
-      id: typeof item.id === "string" ? item.id : "",
-      name: typeof item.name === "string" ? item.name : "",
-      platform: typeof item.platform === "string" ? item.platform : undefined,
-    }))
-    .filter((item) => item.id && item.name);
-}
- 
-function normalizeHadith(payload: unknown): HadithShape | null {
-  if (!isObject(payload)) return null;
- 
-  const sect =
-    String(payload.sect || "").trim().toUpperCase() === "SHIA"
-      ? "SHIA"
-      : "SUNNI";
- 
-  const textEnglish =
-    asString(payload.textEnglish) || asString(payload.text) || undefined;
- 
-  if (!textEnglish) return null;
- 
-  return {
-    id: asString(payload.id) || `${sect.toLowerCase()}-hadith`,
-    sect,
-    title: asString(payload.title) || "Hadith of the Day",
-    reference: asString(payload.reference) || "Reference unavailable",
-    narrator: asString(payload.narrator) || null,
-    textEnglish,
-    textArabic: asString(payload.textArabic) || null,
-    source: asString(payload.source) || null,
-    dateKey: asString(payload.dateKey),
-  };
-}
- 
-function parsePrayerTimeToSeconds(timeStr: string): number | null {
-  const cleaned = String(timeStr || "").replace(/\s*\(.*?\)\s*$/, "").trim();
- 
-  const m24 = cleaned.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (m24) {
-    const hours = Number(m24[1]);
-    const minutes = Number(m24[2]);
-    const seconds = m24[3] ? Number(m24[3]) : 0;
-    if (
-      Number.isFinite(hours) &&
-      Number.isFinite(minutes) &&
-      Number.isFinite(seconds) &&
-      hours >= 0 &&
-      hours <= 23 &&
-      minutes >= 0 &&
-      minutes <= 59 &&
-      seconds >= 0 &&
-      seconds <= 59
-    ) {
-      return hours * 3600 + minutes * 60 + seconds;
-    }
-  }
- 
-  const m12 = cleaned.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)$/i);
-  if (m12) {
-    let hours = Number(m12[1]);
-    const minutes = Number(m12[2]);
-    const seconds = m12[3] ? Number(m12[3]) : 0;
-    const meridian = m12[4].toUpperCase();
- 
-    if (hours >= 1 && hours <= 12) {
-      if (meridian === "AM") {
-        if (hours === 12) hours = 0;
-      } else if (hours !== 12) {
-        hours += 12;
-      }
-      return hours * 3600 + minutes * 60 + seconds;
-    }
-  }
- 
-  return null;
-}
- 
-function getNowInTimeZone(timeZone: string) {
-  try {
-    const formatter = new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      hour12: false,
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
- 
-    const parts = formatter.formatToParts(new Date());
-    const getPart = (type: string) =>
-      Number(parts.find((p) => p.type === type)?.value ?? NaN);
- 
-    const hour = getPart("hour");
-    const minute = getPart("minute");
-    const second = getPart("second");
- 
-    if ([hour, minute, second].some(Number.isNaN)) return null;
-    return { hour, minute, second };
-  } catch {
-    return null;
-  }
-}
- 
-function formatDiff(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
-    2,
-    "0"
-  )}:${String(seconds).padStart(2, "0")}`;
-}
- 
-function getConnectedPlatforms(
-  onboardingData: Record<string, unknown>,
-  hasAmazonToken: boolean
-): string[] {
-  const fromOnboarding = Array.isArray(onboardingData.connectedPlatforms)
-    ? onboardingData.connectedPlatforms.filter(
-        (x): x is string => typeof x === "string"
-      )
-    : [];
- 
-  const fromLocal = safeReadJson<string[]>("adhan_connected_platforms", []);
-  const merged = new Set<string>([...fromOnboarding, ...fromLocal]);
- 
-  return Array.from(merged).filter(
-    (platform) => platform !== "alexa" || hasAmazonToken
-  );
-}
- 
-function titleCase(value?: string | null) {
-  return (
-    String(value || "")
-      .replace(/([A-Z])/g, " $1")
-      .replace(/[_-]+/g, " ")
-      .trim()
-      .toLowerCase()
-      .replace(/\b\w/g, (c) => c.toUpperCase()) || "—"
-  );
-}
- 
-function describeTimingSource(
-  todayData: TodayShape | null,
-  userSettings: SettingsShape | null
-) {
-  const label = todayData?.sourceDetail?.label;
-  if (label) return label;
-  if (todayData?.source === "mosque") return "Mosque coordinates";
-  if (todayData?.source === "personal") return "Personal coordinates";
-  if (todayData?.source === "city") return "City fallback";
-  if (userSettings?.useMosqueLocation) return "Mosque preferred";
-  return "Personal location";
-}
- 
-export default function Dashboard({ onboardingData, user }: DashboardProps) {
-  const navigate = useNavigate();
- 
-  const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
-    !!getStoredAmazonToken()
-  );
-  const [hadithOfDay, setHadithOfDay] = useState<HadithShape | null>(null);
-  const [loadingHadith, setLoadingHadith] = useState(true);
-  const [hadithError, setHadithError] = useState<string | null>(null);
- 
-  const [todayData, setTodayData] = useState<TodayShape | null>(null);
-  const [loadingToday, setLoadingToday] = useState(true);
-  const [todayError, setTodayError] = useState<string | null>(null);
- 
-  const [userSettings, setUserSettings] = useState<SettingsShape | null>(null);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
- 
-  const [deviceCount, setDeviceCount] = useState(0);
-  const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
-  const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
-  const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [currentTime, setCurrentTime] = useState(new Date());
- 
-  useEffect(() => {
-    return subscribeToAmazonAuthChanges(() => {
-      setHasAmazonToken(!!getStoredAmazonToken());
-    });
-  }, []);
- 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
- 
-    return () => window.clearInterval(timer);
-  }, []);
- 
-  const connectedPlatforms = useMemo(
-    () => getConnectedPlatforms(onboardingData, hasAmazonToken),
-    [onboardingData, hasAmazonToken]
-  );
- 
-  const prayersForDisplay: PrayerMap | null =
-    todayData?.prayers12 || todayData?.prayers24 || null;
-  const prayersForCountdown: PrayerMap | null =
-    todayData?.prayers24 || todayData?.prayers12 || null;
- 
-  const activeTimeZone =
-    todayData?.location?.timezone || userSettings?.timezone || "Etc/UTC";
- 
-  useEffect(() => {
-    async function loadSettingsAndDevices() {
-      if (!hasAmazonToken) {
-        setUserSettings(null);
-        setSettingsError("Please connect Amazon to load your settings.");
-        setDeviceCount(0);
-        return;
-      }
- 
-      try {
-        setSettingsError(null);
-        const [settingsRes, devicesRes] = await Promise.all([
-          apiFetch("/api/user/settings"),
-          apiFetch("/api/alexa/devices"),
-        ]);
- 
-        if (!settingsRes.ok) {
-          if (settingsRes.status === 401) {
-            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
-          }
-          throw new Error(`Settings request failed (${settingsRes.status})`);
-        }
- 
-        const settingsPayload = await settingsRes.json();
-        setUserSettings(normalizeSettings(settingsPayload));
- 
-        if (devicesRes.ok) {
-          const devicesPayload = await devicesRes.json();
-          setDeviceCount(normalizeDevices(devicesPayload).length);
-        } else {
-          setDeviceCount(0);
-        }
-      } catch (err) {
-        console.error("Failed to load settings/devices:", err);
-        setSettingsError(
-          err instanceof Error
-            ? err.message
-            : "Could not load your automation settings."
-        );
-        setUserSettings(null);
-        setDeviceCount(0);
-      }
-    }
- 
-    void loadSettingsAndDevices();
-  }, [hasAmazonToken]);
- 
-  useEffect(() => {
-    async function loadToday() {
-      if (!hasAmazonToken) {
-        setTodayData(null);
-        setTodayError("Please connect Amazon to load prayer times.");
-        setLoadingToday(false);
-        return;
-      }
- 
-      try {
-        setLoadingToday(true);
-        setTodayError(null);
- 
-        const res = await apiFetch("/api/prayer-times/today");
-        if (!res.ok) {
-          if (res.status === 401) {
-            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
-          }
-          throw new Error(`Prayer times request failed (${res.status})`);
-        }
- 
-        const data = await res.json();
-        const normalized = normalizeToday(data);
-        setTodayData(normalized);
- 
-        // Schedule local notifications for all prayer times
-        void schedulePrayerNotifications();
-      } catch (err) {
-        console.error("Failed to load prayer times:", err);
-        setTodayError(
-          err instanceof Error ? err.message : "Could not load prayer times."
-        );
-        setTodayData(null);
-      } finally {
-        setLoadingToday(false);
-      }
-    }
- 
-    void loadToday();
-  }, [hasAmazonToken]);
- 
-  useEffect(() => {
-    if (!prayersForCountdown) {
-      setTimeToNextPrayer(null);
-      setNextPrayerCode(null);
-      setNextPrayerTimeDisplay(null);
-      setProgress(0);
-      return;
-    }
- 
-    const updateCountdown = () => {
-      const nowParts = getNowInTimeZone(activeTimeZone);
-      if (!nowParts) {
-        setTimeToNextPrayer(null);
-        setNextPrayerCode(null);
-        setNextPrayerTimeDisplay(null);
-        setProgress(0);
-        return;
-      }
- 
-      const nowSeconds =
-        nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
- 
-      const entries = COUNTDOWN_PRAYERS.map((code) => {
-        const raw = prayersForCountdown[code];
-        const seconds = raw ? parsePrayerTimeToSeconds(raw) : null;
-        return seconds != null ? { code, seconds } : null;
-      }).filter(
-        (item): item is { code: PrayerCode; seconds: number } => item !== null
-      );
- 
-      if (entries.length === 0) {
-        setTimeToNextPrayer(null);
-        setNextPrayerCode(null);
-        setNextPrayerTimeDisplay(null);
-        setProgress(0);
-        return;
-      }
- 
-      let nextIdx = entries.findIndex((entry) => entry.seconds > nowSeconds);
-      let nextEntry: { code: PrayerCode; seconds: number };
-      let prevEntry: { code: PrayerCode; seconds: number } | null;
- 
-      if (nextIdx === -1) {
-        nextEntry = { ...entries[0], seconds: entries[0].seconds + 24 * 3600 };
-        prevEntry = entries[entries.length - 1];
-      } else {
-        nextEntry = entries[nextIdx];
-        prevEntry = nextIdx > 0 ? entries[nextIdx - 1] : null;
-        if (!prevEntry) {
-          prevEntry = {
-            ...entries[entries.length - 1],
-            seconds: entries[entries.length - 1].seconds - 24 * 3600,
-          };
-        }
-      }
- 
-      const adjustedNowSeconds =
-        prevEntry && prevEntry.seconds > nowSeconds
-          ? nowSeconds + 24 * 3600
-          : nowSeconds;
- 
-      setNextPrayerCode(nextEntry.code);
-      setNextPrayerTimeDisplay(
-        prayersForDisplay?.[nextEntry.code] ||
-          prayersForCountdown[nextEntry.code] ||
-          null
-      );
- 
-      const diffMs = Math.max(
-        0,
-        (nextEntry.seconds - adjustedNowSeconds) * 1000
-      );
-      setTimeToNextPrayer(formatDiff(diffMs));
- 
-      if (!prevEntry) {
-        setProgress(0);
-        return;
-      }
- 
-      const total = nextEntry.seconds - prevEntry.seconds;
-      const elapsed = adjustedNowSeconds - prevEntry.seconds;
-      const pct =
-        total > 0
-          ? Math.max(0, Math.min(100, Math.round((elapsed / total) * 100)))
-          : 0;
- 
-      setProgress(pct);
-    };
- 
-    updateCountdown();
-    const interval = window.setInterval(updateCountdown, 1000);
-    return () => window.clearInterval(interval);
-  }, [prayersForCountdown, prayersForDisplay, activeTimeZone]);
- 
-  const quietHours = useMemo<QuietHours | null>(() => {
-    const configs = Array.isArray(userSettings?.prayerConfigs)
-      ? userSettings.prayerConfigs
-      : [];
- 
-    const firstQuiet = configs.find((p) => p.quietEnabled);
-    if (!firstQuiet) return null;
- 
-    return {
-      enabled: true,
-      from: firstQuiet.quietFrom || "22:00",
-      to: firstQuiet.quietTo || "07:00",
-    };
-  }, [userSettings?.prayerConfigs]);
- 
-  const automationOn = !!userSettings?.accountEnabled;
-  const lang = getCurrentLang();
-  const hijriDate = useMemo(() => toHijri(new Date(), lang), [lang]);
- 
-  const mosque = useMemo(() => {
-    if (!userSettings?.mosqueId && !userSettings?.mosqueName) return null;
-    return {
-      name: userSettings.mosqueName || "Selected mosque",
-      address: userSettings.mosqueAddress || null,
-      city: userSettings.mosqueCity || null,
-    };
-  }, [userSettings]);
- 
-  const locationLabel = todayData?.location?.label
-    ? todayData.location.label
-    : todayData?.location?.city
-    ? `${todayData.location.city}${
-        todayData.location.country ? `, ${todayData.location.country}` : ""
-      }`
-    : userSettings?.city
-    ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
-    : "";
- 
-  const timingSourceLabel = describeTimingSource(todayData, userSettings);
-  const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
- 
-  const locationCoords =
-    todayData?.location?.latitude != null &&
-    todayData?.location?.longitude != null
-      ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
-      : userSettings?.latitude != null && userSettings?.longitude != null
-      ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
-      : null;
- 
-  const effectiveSect = String(
-    todayData?.method?.sect || userSettings?.sect || "SUNNI"
-  ).toUpperCase();
- 
-  const sectLabel = titleCase(effectiveSect);
-  const madhhabLabel =
-    effectiveSect === "SHIA"
-      ? "Shia timing mode"
-      : titleCase(
-          todayData?.method?.madhhab || userSettings?.madhhab || "hanafi"
-        );
- 
-  const calcLabel = titleCase(
-    todayData?.method?.calculationMethod ||
-      userSettings?.calculationMethod ||
-      (effectiveSect === "SHIA" ? "jafari" : "isna")
-  );
- 
-  const hadithSect: "SUNNI" | "SHIA" =
-    String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase() ===
-    "SHIA"
-      ? "SHIA"
-      : "SUNNI";
- 
-  useEffect(() => {
-    let cancelled = false;
- 
-    async function loadHadith() {
-      if (!hasAmazonToken) {
-        setHadithOfDay(null);
-        setHadithError("Please connect Amazon to load the daily hadith.");
-        setLoadingHadith(false);
-        return;
-      }
- 
-      try {
-        setLoadingHadith(true);
-        setHadithError(null);
- 
-        const res = await apiFetch(
-          `/api/hadith-of-day?sect=${encodeURIComponent(hadithSect)}`
-        );
- 
-        if (!res.ok) {
-          if (res.status === 401) {
-            throw new Error("Your Amazon session expired. Please reconnect Amazon.");
-          }
-          throw new Error(`Hadith request failed (${res.status})`);
-        }
- 
-        const payload = normalizeHadith(await res.json());
-        if (!payload) {
-          throw new Error("Invalid hadith payload.");
-        }
- 
-        if (!cancelled) {
-          setHadithOfDay(payload);
-        }
-      } catch (err) {
-        console.error("Failed to load hadith of the day:", err);
-        if (!cancelled) {
-          setHadithOfDay(null);
-          setHadithError(
-            err instanceof Error
-              ? err.message
-              : "Could not load hadith of the day."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingHadith(false);
-        }
-      }
-    }
- 
-    void loadHadith();
- 
-    return () => {
-      cancelled = true;
-    };
-  }, [hasAmazonToken, hadithSect]);
- 
-  const gregorianDate = currentTime.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
- 
-  const formattedTime = currentTime.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
- 
-  async function handleToggleAutomation() {
-    if (!hasAmazonToken) {
-      navigate("/settings");
-      return;
-    }
- 
-    const newEnabled = !automationOn;
- 
+export default function AlexaSetup() {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<Template[]>(FALLBACK_TEMPLATES);
+  const [status, setStatus] = useState<LinkStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+ 
+  async function copy(text: string, id: string) {
     try {
-      // Update accountEnabled in settings
-      const res = await apiFetch("/api/user/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountEnabled: newEnabled }),
-      });
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const el = document.createElement("textarea");
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+    }
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1500);
+  }
  
-      if (!res.ok) {
-        throw new Error(`Failed to update automation (${res.status})`);
+  async function load() {
+    setLoading(true);
+    try {
+      const [templatesRes, statusRes] = await Promise.all([
+        apiFetch("/api/alexa/routines/templates"),
+        apiFetch("/api/alexa/account-linking/status"),
+      ]);
+ 
+      if (templatesRes.ok) {
+        const payload = (await templatesRes.json()) as { templates?: Template[] };
+        if (Array.isArray(payload.templates) && payload.templates.length > 0) {
+          setTemplates(payload.templates);
+        }
       }
  
-      const updatedPayload = await res.json();
-      setUserSettings(normalizeSettings(updatedPayload));
- 
-      // Also update reminder status in backend
-      await apiFetch("/api/alexa/skill/automation/enable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: newEnabled }),
-      }).catch(() => {}); // Non-fatal
- 
-    } catch (err) {
-      console.error("Failed to toggle automation:", err);
-      alert(
-        err instanceof Error
-          ? err.message
-          : "Could not update automation setting."
-      );
+      if (statusRes.ok) {
+        setStatus((await statusRes.json()) as LinkStatus);
+      }
+    } catch {
+      // silently fail — page still works with fallbacks
+    } finally {
+      setLoading(false);
     }
   }
  
+  useEffect(() => {
+    void load();
+  }, []);
+ 
+  const isAmazonConnected = !!status?.lwaLinked;
+  const isSkillLinked = status?.accountLinkStatus === "LINKED";
+  const invocationName = status?.invocationName || "adhan now";
+ 
   return (
-    /* overscroll-none prevents pull-to-refresh interference on mobile */
-    <div className="min-h-screen bg-slate-950 overscroll-none">
-      {/* Sticky header — safe-area-inset-top handles iOS notch */}
-      <div
-        className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50"
-        style={{ paddingTop: "env(safe-area-inset-top)" }}
-      >
+    <div
+      className="min-h-screen bg-slate-950 overscroll-none"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      {/* Sticky header */}
+      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
         <div className="max-w-7xl mx-auto px-4 py-3 md:py-4 md:px-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <Logo />
-            <Navigation />
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <Logo />
+              <div className="text-slate-100 font-semibold text-base md:text-lg">
+                Alexa Setup
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                className="inline-flex items-center gap-2 min-h-[44px] touch-manipulation active:opacity-80"
+                onClick={() => void load()}
+                disabled={loading}
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+              <Navigation />
+            </div>
           </div>
         </div>
       </div>
  
-      {/*
-        Main scroll container.
-        - overflow-y-auto + WebkitOverflowScrolling enables native momentum on iOS
-        - pb-safe ensures content isn't hidden behind home indicator
-      */}
       <div
-        className="max-w-7xl mx-auto px-4 py-5 space-y-5 md:px-6 md:py-6 md:space-y-6"
-        style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom))" }}
+        className="max-w-3xl mx-auto px-4 py-6 md:px-6 md:py-8 space-y-6"
+        style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
       >
-        {/* ── Activation banner — shown when automation needs one voice command ── */}
-        {onboardingData.activationPhrase && !automationOn && (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
-            <div className="flex items-start gap-3">
-              <Volume2 className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <div className="text-amber-200 font-semibold text-sm mb-1">
-                  One step to activate automatic Adhan
-                </div>
-                <p className="text-amber-300/80 text-xs leading-relaxed mb-2">
-                  Say this on any Echo device to schedule your daily Adhan reminders:
-                </p>
-                <div className="rounded-xl bg-slate-900/60 border border-amber-500/20 px-4 py-2.5 font-mono text-sm text-white select-all">
-                  "Alexa, open {String(onboardingData.activationPhrase)}"
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
- 
-        {/* ── Status bar ── */}
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2 min-h-[44px]">
-            <MapPin className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-            <span className="text-slate-300 text-sm">
-              {locationLabel || "Location not available"}
-            </span>
-          </div>
- 
-          <div className="flex items-center gap-2 flex-wrap">
-            <Badge
-              variant="outline"
-              className={`gap-1.5 min-h-[36px] px-3 text-xs ${
-                automationOn
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : "bg-slate-800 text-slate-400 border-slate-700"
-              }`}
-            >
-              {automationOn ? (
-                <Wifi className="w-3 h-3" />
+        {/* Connection status */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
+          <h2 className="text-slate-100 font-semibold text-base mb-4">Connection status</h2>
+          <div className="flex flex-wrap gap-3">
+            <div className={`flex items-center gap-2 rounded-xl px-4 py-2.5 border text-sm font-medium ${
+              isAmazonConnected
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-slate-800/60 border-slate-700 text-slate-400"
+            }`}>
+              {isAmazonConnected ? (
+                <CheckCircle2 className="w-4 h-4" />
               ) : (
-                <WifiOff className="w-3 h-3" />
+                <AlertTriangle className="w-4 h-4" />
               )}
-              {automationOn ? t(lang, "dashboard.automationActive") : t(lang, "dashboard.automationPaused")}
-            </Badge>
- 
-            <Badge
-              variant="outline"
-              className="border-slate-700 text-slate-400 min-h-[36px] px-3 text-xs"
-            >
-              <CheckCircle className="w-3 h-3 mr-1.5" />
-              {deviceCount} Device{deviceCount !== 1 ? "s" : ""}
-            </Badge>
-          </div>
-        </div>
- 
-        {/* ── Hero — Next Prayer card ── */}
-        <div className="relative overflow-hidden rounded-2xl md:rounded-3xl bg-gradient-to-br from-emerald-500/20 via-teal-500/10 to-slate-900 border border-emerald-500/20 p-5 md:p-10">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.1),transparent_50%)]" />
- 
-          <div className="relative z-10">
-            {/* Header row */}
-            <div className="flex items-start justify-between gap-4 flex-wrap mb-5 md:mb-8">
-              <div>
-                <p className="text-slate-400 text-sm mb-1">Assalamu Alaikum</p>
-                <h1 className="text-white text-2xl md:text-4xl mb-2 leading-tight">
-                  Next Prayer
-                </h1>
-                <p className="text-slate-400 text-sm">
-                  {timingSourceLabel}
-                  {timingFallbackReason ? ` · ${timingFallbackReason}` : ""}
-                </p>
-              </div>
- 
-              <div className="text-right">
-                <p className="text-slate-400 text-xs md:text-sm mb-1.5">{gregorianDate}</p>
-                {hijriDate && (
-                  <p className="text-slate-500 text-xs mb-1.5">{hijriDate}</p>
-                )}
-                <div className="flex justify-end gap-1.5 flex-wrap">
-                  <Badge className="bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-xs">
-                    {sectLabel}
-                  </Badge>
-                  <Badge className="bg-slate-800 text-slate-200 border border-slate-700 text-xs">
-                    {madhhabLabel}
-                  </Badge>
-                  <Badge className="bg-slate-800 text-slate-200 border border-slate-700 text-xs">
-                    {calcLabel}
-                  </Badge>
-                </div>
-              </div>
+              Amazon {isAmazonConnected ? "connected" : "not connected"}
             </div>
  
-            {/* Countdown / error */}
-            <div className="grid md:grid-cols-2 gap-5 md:gap-8 items-center">
-              <div>
-                {loadingToday ? (
-                  <div className="space-y-3">
-                    <p className="text-slate-400 text-sm">Loading next prayer…</p>
-                    <div className="text-4xl md:text-5xl text-slate-400">--:--:--</div>
-                  </div>
-                ) : todayError ? (
-                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-                    <div className="flex items-start gap-3">
-                      <AlertCircle className="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-amber-300 text-sm font-medium">
-                          Could not load prayer times
-                        </p>
-                        <p className="text-amber-200/80 text-sm mt-1">
-                          {todayError}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="text-slate-400 text-sm mb-2">Time Remaining</p>
-                      <div className="text-4xl md:text-6xl text-white tracking-tight mb-4 tabular-nums font-light">
-                        {timeToNextPrayer || "--:--:--"}
-                      </div>
-                    </div>
- 
-                    <div className="flex items-baseline gap-3 flex-wrap">
-                      <span className="text-xl md:text-3xl text-emerald-400">
-                        {nextPrayerCode ? PRAYER_LABELS[nextPrayerCode] : "—"}
-                      </span>
-                      <span className="text-lg md:text-xl text-slate-300">
-                        {nextPrayerTimeDisplay || "--:--"}
-                      </span>
-                    </div>
- 
-                    <div className="bg-slate-900/50 rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-500"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
- 
-            {/* Current time + toggle automation */}
-            <div className="mt-5 md:mt-8 pt-5 border-t border-slate-700/50">
-              <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div className="flex items-center gap-2 text-slate-400">
-                  <Clock className="w-4 h-4 flex-shrink-0" />
-                  <span className="text-sm">
-                    Current Time:{" "}
-                    <span className="text-slate-300 tabular-nums">
-                      {formattedTime}
-                    </span>
-                    {activeTimeZone ? ` · ${activeTimeZone}` : ""}
-                  </span>
-                </div>
-                {/* touch-manipulation removes the 300ms tap delay on mobile */}
-                <Button
-                  size="lg"
-                  variant="outline"
-                  className="border-slate-700 text-slate-300 hover:bg-slate-800/50 min-h-[44px] touch-manipulation active:scale-95 transition-transform duration-100"
-                  onClick={handleToggleAutomation}
-                >
-                  {automationOn ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                      {t(lang, "dashboard.pauseAutomation")}
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
-                      {t(lang, "dashboard.resumeAutomation")}
-                    </span>
-                  )}
-                </Button>
-              </div>
-              {locationCoords && (
-                <div className="mt-2 text-xs text-slate-500">
-                  Coordinates: {locationCoords}
-                </div>
+            <div className={`flex items-center gap-2 rounded-xl px-4 py-2.5 border text-sm font-medium ${
+              isSkillLinked
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                : "bg-slate-800/60 border-slate-700 text-slate-400"
+            }`}>
+              {isSkillLinked ? (
+                <CheckCircle2 className="w-4 h-4" />
+              ) : (
+                <AlertTriangle className="w-4 h-4" />
               )}
+              Alexa skill {isSkillLinked ? "linked" : "not linked"}
             </div>
           </div>
-        </div>
  
-        {/* ── Today's Prayer Times grid ── */}
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-white text-lg md:text-xl">Today&apos;s Prayer Times</h2>
-            {/* min-h-[44px] ensures 44px tap target per Apple HIG */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 min-h-[44px] touch-manipulation"
-              onClick={() => navigate("/calendar")}
-            >
-              <CalendarIcon className="w-4 h-4 mr-2" />
-              Calendar
-            </Button>
-          </div>
- 
-          {loadingToday ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
-              Loading prayer times…
-            </div>
-          ) : todayError ? (
-            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 text-amber-200 text-sm">
-              {todayError}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 md:gap-3">
-              {PRAYER_ORDER.map((code) => {
-                const isNext = nextPrayerCode === code;
-                const isPassed =
-                  !loadingToday &&
-                  !isNext &&
-                  !!prayersForDisplay?.[code] &&
-                  !!nextPrayerCode &&
-                  COUNTDOWN_PRAYERS.includes(code as PrayerCode) &&
-                  COUNTDOWN_PRAYERS.indexOf(code as PrayerCode) <
-                    COUNTDOWN_PRAYERS.indexOf(nextPrayerCode as PrayerCode);
- 
-                return (
-                  <div
-                    key={code}
-                    className={`relative p-4 rounded-2xl transition-all select-none ${
-                      isNext
-                        ? "bg-emerald-500/10 border-2 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
-                        : isPassed
-                        ? "bg-slate-900/50 border border-slate-800/50 opacity-60"
-                        : "bg-slate-900 border border-slate-800 hover:border-slate-700"
-                    }`}
-                  >
-                    {isNext && (
-                      <Badge className="absolute -top-2 -right-2 bg-emerald-600 text-white border-0 text-xs px-2 py-0.5">
-                        Next
-                      </Badge>
-                    )}
- 
-                    <div className="text-center">
-                      <h3
-                        className={`mb-1 text-sm font-medium ${
-                          isNext ? "text-emerald-400" : "text-white"
-                        }`}
-                      >
-                        {PRAYER_LABELS[code]}
-                      </h3>
-                      <p
-                        className={`text-sm md:text-base tabular-nums ${
-                          isNext ? "text-emerald-300" : "text-slate-400"
-                        }`}
-                      >
-                        {prayersForDisplay?.[code] || "--:--"}
-                      </p>
-                    </div>
- 
-                    {isPassed && (
-                      <div className="absolute top-2 right-2">
-                        <CheckCircle className="w-3.5 h-3.5 text-slate-600" />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+          {!isAmazonConnected && (
+            <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              Connect your Amazon account in Step 2 of onboarding first.{" "}
+              <a href="/onboarding/step2" className="underline text-amber-300">Go to Step 2 →</a>
             </div>
           )}
         </div>
  
-        {/* ── Main content grid ── */}
-        <div className="grid lg:grid-cols-2 gap-5 md:gap-6">
-          {/* Left column */}
-          <div className="space-y-5 md:space-y-6">
-            {/* Hadith of the Day */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <BookOpen className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-                <h2 className="text-white text-lg md:text-xl">Hadith of the Day</h2>
-              </div>
- 
-              {loadingHadith ? (
-                <p className="text-slate-400 text-sm">Loading hadith of the day…</p>
-              ) : hadithError ? (
-                <p className="text-amber-300 text-sm">{hadithError}</p>
-              ) : hadithOfDay ? (
-                <div className="space-y-3">
-                  <p className="text-slate-300 leading-7 italic text-sm md:text-base">
-                    &ldquo;{hadithOfDay.textEnglish}&rdquo;
-                  </p>
-                  <p className="text-slate-500 text-xs md:text-sm">
-                    {hadithOfDay.reference}
-                    {hadithOfDay.narrator ? ` · ${hadithOfDay.narrator}` : ""}
-                  </p>
-                </div>
-              ) : (
-                <p className="text-slate-400 text-sm">No daily reminder available.</p>
-              )}
+        {/* Step 1 */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+            <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold flex-shrink-0 ${
+              isAmazonConnected && isSkillLinked
+                ? "bg-emerald-500 text-white"
+                : "bg-slate-700 text-slate-300"
+            }`}>
+              {isAmazonConnected && isSkillLinked ? <CheckCircle2 className="w-4 h-4" /> : "1"}
             </div>
- 
-            {/* Location & Settings Info */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6 space-y-4">
-              <div className="flex items-start gap-3 min-h-[44px]">
-                <MapPin className="w-4 h-4 text-emerald-400 mt-1 flex-shrink-0" />
-                <div className="flex-1">
-                  <div className="text-white text-sm font-medium">Location</div>
-                  <div className="text-slate-400 text-sm">
-                    {locationLabel || "Location not available"}
-                  </div>
-                </div>
-              </div>
- 
-              <div className="flex items-start gap-3 min-h-[44px]">
-                <MoonStar className="w-4 h-4 text-cyan-400 mt-1 flex-shrink-0" />
-                <div>
-                  <div className="text-white text-sm font-medium">
-                    Prayer Method
-                  </div>
-                  <div className="text-slate-400 text-sm">
-                    {calcLabel} · {madhhabLabel}
-                  </div>
-                </div>
-              </div>
- 
-              <div className="flex items-start gap-3 min-h-[44px]">
-                <Clock3 className="w-4 h-4 text-amber-400 mt-1 flex-shrink-0" />
-                <div>
-                  <div className="text-white text-sm font-medium">Timezone</div>
-                  <div className="text-slate-400 text-sm">{activeTimeZone}</div>
-                </div>
-              </div>
- 
-              {quietHours && (
-                <div className="flex items-start gap-3 min-h-[44px]">
-                  <Volume2 className="w-4 h-4 text-purple-400 mt-1 flex-shrink-0" />
-                  <div>
-                    <div className="text-white text-sm font-medium">
-                      Quiet Hours
-                    </div>
-                    <div className="text-slate-400 text-sm">
-                      {quietHours.from} – {quietHours.to}
-                    </div>
-                  </div>
-                </div>
-              )}
- 
-              {settingsError && (
-                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-3 text-amber-200 text-sm">
-                  {settingsError}
-                </div>
-              )}
+            <div>
+              <div className="text-slate-100 font-semibold">Connect Amazon &amp; enable the skill</div>
+              <div className="text-slate-400 text-sm">Sign in with Amazon and link the AdhanNow Alexa skill</div>
             </div>
           </div>
+          <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed">
+            If you haven't done this yet, go back to onboarding Step 2. Sign in with Amazon,
+            then tap <strong className="text-white">Enable Alexa Skill</strong> and follow the prompts to link your account.
+            Come back here once both badges above show green.
+          </div>
+        </div>
  
-          {/* Right column */}
-          <div className="space-y-5 md:space-y-6">
-            {/* Mosque */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6">
-              <h2 className="text-white mb-4 text-lg md:text-xl">Mosque</h2>
- 
-              {mosque ? (
-                <div className="space-y-2 mb-4">
-                  <div className="flex items-center gap-3 p-4 bg-slate-800/50 rounded-xl">
-                    <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/40 flex-shrink-0">
-                      <Building2 className="w-5 h-5 text-emerald-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-white text-sm mb-0.5">{mosque.name}</div>
-                      <div className="text-slate-400 text-xs truncate">
-                        {mosque.address || mosque.city || "Selected mosque"}
-                      </div>
-                    </div>
-                  </div>
- 
-                  <Badge
-                    variant="outline"
-                    className="border-emerald-500/30 text-emerald-400 w-full justify-center py-2 text-xs"
-                  >
-                    {userSettings?.useMosqueLocation
-                      ? "Following mosque timings"
-                      : "Mosque saved, personal timings active"}
-                  </Badge>
-                </div>
-              ) : (
-                <p className="text-slate-400 text-sm mb-4 p-4 bg-slate-800/50 rounded-xl text-center">
-                  No mosque selected. Using calculation-based timings.
-                </p>
-              )}
- 
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full border-slate-700 text-slate-300 hover:bg-slate-800 min-h-[44px] touch-manipulation active:bg-slate-800"
-                onClick={() => navigate("/mosque")}
-              >
-                {mosque ? "Change Mosque" : "Choose a Mosque"}
-              </Button>
+        {/* Step 2 */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
+              2
             </div>
+            <div>
+              <div className="text-slate-100 font-semibold">Say the wake phrase on each Echo device</div>
+              <div className="text-slate-400 text-sm">This registers your device so AdhanNow can play on it</div>
+            </div>
+          </div>
+          <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed">
+            On each Echo device you want Adhan on, say:
+            <div className="mt-3 rounded-xl bg-slate-950/70 border border-slate-700 px-4 py-3 font-mono text-slate-100 text-sm select-all">
+              {`"Alexa, open ${invocationName}"`}
+            </div>
+            <p className="mt-3 text-slate-400">
+              Do this on every Echo device in your home. AdhanNow will detect and register each one automatically.
+              You can then select which devices play the Adhan in <strong className="text-white">Settings → Alexa Devices</strong>.
+            </p>
+          </div>
+        </div>
  
-            {/* Connected Platforms */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:p-6">
-              <h2 className="text-white mb-4 text-lg md:text-xl">Connected Platforms</h2>
- 
-              {connectedPlatforms.length > 0 ? (
-                <div className="space-y-2 mb-4">
-                  {connectedPlatforms.map((platform: string) => (
-                    <div
-                      key={platform}
-                      className="flex items-center justify-between p-3 min-h-[52px] bg-slate-800/50 rounded-xl hover:bg-slate-800 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="text-xl leading-none select-none">
-                          {PLATFORM_ICONS[platform] || "•"}
-                        </span>
-                        <span className="text-white text-sm">
-                          {PLATFORM_NAMES[platform] || titleCase(platform)}
-                        </span>
-                      </div>
-                      <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 border text-xs">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Active
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-slate-400 text-sm mb-4">
-                  No platforms connected yet.
-                </p>
-              )}
- 
-              <p className="text-slate-400 text-sm mb-4">
-                {deviceCount} device{deviceCount === 1 ? "" : "s"} available
-              </p>
- 
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full border-slate-700 text-slate-300 hover:bg-slate-800 min-h-[44px] touch-manipulation active:bg-slate-800"
-                onClick={() => navigate("/settings")}
-              >
-                Manage Platforms
-              </Button>
+        {/* Step 3 */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+          <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
+              3
+            </div>
+            <div>
+              <div className="text-slate-100 font-semibold">Create Alexa Routines for automatic Adhan</div>
+              <div className="text-slate-400 text-sm">One routine per prayer — set once, plays daily</div>
+            </div>
+          </div>
+          <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed space-y-3">
+            <ol className="list-decimal ml-4 space-y-2 text-slate-300">
+              <li>Open the <strong className="text-white">Alexa app</strong> on your phone</li>
+              <li>Go to <strong className="text-white">More → Routines → +</strong></li>
+              <li>Set the trigger: choose <strong className="text-white">Schedule → At time</strong> and enter the prayer time</li>
+              <li>Add action: tap <strong className="text-white">Add action → Alexa Says → Customized</strong></li>
+              <li>Paste one of the phrases below</li>
+              <li>Under <strong className="text-white">From</strong>, select your Echo device</li>
+              <li>Save — repeat for each prayer</li>
+            </ol>
+            <div className="rounded-xl border border-slate-700 bg-slate-950/40 px-4 py-3 text-xs text-slate-400">
+              <strong className="text-slate-300">Tip:</strong> Run each routine manually once after saving to confirm it's working correctly.
             </div>
           </div>
         </div>
  
-        {/* Footer note */}
-        <div className="text-center py-3">
-          <p className="text-slate-500 text-xs md:text-sm">
-            Prayer times are calculated from your saved settings, current timing
-            source, and selected juristic method.
+        {/* Routine phrase templates */}
+        <div>
+          <h2 className="text-slate-100 font-semibold text-base mb-3">Routine phrases</h2>
+          <p className="text-slate-400 text-sm mb-4">
+            Copy the phrase for each prayer and paste it into the Alexa Routine action.
           </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {templates.map((t) => (
+              <div key={t.id} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                <div className="text-slate-100 font-medium text-sm mb-1">{t.title}</div>
+                <div className="text-slate-500 text-xs mb-3">
+                  Routine name: <span className="text-slate-400">{t.routineName}</span>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5 font-mono text-sm text-slate-100 select-all mb-3">
+                  {t.phrase}
+                </div>
+                <Button
+                  variant="secondary"
+                  className="w-full min-h-[44px] touch-manipulation active:opacity-80"
+                  onClick={() => copy(t.phrase, t.id)}
+                >
+                  {copiedId === t.id ? (
+                    <span className="inline-flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Copied
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-2">
+                      <Copy className="w-4 h-4" /> Copy phrase
+                    </span>
+                  )}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+ 
+        {/* Help link */}
+        <div className="rounded-2xl border border-slate-800/40 bg-slate-900/20 px-5 py-4 flex items-center justify-between gap-4">
+          <p className="text-slate-400 text-sm">
+            Having trouble? Make sure both connection badges above are green before creating routines.
+          </p>
+          <a
+            href="/onboarding/step2"
+            className="inline-flex items-center gap-1.5 text-emerald-400 text-sm hover:text-emerald-300 transition-colors flex-shrink-0"
+          >
+            Step 2 <ExternalLink className="w-3.5 h-3.5" />
+          </a>
         </div>
       </div>
     </div>
