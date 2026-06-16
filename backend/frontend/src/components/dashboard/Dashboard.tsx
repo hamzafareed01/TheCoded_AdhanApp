@@ -791,6 +791,27 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
  
   const nextColors = nextPrayerCode ? PRAYER_COLORS[nextPrayerCode] : PRAYER_COLORS.fajr;
  
+  const SKY_GRADIENTS: Record<string, string> = {
+    fajr:    "linear-gradient(165deg,#020212 0%,#0c0a2e 35%,#1e1250 70%,#2d1060 100%)",
+    sunrise: "linear-gradient(165deg,#0f0520 0%,#2d1a6e 30%,#7b3f6e 60%,#c47a3a 100%)",
+    dhuhr:   "linear-gradient(165deg,#061828 0%,#0b3060 35%,#0e5ea0 70%,#1a8acc 100%)",
+    asr:     "linear-gradient(165deg,#061018 0%,#082535 35%,#0a4535 65%,#a06018 100%)",
+    maghrib: "linear-gradient(165deg,#0a0215 0%,#3d0828 30%,#9a3520 60%,#c87010 100%)",
+    isha:    "linear-gradient(165deg,#020308 0%,#06081c 35%,#0e0628 70%,#1e0845 100%)",
+  };
+  const skyGradient =
+    SKY_GRADIENTS[nextPrayerCode ?? ""] ??
+    "linear-gradient(165deg,#080810 0%,#0d0d28 50%,#151530 100%)";
+ 
+  const ARC_COLORS: Record<string, [string, string]> = {
+    fajr:    ["#818cf8", "#a78bfa"],
+    sunrise: ["#fbbf24", "#f97316"],
+    dhuhr:   ["#38bdf8", "#818cf8"],
+    asr:     ["#86efac", "#fde68a"],
+    maghrib: ["#f87171", "#fb923c"],
+    isha:    ["#c084fc", "#818cf8"],
+  };
+ 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 overscroll-none">
@@ -876,18 +897,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             {/* Prayer-aware sky gradient */}
             <div
               className="absolute inset-0 pointer-events-none transition-all duration-[2000ms]"
-              style={{
-                background: (({
-                  fajr:    "linear-gradient(165deg,#020212 0%,#0c0a2e 35%,#1e1250 70%,#2d1060 100%)",
-                  sunrise: "linear-gradient(165deg,#0f0520 0%,#2d1a6e 30%,#7b3f6e 60%,#c47a3a 100%)",
-                  dhuhr:   "linear-gradient(165deg,#061828 0%,#0b3060 35%,#0e5ea0 70%,#1a8acc 100%)",
-                  asr:     "linear-gradient(165deg,#061018 0%,#082535 35%,#0a4535 65%,#a06018 100%)",
-                  maghrib: "linear-gradient(165deg,#0a0215 0%,#3d0828 30%,#9a3520 60%,#c87010 100%)",
-                  isha:    "linear-gradient(165deg,#020308 0%,#06081c 35%,#0e0628 70%,#1e0845 100%)",
-                } as Record<string, string>)[nextPrayerCode ?? ""] ??
-                  "linear-gradient(165deg,#080810 0%,#0d0d28 50%,#151530 100%)",
-                opacity: 0.6,
-              }}
+              style={{ background: skyGradient, opacity: 0.6 }}
             />
  
             {/* Stars */}
@@ -1011,14 +1021,8 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                         const progPath = pct > 0
                           ? `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${dotX.toFixed(2)} ${dotY.toFixed(2)}`
                           : "";
-                        const [c1, c2]: [string, string] = (({
-                          fajr:    ["#818cf8", "#a78bfa"],
-                          sunrise: ["#fbbf24", "#f97316"],
-                          dhuhr:   ["#38bdf8", "#818cf8"],
-                          asr:     ["#86efac", "#fde68a"],
-                          maghrib: ["#f87171", "#fb923c"],
-                          isha:    ["#c084fc", "#818cf8"],
-                        } as Record<string, [string, string]>)[nextPrayerCode ?? ""] ?? ["#34d399", "#14b8a6"]);
+                        const [c1, c2]: [string, string] =
+                          ARC_COLORS[nextPrayerCode ?? ""] ?? ["#34d399", "#14b8a6"];
                         const ticks = [0, 25, 50, 75, 100].map(p => {
                           const a = Math.PI * (1 - p / 100);
                           return { x: cx + r * Math.cos(a), y: cy - r * Math.sin(a) };
