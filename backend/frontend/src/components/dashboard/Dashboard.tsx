@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { schedulePrayerNotifications } from "../../lib/pushNotifications";
-import { t, toHijri, getCurrentLang } from "../../lib/i18n";
+import { t, getCurrentLang } from "../../lib/i18n";
 import { useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
 import {
@@ -661,7 +661,19 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
  
   const automationOn = !!userSettings?.accountEnabled;
   const lang = getCurrentLang();
-  const hijriDate = useMemo(() => toHijri(new Date(), lang), [lang]);
+  // Native Intl Islamic (Umm al-Qura) calendar — renders "… 1448 AH" correctly.
+  // Avoids the toHijri() helper in i18n.ts which appends a wrong "BC" era suffix.
+  const hijriDate = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat("en-u-ca-islamic-umalqura", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      }).format(new Date());
+    } catch {
+      return null;
+    }
+  }, []);
  
   const mosque = useMemo(() => {
     if (!userSettings?.mosqueId && !userSettings?.mosqueName) return null;
@@ -815,6 +827,19 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 overscroll-none">
+      {/* Scoped grid CSS — guarantees the prayer row renders as columns
+          regardless of whether Tailwind's grid-cols-* utilities are generated. */}
+      <style>{`
+        .adhan-prayer-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 0.75rem;
+        }
+        @media (min-width: 640px) {
+          .adhan-prayer-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+        }
+      `}</style>
+ 
       {/* Ambient background glow */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl" />
@@ -1167,7 +1192,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           </div>
  
           {loadingToday ? (
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+            <div className="adhan-prayer-grid">
               {PRAYER_ORDER.map((code) => (
                 <div
                   key={code}
@@ -1180,7 +1205,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               {todayError}
             </div>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+            <div className="adhan-prayer-grid">
               {PRAYER_ORDER.map((code) => {
                 const isNext = nextPrayerCode === code;
                 const isPassed =
@@ -1261,7 +1286,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 <p className="text-amber-300/80 text-sm">{hadithError}</p>
               ) : hadithOfDay ? (
                 <div className="relative">
-                  <div className="absolute -top-2 -left-1 text-5xl text-emerald-500/20 leading-none select-none font-serif">&ldquo;</div>
+                  <div className="absolute -top-4 -left-2 text-4xl text-emerald-500/15 leading-none select-none font-serif pointer-events-none">&ldquo;</div>
                   <p className="relative text-slate-200 leading-7 pl-5 text-sm md:text-base italic">
                     {hadithOfDay.textEnglish}
                   </p>
@@ -1460,3 +1485,4 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     </div>
   );
 }
+ 
