@@ -26,17 +26,17 @@ import {
   Building2,
   LocateFixed,
 } from "lucide-react";
-
+ 
 type Sect = "SUNNI" | "SHIA";
 type SectFilter = "AUTO" | "ALL" | Sect;
-
+ 
 type QuietHours = {
   enabled: boolean;
   from: string;
   to: string;
   muteFajr: boolean;
 };
-
+ 
 type UserSettings = {
   userId?: string;
   sect: Sect;
@@ -57,7 +57,7 @@ type UserSettings = {
   mosqueLat?: number | null;
   mosqueLng?: number | null;
 };
-
+ 
 type Mosque = {
   placeId: string;
   name: string;
@@ -66,18 +66,18 @@ type Mosque = {
   sect?: "SUNNI" | "SHIA" | "UNKNOWN";
   sectConfidence?: string;
 };
-
+ 
 type MosqueSelectorProps = {
   onboardingData: Record<string, unknown>;
   setOnboardingData: (data: Record<string, unknown>) => void;
 };
-
+ 
 type SettingsResponse =
   | UserSettings
   | { settings?: Partial<UserSettings>; userKey?: string };
-
+ 
 type JsonRecord = Record<string, unknown>;
-
+ 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -104,17 +104,17 @@ function normalizeTimezone(value: unknown): string {
   const raw = String(value ?? "").trim();
   return raw || "Etc/UTC";
 }
-
+ 
 function normalizeSettings(payload: unknown): UserSettings {
   const root = isRecord(payload) ? (payload as SettingsResponse) : {};
   const src =
     isRecord((root as { settings?: unknown }).settings)
       ? ((root as { settings?: Record<string, unknown> }).settings as Record<string, unknown>)
       : (root as Record<string, unknown>);
-
+ 
   const quietSource = isRecord(src.quietHours) ? src.quietHours : {};
   const sect: Sect = src.sect === "SHIA" || src.shia === true ? "SHIA" : "SUNNI";
-
+ 
   return {
     userId: asString((root as Record<string, unknown>).userKey) ?? asString(src.userId) ?? undefined,
     sect,
@@ -141,7 +141,7 @@ function normalizeSettings(payload: unknown): UserSettings {
     mosqueLng: asNumber(src.mosqueLng),
   };
 }
-
+ 
 function normalizeMosques(payload: unknown): Mosque[] {
   if (!isRecord(payload) || !Array.isArray(payload.mosques)) return [];
   return payload.mosques
@@ -164,11 +164,11 @@ function normalizeMosques(payload: unknown): Mosque[] {
     })
     .filter((m) => m.placeId && m.name);
 }
-
+ 
 function norm(s?: string) {
   return (s ?? "").trim().toLowerCase().replace(/\s+/g, " ").replace(/,+/g, ",").replace(/,\s+/g, ", ");
 }
-
+ 
 function isSameLocationQuery(query: string, settings: UserSettings) {
   const q = norm(query);
   const city = norm(settings.city);
@@ -177,7 +177,7 @@ function isSameLocationQuery(query: string, settings: UserSettings) {
   if (q.startsWith(`${city},`)) return true;
   return false;
 }
-
+ 
 function buildDirectionsUrl(mosque: Mosque, settings: UserSettings | null): string {
   const origin =
     typeof settings?.latitude === "number" && typeof settings?.longitude === "number"
@@ -196,29 +196,29 @@ function buildDirectionsUrl(mosque: Mosque, settings: UserSettings | null): stri
   if (mosque.placeId) params.set("destination_place_id", mosque.placeId);
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
-
+ 
 function getSectBadgeClass(sect?: string) {
   if (sect === "SHIA") return "bg-violet-500/15 text-violet-200 border-violet-500/30";
   if (sect === "SUNNI") return "bg-cyan-500/15 text-cyan-200 border-cyan-500/30";
   return "bg-slate-800 text-slate-300 border-slate-700";
 }
-
+ 
 function getEffectiveSectFilter(filter: SectFilter, settings: UserSettings | null): SectFilter {
   if (filter !== "AUTO") return filter;
   return settings?.sect || "SUNNI";
 }
-
+ 
 // ─── Iqamah Times Editor ─────────────────────────────────────────────────────
-
+ 
 const PRAYERS_LIST = ["fajr", "dhuhr", "asr", "maghrib", "isha"] as const;
-
+ 
 function IqamahTimesEditor({ mosqueName, mosqueId }: { mosqueName: string; mosqueId: string | null }) {
   const [times, setTimes] = React.useState<Record<string, string>>({
     fajr: "", dhuhr: "", asr: "", maghrib: "", isha: "",
   });
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
-
+ 
   React.useEffect(() => {
     if (!mosqueId) return;
     apiFetch(`/api/mosque/iqamah-times?mosqueId=${encodeURIComponent(mosqueId)}`)
@@ -228,7 +228,7 @@ function IqamahTimesEditor({ mosqueName, mosqueId }: { mosqueName: string; mosqu
       })
       .catch(() => {});
   }, [mosqueId]);
-
+ 
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -242,7 +242,7 @@ function IqamahTimesEditor({ mosqueName, mosqueId }: { mosqueName: string; mosqu
       setSaving(false);
     }
   };
-
+ 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -273,7 +273,7 @@ function IqamahTimesEditor({ mosqueName, mosqueId }: { mosqueName: string; mosqu
     </div>
   );
 }
-
+ 
 export default function MosqueSelector({ onboardingData, setOnboardingData }: MosqueSelectorProps) {
   const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(!!getStoredAmazonToken());
   const [settings, setSettings] = useState<UserSettings | null>(null);
@@ -286,28 +286,28 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
+ 
   const onboardingCityLabel = useMemo(() => {
     if (!settings) return "";
     return `${settings.city}, ${settings.country}`;
   }, [settings]);
-
+ 
   const effectiveSect = useMemo(
     () => getEffectiveSectFilter(sectFilter, settings),
     [sectFilter, settings]
   );
-
+ 
   const selectedMosque = useMemo(
     () => mosques.find((m) => m.placeId === selectedMosqueId) ?? null,
     [mosques, selectedMosqueId]
   );
-
+ 
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
       setHasAmazonToken(!!getStoredAmazonToken());
     });
   }, []);
-
+ 
   async function refreshSettings() {
     const res = await apiFetch("/api/user/settings");
     if (!res.ok) {
@@ -321,7 +321,7 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
     if (!searchQuery.trim()) setSearchQuery(normalized.city);
     return normalized;
   }
-
+ 
   useEffect(() => {
     const load = async () => {
       try {
@@ -340,13 +340,13 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
     };
     void load();
   }, [hasAmazonToken]);
-
+ 
   const handleSearchInputChange = (e: ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value);
-
+ 
   const openDirections = (mosque: Mosque) => {
     window.open(buildDirectionsUrl(mosque, settings), "_blank", "noopener,noreferrer");
   };
-
+ 
   const fetchMosques = async (queryOverride?: string) => {
     if (!settings) return;
     const rawQuery = queryOverride?.trim() || searchQuery.trim() || settings.city.trim() || "";
@@ -388,11 +388,11 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
       setMosquesLoading(false);
     }
   };
-
+ 
   const handleSearchKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") { e.preventDefault(); await fetchMosques(searchQuery); }
   };
-
+ 
   const handleTimingPreferenceChange = async (checked: boolean) => {
     if (!settings) return;
     try {
@@ -430,7 +430,7 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
       setSaving(false);
     }
   };
-
+ 
   const handleSave = async () => {
     if (!selectedMosqueId) { setError("Please select a mosque first."); setSaveMessage(null); return; }
     if (!settings) return;
@@ -452,7 +452,7 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
                   : undefined,
             }
           : null);
-
+ 
       const payload: Record<string, unknown> = {
         mosqueId: selectedMosqueId,
         mosqueName: mosqueToSave?.name ?? null,
@@ -495,231 +495,283 @@ export default function MosqueSelector({ onboardingData, setOnboardingData }: Mo
       setSaving(false);
     }
   };
-
+ 
   const currentTimingMode = settings?.useMosqueLocation
     ? settings?.mosqueName || "Mosque timing enabled"
     : "Personal location timing";
-
+ 
   return (
-    <div className="min-h-screen bg-slate-950 overscroll-none" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50">
-        <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
+    <div
+      className="min-h-screen bg-slate-950 overscroll-none"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      {/* Sticky header */}
+      <div className="sticky top-0 z-20 bg-slate-950/90 backdrop-blur-md border-b border-white/5">
+        <div className="max-w-7xl mx-auto px-4 py-3 md:px-6">
+          <div className="flex items-center justify-between gap-4">
             <Logo />
             <Navigation />
           </div>
         </div>
       </div>
-
+ 
       <div
-        className="max-w-7xl mx-auto px-4 py-6 md:px-6"
+        className="max-w-4xl mx-auto px-4 py-6 md:px-6 md:py-8 space-y-6"
         style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
       >
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
-          <div>
-            <h1 className="text-white text-xl font-semibold mb-1">Choose your mosque</h1>
-            <p className="text-slate-400 text-sm">
+        {/* Hero */}
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900 border border-emerald-500/20 p-6 md:p-8">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.08),transparent_60%)]" />
+          <div className="relative">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3">
+                <Building2 className="w-6 h-6 text-emerald-400" />
+              </div>
+              <h1 className="text-white text-2xl md:text-3xl font-semibold">Choose your mosque</h1>
+            </div>
+            <p className="text-slate-400 text-sm leading-relaxed max-w-2xl">
               Select a mosque to use its exact coordinates for prayer times. Your city location stays as the fallback.
             </p>
           </div>
-
-          {settings && (
-            <div className="grid md:grid-cols-3 gap-3">
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
-                <div className="flex items-center gap-2 text-slate-200 mb-2">
-                  <LocateFixed className="w-4 h-4 text-cyan-400" />
-                  Personal location
-                </div>
-                <div className="text-sm text-slate-300">{onboardingCityLabel}</div>
-                <div className="text-xs text-slate-500 mt-1">{settings.timezone}</div>
+        </div>
+ 
+        {/* Status / settings cards */}
+        {settings && (
+          <div className="grid md:grid-cols-3 gap-4">
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-5 py-4">
+              <div className="flex items-center gap-2 text-slate-200 mb-2 text-sm font-medium">
+                <LocateFixed className="w-4 h-4 text-cyan-400" />
+                Personal location
               </div>
-
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
-                <div className="flex items-center gap-2 text-slate-200 mb-2">
-                  <Building2 className="w-4 h-4 text-emerald-400" />
-                  Saved mosque
-                </div>
-                <div className="text-sm text-slate-300">{settings.mosqueName || "No mosque selected yet"}</div>
-                <div className="text-xs text-slate-500 mt-1">{settings.mosqueAddress || "Search and save a mosque below."}</div>
+              <div className="text-sm text-slate-300">{onboardingCityLabel}</div>
+              <div className="text-xs text-slate-500 mt-1">{settings.timezone}</div>
+            </div>
+ 
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-5 py-4">
+              <div className="flex items-center gap-2 text-slate-200 mb-2 text-sm font-medium">
+                <Building2 className="w-4 h-4 text-emerald-400" />
+                Saved mosque
               </div>
-
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <div className="text-slate-200 text-sm mb-1">Use mosque for prayer times</div>
-                    <div className="text-xs text-slate-500">Source: {currentTimingMode}</div>
-                  </div>
-                  <Switch
-                    checked={settings.useMosqueLocation}
-                    disabled={saving}
-                    onCheckedChange={(checked: boolean) => {
-                      setSettings((prev) => (prev ? { ...prev, useMosqueLocation: checked } : prev));
-                      void handleTimingPreferenceChange(checked);
-                    }}
-                  />
+              <div className="text-sm text-slate-300">{settings.mosqueName || "No mosque selected yet"}</div>
+              <div className="text-xs text-slate-500 mt-1">{settings.mosqueAddress || "Search and save a mosque below."}</div>
+            </div>
+ 
+            <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm px-5 py-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-slate-200 text-sm mb-1 font-medium">Use mosque for prayer times</div>
+                  <div className="text-xs text-slate-500">Source: {currentTimingMode}</div>
                 </div>
+                <Switch
+                  checked={settings.useMosqueLocation}
+                  disabled={saving}
+                  onCheckedChange={(checked: boolean) => {
+                    setSettings((prev) => (prev ? { ...prev, useMosqueLocation: checked } : prev));
+                    void handleTimingPreferenceChange(checked);
+                  }}
+                />
               </div>
             </div>
-          )}
-
-          {error && (
-            <div className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded-xl px-4 py-3">
-              {error}
-            </div>
-          )}
-          {saveMessage && (
-            <div className="text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-900 rounded-xl px-4 py-3">
-              {saveMessage}
-            </div>
-          )}
-
-          {!settings ? (
-            <p className="text-slate-400 text-sm">Loading settings…</p>
-          ) : (
-            <>
-              {/* Search controls */}
-              <div className="space-y-3">
-                <Label className="text-slate-200">Search mosques</Label>
-                <div className="flex gap-2">
+          </div>
+        )}
+ 
+        {error && (
+          <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/40 rounded-xl px-4 py-3">
+            {error}
+          </div>
+        )}
+        {saveMessage && (
+          <div className="text-sm text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-3">
+            {saveMessage}
+          </div>
+        )}
+ 
+        {!settings ? (
+          <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-8 text-center text-slate-400 text-sm">
+            Loading settings…
+          </div>
+        ) : (
+          <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-5 md:p-6 space-y-5">
+            {/* Currently following banner */}
+            {settings.mosqueName && (
+              <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center gap-3">
+                <MapPin className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                <div className="min-w-0">
+                  <div className="text-white text-sm">Currently following: {settings.mosqueName}</div>
+                  <div className="text-emerald-400 text-xs truncate">{settings.mosqueAddress || "Saved mosque"}</div>
+                </div>
+              </div>
+            )}
+ 
+            {/* Search controls */}
+            <div className="space-y-3">
+              <Label className="text-slate-200">Search mosques</Label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
                   <Input
                     placeholder="City or mosque name…"
                     value={searchQuery}
                     onChange={handleSearchInputChange}
                     onKeyDown={handleSearchKeyDown}
-                    className="bg-slate-900 border-slate-700 text-slate-100 flex-1"
+                    className="bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500 pl-10"
                   />
-                  <Button
-                    onClick={() => fetchMosques(searchQuery)}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white flex-shrink-0 touch-manipulation"
-                  >
-                    <Search className="w-4 h-4" />
-                  </Button>
                 </div>
-                <p className="text-xs text-slate-500">Searching near: {onboardingCityLabel}</p>
-
-                <div className="flex flex-wrap gap-2">
-                  {([ { value: "AUTO", label: `Auto (${settings.sect})` }, { value: "ALL", label: "All" }, { value: "SUNNI", label: "Sunni" }, { value: "SHIA", label: "Shia" } ] as Array<{ value: SectFilter; label: string }>).map((item) => {
-                    const active = sectFilter === item.value;
-                    return (
-                      <button
-                        key={item.value}
-                        type="button"
-                        onClick={() => setSectFilter(item.value)}
-                        className={`rounded-full border px-3 py-1.5 text-sm transition-colors touch-manipulation ${
-                          active
-                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
-                            : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Results — fixed height with internal scroll, screen never expands */}
-              <div
-                className="rounded-xl border border-slate-800 bg-slate-950/40 overflow-y-auto"
-                style={{ maxHeight: "min(420px, 50vh)" }}
-              >
-                <div className="px-3 py-3 space-y-2">
-                  {mosquesLoading && (
-                    <p className="text-slate-400 text-sm px-1 py-2">Loading mosques…</p>
-                  )}
-                  {!mosquesLoading && mosquesError && (
-                    <p className="text-red-400 text-sm px-1 py-2">{mosquesError}</p>
-                  )}
-                  {!mosquesLoading && !mosquesError && mosques.length === 0 && (
-                    <p className="text-slate-400 text-sm px-1 py-2">
-                      Search for a city or mosque name to see results.
-                    </p>
-                  )}
-
-                  {mosques.map((mosque) => {
-                    const isSelected = mosque.placeId === selectedMosqueId;
-                    return (
-                      <div
-                        key={mosque.placeId}
-                        className={`w-full p-4 rounded-xl border transition-colors flex items-start justify-between gap-3 ${
-                          isSelected
-                            ? "border-emerald-500 bg-emerald-500/10"
-                            : "border-slate-700 bg-slate-800/60 hover:border-slate-500"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMosqueId(mosque.placeId)}
-                          className="flex-1 text-left touch-manipulation"
-                        >
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <h3 className="text-white text-sm font-medium">{mosque.name}</h3>
-                            {isSelected && (
-                              <Badge className="bg-emerald-600/20 text-emerald-300 border border-emerald-600/30 text-xs">
-                                Selected
-                              </Badge>
-                            )}
-                            <Badge className={`${getSectBadgeClass(mosque.sect)} text-xs`}>
-                              {mosque.sect || "UNKNOWN"}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-slate-400 text-xs">
-                            <MapPin className="w-3 h-3 flex-shrink-0" />
-                            <span>{mosque.address || "Address unavailable"}</span>
-                          </div>
-                          {mosque.sectConfidence && (
-                            <div className="text-[11px] text-slate-500 mt-1">
-                              Sect match: {mosque.sectConfidence}
-                            </div>
-                          )}
-                        </button>
-
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); openDirections(mosque); }}
-                            title="Directions"
-                            className="p-2 rounded-lg border border-slate-700 hover:border-slate-500 bg-slate-900 text-slate-200 hover:text-white touch-manipulation"
-                          >
-                            <Navigation2 className="w-4 h-4" />
-                          </button>
-                          {isSelected && (
-                            <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Save button — always visible outside the scroll area */}
-              <div className="flex justify-end pt-1">
                 <Button
-                  onClick={handleSave}
-                  disabled={saving || !selectedMosqueId}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white min-h-[44px] touch-manipulation"
+                  onClick={() => fetchMosques(searchQuery)}
+                  className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white flex-shrink-0 min-h-[44px] touch-manipulation"
                 >
-                  {saving ? "Saving…" : "Save mosque"}
+                  <Search className="w-4 h-4" />
                 </Button>
               </div>
-
-              {/* Community Prayer Times — iqamah times from selected mosque */}
-              {settings.mosqueName && (
-                <div className="mt-6 rounded-xl border border-slate-700/50 bg-slate-800/30 p-5">
-                  <h3 className="text-white font-semibold text-sm mb-1">
-                    Community prayer times
-                  </h3>
-                  <p className="text-slate-400 text-xs mb-4 leading-relaxed">
-                    Enter your mosque's official iqamah (congregation) times. These will override calculated times when mosque timing is enabled.
-                  </p>
-                  <IqamahTimesEditor mosqueName={settings.mosqueName} mosqueId={settings.mosqueId ?? null} />
-                </div>
-              )}
-            </>
-          )}
-        </div>
+              <p className="text-xs text-slate-500">Searching near: {onboardingCityLabel}</p>
+ 
+              <div className="flex flex-wrap gap-2">
+                {([
+                  { value: "AUTO", label: `Auto (${settings.sect})` },
+                  { value: "ALL", label: "All" },
+                  { value: "SUNNI", label: "Sunni" },
+                  { value: "SHIA", label: "Shia" },
+                ] as Array<{ value: SectFilter; label: string }>).map((item) => {
+                  const active = sectFilter === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => setSectFilter(item.value)}
+                      className={`rounded-full border px-3 py-1.5 text-sm transition-colors touch-manipulation ${
+                        active
+                          ? "border-emerald-500 bg-emerald-500/10 text-emerald-200"
+                          : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+ 
+            {/* Results */}
+            <div
+              className="rounded-2xl border border-slate-800 bg-slate-950/40 overflow-y-auto"
+              style={{ maxHeight: "min(460px, 52vh)" }}
+            >
+              <div className="px-3 py-3 space-y-2.5">
+                {mosquesLoading && (
+                  <div className="flex flex-col items-center justify-center gap-3 py-10">
+                    <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-emerald-400" />
+                    <p className="text-slate-400 text-sm">Loading mosques…</p>
+                  </div>
+                )}
+                {!mosquesLoading && mosquesError && (
+                  <div className="text-center py-10">
+                    <div className="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <Search className="w-7 h-7 text-slate-600" />
+                    </div>
+                    <p className="text-slate-300 text-sm mb-1">No mosques found</p>
+                    <p className="text-slate-500 text-xs px-4">{mosquesError}</p>
+                  </div>
+                )}
+                {!mosquesLoading && !mosquesError && mosques.length === 0 && (
+                  <div className="text-center py-10">
+                    <div className="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <Search className="w-7 h-7 text-slate-600" />
+                    </div>
+                    <p className="text-slate-300 text-sm mb-1">Search to find your mosque</p>
+                    <p className="text-slate-500 text-xs">Enter a city or mosque name above</p>
+                  </div>
+                )}
+ 
+                {mosques.map((mosque) => {
+                  const isSelected = mosque.placeId === selectedMosqueId;
+                  return (
+                    <div
+                      key={mosque.placeId}
+                      className={`w-full p-4 rounded-2xl border transition-colors flex items-start justify-between gap-3 ${
+                        isSelected
+                          ? "border-emerald-500 bg-emerald-500/10"
+                          : "border-slate-700 bg-slate-800/50 hover:border-slate-600"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMosqueId(mosque.placeId)}
+                        className="flex-1 text-left touch-manipulation min-w-0"
+                      >
+                        <div className="flex items-start gap-3">
+                          <MapPin className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <h3 className="text-white text-sm font-medium">{mosque.name}</h3>
+                              {isSelected && (
+                                <Badge className="bg-emerald-600/20 text-emerald-300 border border-emerald-600/30 text-xs">
+                                  Selected
+                                </Badge>
+                              )}
+                              <Badge className={`${getSectBadgeClass(mosque.sect)} text-xs`}>
+                                {mosque.sect || "UNKNOWN"}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-slate-400 text-xs">
+                              <span className="truncate">{mosque.address || "Address unavailable"}</span>
+                            </div>
+                            {mosque.sectConfidence && (
+                              <div className="text-[11px] text-slate-500 mt-1">
+                                Sect match: {mosque.sectConfidence}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+ 
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDirections(mosque);
+                          }}
+                          title="Directions"
+                          className="p-2 rounded-lg border border-slate-700 hover:border-slate-500 bg-slate-900 text-slate-200 hover:text-white touch-manipulation"
+                        >
+                          <Navigation2 className="w-4 h-4" />
+                        </button>
+                        {isSelected && (
+                          <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+ 
+            {/* Save button */}
+            <div className="flex justify-end pt-1">
+              <Button
+                onClick={handleSave}
+                disabled={saving || !selectedMosqueId}
+                className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white min-h-[44px] touch-manipulation"
+              >
+                {saving ? "Saving…" : "Save mosque"}
+              </Button>
+            </div>
+ 
+            {/* Community Prayer Times — iqamah times editor */}
+            {settings.mosqueName && (
+              <div className="mt-2 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5">
+                <h3 className="text-white font-semibold text-sm mb-1">Community prayer times</h3>
+                <p className="text-slate-400 text-xs mb-4 leading-relaxed">
+                  Enter your mosque's official iqamah (congregation) times. These will override calculated times when mosque timing is enabled.
+                </p>
+                <IqamahTimesEditor mosqueName={settings.mosqueName} mosqueId={settings.mosqueId ?? null} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 }
+ 
