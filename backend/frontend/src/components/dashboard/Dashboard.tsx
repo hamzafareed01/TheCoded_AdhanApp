@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { schedulePrayerNotifications } from "../../lib/pushNotifications";
+import { cacheToday, readToday } from "../../lib/prayerCache";
+import { prefetchUpcomingMonths } from "../../lib/prayerPrefetch";
+import { cacheValue, readValue } from "../../lib/offlineCache";
 import { t, getCurrentLang } from "../../lib/i18n";
 import { useNavigate } from "react-router-dom";
 import type { AppUser } from "../../types/AppUser";
@@ -504,6 +507,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           throw new Error(`Settings request failed (${settingsRes.status})`);
         }
         const settingsPayload = await settingsRes.json();
+        cacheValue("settings", settingsPayload); // for offline display
         setUserSettings(normalizeSettings(settingsPayload));
         if (devicesRes.ok) {
           const devicesPayload = await devicesRes.json();
@@ -513,11 +517,20 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         }
       } catch (err) {
         console.error("Failed to load settings/devices:", err);
-        setSettingsError(
-          err instanceof Error ? err.message : "Could not load your automation settings."
-        );
-        setUserSettings(null);
-        setDeviceCount(0);
+        // Offline → fall back to last cached settings so location/method/quiet
+        // hours still render instead of an error.
+        const cached = readValue<unknown>("settings");
+        if (cached) {
+          setUserSettings(normalizeSettings(cached));
+          setSettingsError(null);
+          setDeviceCount(0);
+        } else {
+          setSettingsError(
+            err instanceof Error ? err.message : "Could not load your automation settings."
+          );
+          setUserSettings(null);
+          setDeviceCount(0);
+        }
       }
     }
     void loadSettingsAndDevices();
@@ -542,20 +555,37 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           throw new Error(`Prayer times request failed (${res.status})`);
         }
         const data = await res.json();
+        cacheToday(data); // store the authoritative server response for offline use
         setTodayData(normalizeToday(data));
         // Schedule local notifications for all prayer times
         void schedulePrayerNotifications();
       } catch (err) {
         console.error("Failed to load prayer times:", err);
-        setTodayError(
-          err instanceof Error ? err.message : "Could not load prayer times."
-        );
-        setTodayData(null);
+        // Offline or request failed → fall back to the last cached times for today
+        const cached = readToday<unknown>();
+        if (cached) {
+          setTodayData(normalizeToday(cached));
+          setTodayError(null);
+          void schedulePrayerNotifications();
+        } else {
+          setTodayError(
+            err instanceof Error ? err.message : "Could not load prayer times."
+          );
+          setTodayData(null);
+        }
       } finally {
         setLoadingToday(false);
       }
     }
     void loadToday();
+  }, [hasAmazonToken]);
+ 
+  // Background: cache current + next month while online for ~60 days of
+  // exact offline coverage (calendar + forward-dated logic).
+  useEffect(() => {
+    if (hasAmazonToken) {
+      void prefetchUpcomingMonths();
+    }
   }, [hasAmazonToken]);
  
   // ── Countdown ───────────────────────────────────────────────────────────
@@ -742,16 +772,26 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             throw new Error("Your Amazon session expired. Please reconnect Amazon.");
           throw new Error(`Hadith request failed (${res.status})`);
         }
-        const payload = normalizeHadith(await res.json());
+        const raw = await res.json();
+        const payload = normalizeHadith(raw);
         if (!payload) throw new Error("Invalid hadith payload.");
+        cacheValue(`hadith_${hadithSect}`, raw); // for offline display
         if (!cancelled) setHadithOfDay(payload);
       } catch (err) {
         console.error("Failed to load hadith of the day:", err);
+        // Offline → show the last cached hadith for this sect instead of an error.
+        const cached = readValue<unknown>(`hadith_${hadithSect}`);
+        const cachedPayload = cached ? normalizeHadith(cached) : null;
         if (!cancelled) {
-          setHadithOfDay(null);
-          setHadithError(
-            err instanceof Error ? err.message : "Could not load hadith of the day."
-          );
+          if (cachedPayload) {
+            setHadithOfDay(cachedPayload);
+            setHadithError(null);
+          } else {
+            setHadithOfDay(null);
+            setHadithError(
+              err instanceof Error ? err.message : "Could not load hadith of the day."
+            );
+          }
         }
       } finally {
         if (!cancelled) setLoadingHadith(false);
@@ -1485,4 +1525,3 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     </div>
   );
 }
- 
