@@ -10,16 +10,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { t, getCurrentLang } from '../../lib/i18n';
-
-const linkBase =
-  'inline-flex items-center justify-center gap-1.5 rounded-xl border text-sm transition-colors touch-manipulation min-h-[44px]';
-
-const inactive =
-  'border-slate-800 bg-slate-900/40 text-slate-200 hover:bg-slate-900/70 active:opacity-70';
-
-const active =
-  'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
-
+ 
 const NAV_ITEM_DEFS = [
   { to: '/dashboard',   icon: Home,         key: 'nav.dashboard' as const },
   { to: '/calendar',    icon: Calendar,     key: 'nav.calendar'  as const },
@@ -29,7 +20,7 @@ const NAV_ITEM_DEFS = [
   { to: '/alexa-setup', icon: Volume2,      key: 'nav.alexa'     as const },
   { to: '/settings',    icon: SettingsIcon, key: 'nav.settings'  as const },
 ] as const;
-
+ 
 function Item({
   to,
   icon: Icon,
@@ -42,24 +33,41 @@ function Item({
   return (
     <NavLink
       to={to}
-      className={({ isActive }) =>
-        `${linkBase} ${isActive ? active : inactive} px-2 sm:px-3 py-2`
-      }
+      aria-label={label}
       title={label}
+      className={({ isActive }) =>
+        [
+          // Base
+          'flex-shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl',
+          'transition-colors duration-150 select-none touch-manipulation',
+          'outline-none focus-visible:ring-2 focus-visible:ring-emerald-500',
+          // Sizing: square 44px tap target on mobile, wide w/ label on desktop
+          'h-11 w-11 md:h-9 md:w-auto md:px-3',
+          // Colors
+          isActive
+            ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/25'
+            : 'text-slate-400 hover:text-white hover:bg-slate-800/80 active:bg-slate-700/80',
+        ].join(' ')
+      }
     >
-      <Icon className="w-4 h-4 flex-shrink-0" />
-      {/* Label: hidden on small screens, visible from sm breakpoint */}
-      <span className="hidden sm:inline">{label}</span>
+      <Icon className="w-[18px] h-[18px] flex-shrink-0" />
+      {/* Label hidden on mobile, visible from md */}
+      <span className="hidden md:inline text-sm whitespace-nowrap">{label}</span>
     </NavLink>
   );
 }
-
+ 
 export function Navigation() {
   return (
-    <nav className="flex items-center gap-1.5 flex-wrap" aria-label="Main navigation">
+    <nav
+      className="flex items-center gap-1 md:gap-1.5 overflow-x-auto md:overflow-visible flex-1 md:flex-none min-w-0 ml-auto"
+      style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+      aria-label="Main navigation"
+    >
       {NAV_ITEM_DEFS.map(({ to, icon, key }) => (
         <Item key={to} to={to} icon={icon} label={t(getCurrentLang(), key)} />
       ))}
     </nav>
   );
 }
+ 
