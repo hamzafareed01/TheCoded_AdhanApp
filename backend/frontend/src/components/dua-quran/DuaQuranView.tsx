@@ -435,7 +435,7 @@ export default function DuaQuranView() {
   return (
     <div className="min-h-screen bg-slate-950 overscroll-none">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-20 bg-slate-950/95 backdrop-blur-sm border-b border-slate-800/50" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+      <div className="sticky top-0 z-20 bg-slate-950/90 backdrop-blur-md border-b border-white/5" style={{ paddingTop: "env(safe-area-inset-top)" }}>
         <div className="max-w-7xl mx-auto px-4 py-4 md:px-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <Logo />
