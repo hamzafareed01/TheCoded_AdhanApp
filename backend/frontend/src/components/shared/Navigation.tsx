@@ -10,7 +10,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { t, getCurrentLang } from '../../lib/i18n';
- 
+
 const NAV_ITEM_DEFS = [
   { to: '/dashboard',   icon: Home,         key: 'nav.dashboard' as const },
   { to: '/calendar',    icon: Calendar,     key: 'nav.calendar'  as const },
@@ -20,7 +20,7 @@ const NAV_ITEM_DEFS = [
   { to: '/alexa-setup', icon: Volume2,      key: 'nav.alexa'     as const },
   { to: '/settings',    icon: SettingsIcon, key: 'nav.settings'  as const },
 ] as const;
- 
+
 function Item({
   to,
   icon: Icon,
@@ -56,7 +56,7 @@ function Item({
     </NavLink>
   );
 }
- 
+
 export function Navigation() {
   return (
     <nav
@@ -70,4 +70,3 @@ export function Navigation() {
     </nav>
   );
 }
- 

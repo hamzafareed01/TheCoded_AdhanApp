@@ -18,14 +18,14 @@ import {
   getStoredAmazonToken,
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
- 
+
 type Template = {
   id: string;
   title: string;
   routineName: string;
   phrase: string;
 };
- 
+
 type LinkStatus = {
   configured?: boolean;
   appLinkClientConfigured?: boolean;
@@ -35,7 +35,7 @@ type LinkStatus = {
   enablementStatus?: string | null;
   accountLinkStatus?: string | null;
 };
- 
+
 const FALLBACK_TEMPLATES: Template[] = [
   {
     id: "fajr",
@@ -68,9 +68,9 @@ const FALLBACK_TEMPLATES: Template[] = [
     phrase: "open adhan now and play isha adhan",
   },
 ];
- 
+
 type StatusTone = "success" | "warning" | "info";
- 
+
 function StatusRow({
   label,
   value,
@@ -115,7 +115,7 @@ function StatusRow({
     </div>
   );
 }
- 
+
 export default function AlexaSetup() {
   const navigate = useNavigate();
   const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
@@ -126,13 +126,13 @@ export default function AlexaSetup() {
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
- 
+
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
       setHasAmazonToken(!!getStoredAmazonToken());
     });
   }, []);
- 
+
   async function copy(text: string, id: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -147,7 +147,7 @@ export default function AlexaSetup() {
     setCopiedId(id);
     setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1500);
   }
- 
+
   async function load() {
     if (!getStoredAmazonToken()) {
       setStatus(null);
@@ -160,14 +160,14 @@ export default function AlexaSetup() {
         apiFetch("/api/alexa/routines/templates"),
         apiFetch("/api/alexa/account-linking/status"),
       ]);
- 
+
       if (templatesRes.ok) {
         const payload = (await templatesRes.json()) as { templates?: Template[] };
         if (Array.isArray(payload.templates) && payload.templates.length > 0) {
           setTemplates(payload.templates);
         }
       }
- 
+
       if (statusRes.ok) {
         setStatus((await statusRes.json()) as LinkStatus);
       }
@@ -177,19 +177,19 @@ export default function AlexaSetup() {
       setLoading(false);
     }
   }
- 
+
   useEffect(() => {
     if (hasAmazonToken) {
       void load();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasAmazonToken]);
- 
+
   const isAmazonConnected = hasAmazonToken || !!status?.lwaLinked;
   const isSkillLinked = status?.accountLinkStatus === "LINKED";
   const isEnabled = status?.enablementStatus === "ENABLED";
   const invocationName = status?.invocationName || "adhan now";
- 
+
   return (
     <div
       className="min-h-screen bg-slate-950 overscroll-none"
@@ -204,7 +204,7 @@ export default function AlexaSetup() {
           </div>
         </div>
       </div>
- 
+
       <div
         className="max-w-3xl mx-auto px-4 py-6 md:px-6 md:py-8 space-y-6"
         style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
@@ -218,14 +218,14 @@ export default function AlexaSetup() {
             Connect Amazon, register your Echo devices, and set up automatic Adhan.
           </p>
         </div>
- 
+
         {/* Error */}
         {error && (
           <div className="rounded-xl border border-red-500/50 bg-red-500/10 px-5 py-4">
             <p className="text-red-300 text-sm leading-relaxed">{error}</p>
           </div>
         )}
- 
+
         {/* Not connected — empty state with CTA */}
         {!hasAmazonToken ? (
           <div className="rounded-3xl border border-slate-700/50 bg-slate-800/30 p-8 text-center">
@@ -255,7 +255,7 @@ export default function AlexaSetup() {
                 Refresh status
               </Button>
             </div>
- 
+
             {/* Connection status — meaningful rows */}
             <div className="rounded-3xl border border-slate-800/60 bg-slate-900/40 backdrop-blur-sm p-6 md:p-8">
               <h2 className="text-white font-semibold text-lg mb-5">Connection status</h2>
@@ -281,7 +281,7 @@ export default function AlexaSetup() {
                   tone="info"
                 />
               </div>
- 
+
               {!isAmazonConnected && (
                 <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
                   Connect your Amazon account in Step 2 of onboarding first.{" "}
@@ -291,7 +291,7 @@ export default function AlexaSetup() {
                 </div>
               )}
             </div>
- 
+
             {/* Step 2 — wake phrase */}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
               <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
@@ -320,7 +320,7 @@ export default function AlexaSetup() {
                 </p>
               </div>
             </div>
- 
+
             {/* Step 3 — routines */}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
               <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
@@ -355,7 +355,7 @@ export default function AlexaSetup() {
                 </div>
               </div>
             </div>
- 
+
             {/* Routine phrase templates */}
             <div>
               <h2 className="text-slate-100 font-semibold text-base mb-3">Routine phrases</h2>
@@ -394,7 +394,7 @@ export default function AlexaSetup() {
                 ))}
               </div>
             </div>
- 
+
             {/* Help link */}
             <div className="rounded-2xl border border-slate-800/40 bg-slate-900/20 px-5 py-4 flex items-center justify-between gap-4">
               <p className="text-slate-400 text-sm">
@@ -413,4 +413,3 @@ export default function AlexaSetup() {
     </div>
   );
 }
- 

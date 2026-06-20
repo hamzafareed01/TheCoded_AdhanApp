@@ -34,7 +34,7 @@ import {
   ChevronRight,
   Settings2,
 } from "lucide-react";
- 
+
 const PRAYER_ORDER = [
   "fajr",
   "sunrise",
@@ -43,9 +43,9 @@ const PRAYER_ORDER = [
   "maghrib",
   "isha",
 ] as const;
- 
+
 type PrayerCode = (typeof PRAYER_ORDER)[number];
- 
+
 const COUNTDOWN_PRAYERS: PrayerCode[] = [
   "fajr",
   "dhuhr",
@@ -53,7 +53,7 @@ const COUNTDOWN_PRAYERS: PrayerCode[] = [
   "maghrib",
   "isha",
 ];
- 
+
 const PRAYER_LABELS: Record<PrayerCode, string> = {
   fajr: "Fajr",
   sunrise: "Sunrise",
@@ -62,7 +62,7 @@ const PRAYER_LABELS: Record<PrayerCode, string> = {
   maghrib: "Maghrib",
   isha: "Isha",
 };
- 
+
 const PRAYER_ICONS: Record<PrayerCode, React.ReactNode> = {
   fajr: <MoonStar className="w-5 h-5" />,
   sunrise: <Sunrise className="w-5 h-5" />,
@@ -71,7 +71,7 @@ const PRAYER_ICONS: Record<PrayerCode, React.ReactNode> = {
   maghrib: <Sunset className="w-5 h-5" />,
   isha: <Star className="w-5 h-5" />,
 };
- 
+
 const PRAYER_COLORS: Record<PrayerCode, { icon: string; glow: string; bg: string; border: string; time: string }> = {
   fajr:    { icon: "text-indigo-300",  glow: "shadow-indigo-500/20",  bg: "bg-indigo-500/10",  border: "border-indigo-500/30",  time: "text-indigo-200" },
   sunrise: { icon: "text-amber-300",   glow: "shadow-amber-500/20",   bg: "bg-amber-500/10",   border: "border-amber-500/30",   time: "text-amber-200"  },
@@ -80,7 +80,7 @@ const PRAYER_COLORS: Record<PrayerCode, { icon: string; glow: string; bg: string
   maghrib: { icon: "text-rose-300",    glow: "shadow-rose-500/20",    bg: "bg-rose-500/10",    border: "border-rose-500/30",    time: "text-rose-200"   },
   isha:    { icon: "text-violet-300",  glow: "shadow-violet-500/20",  bg: "bg-violet-500/10",  border: "border-violet-500/30",  time: "text-violet-200" },
 };
- 
+
 const PLATFORM_COLORS: Record<string, string> = {
   alexa:   "bg-cyan-500/15 border-cyan-500/30 text-cyan-300",
   google:  "bg-red-500/15 border-red-500/30 text-red-300",
@@ -88,7 +88,7 @@ const PLATFORM_COLORS: Record<string, string> = {
   samsung: "bg-blue-500/15 border-blue-500/30 text-blue-300",
   sonos:   "bg-slate-500/15 border-slate-500/30 text-slate-300",
 };
- 
+
 const PLATFORM_NAMES: Record<string, string> = {
   alexa: "Alexa",
   google: "Google",
@@ -96,7 +96,7 @@ const PLATFORM_NAMES: Record<string, string> = {
   samsung: "Samsung",
   sonos: "Sonos",
 };
- 
+
 const PLATFORM_INITIALS: Record<string, string> = {
   alexa: "A",
   google: "G",
@@ -104,10 +104,10 @@ const PLATFORM_INITIALS: Record<string, string> = {
   samsung: "S",
   sonos: "S",
 };
- 
+
 type JsonObject = Record<string, unknown>;
 type PrayerMap = Partial<Record<PrayerCode, string>>;
- 
+
 type PrayerConfig = {
   prayerName: string;
   enabled: boolean;
@@ -116,13 +116,13 @@ type PrayerConfig = {
   quietTo?: string;
   adhanReciterId?: string | null;
 };
- 
+
 type QuietHours = {
   enabled: boolean;
   from: string;
   to: string;
 };
- 
+
 type SettingsShape = {
   city?: string;
   country?: string;
@@ -140,7 +140,7 @@ type SettingsShape = {
   madhhab?: string;
   calculationMethod?: string;
 };
- 
+
 type TodayShape = {
   location?: {
     city?: string;
@@ -169,13 +169,13 @@ type TodayShape = {
   date?: unknown;
   meta?: unknown;
 };
- 
+
 type Device = {
   id: string;
   name: string;
   platform?: string;
 };
- 
+
 type HadithShape = {
   id: string;
   sect: "SUNNI" | "SHIA";
@@ -187,24 +187,24 @@ type HadithShape = {
   source?: string | null;
   dateKey?: string;
 };
- 
+
 type DashboardProps = {
   onboardingData: Record<string, unknown>;
   user?: AppUser | null;
 };
- 
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
- 
+
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
- 
+
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
- 
+
 function safeReadJson<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -213,7 +213,7 @@ function safeReadJson<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
- 
+
 function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -228,7 +228,7 @@ function normalizePrayerConfigs(value: unknown): PrayerConfig[] {
     }))
     .filter((item) => !!item.prayerName);
 }
- 
+
 function normalizeSettings(payload: unknown): SettingsShape | null {
   if (!isObject(payload)) return null;
   const root = payload;
@@ -251,7 +251,7 @@ function normalizeSettings(payload: unknown): SettingsShape | null {
     calculationMethod: asString(src.calculationMethod) ?? "isna",
   };
 }
- 
+
 function normalizeToday(payload: unknown): TodayShape | null {
   if (!isObject(payload)) return null;
   const src = payload;
@@ -300,7 +300,7 @@ function normalizeToday(payload: unknown): TodayShape | null {
     meta: src.meta,
   };
 }
- 
+
 function normalizeDevices(payload: unknown): Device[] {
   const list = Array.isArray(payload)
     ? payload
@@ -316,7 +316,7 @@ function normalizeDevices(payload: unknown): Device[] {
     }))
     .filter((item) => item.id && item.name);
 }
- 
+
 function normalizeHadith(payload: unknown): HadithShape | null {
   if (!isObject(payload)) return null;
   const sect =
@@ -336,7 +336,7 @@ function normalizeHadith(payload: unknown): HadithShape | null {
     dateKey: asString(payload.dateKey),
   };
 }
- 
+
 function parsePrayerTimeToSeconds(timeStr: string): number | null {
   const cleaned = String(timeStr || "").replace(/\s*\(.*?\)\s*$/, "").trim();
   const m24 = cleaned.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
@@ -368,7 +368,7 @@ function parsePrayerTimeToSeconds(timeStr: string): number | null {
   }
   return null;
 }
- 
+
 function getNowInTimeZone(timeZone: string) {
   try {
     const formatter = new Intl.DateTimeFormat("en-GB", {
@@ -390,7 +390,7 @@ function getNowInTimeZone(timeZone: string) {
     return null;
   }
 }
- 
+
 function formatDiff(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -398,7 +398,7 @@ function formatDiff(ms: number): string {
   const seconds = totalSeconds % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
- 
+
 function getConnectedPlatforms(
   onboardingData: Record<string, unknown>,
   hasAmazonToken: boolean
@@ -414,7 +414,7 @@ function getConnectedPlatforms(
     (platform) => platform !== "alexa" || hasAmazonToken
   );
 }
- 
+
 function titleCase(value?: string | null) {
   return (
     String(value || "")
@@ -425,7 +425,7 @@ function titleCase(value?: string | null) {
       .replace(/\b\w/g, (c) => c.toUpperCase()) || "—"
   );
 }
- 
+
 function describeTimingSource(
   todayData: TodayShape | null,
   userSettings: SettingsShape | null
@@ -438,54 +438,54 @@ function describeTimingSource(
   if (userSettings?.useMosqueLocation) return "Mosque preferred";
   return "Personal location";
 }
- 
+
 export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const navigate = useNavigate();
- 
+
   const [hasAmazonToken, setHasAmazonToken] = useState<boolean>(
     !!getStoredAmazonToken()
   );
   const [hadithOfDay, setHadithOfDay] = useState<HadithShape | null>(null);
   const [loadingHadith, setLoadingHadith] = useState(true);
   const [hadithError, setHadithError] = useState<string | null>(null);
- 
+
   const [todayData, setTodayData] = useState<TodayShape | null>(null);
   const [loadingToday, setLoadingToday] = useState(true);
   const [todayError, setTodayError] = useState<string | null>(null);
- 
+
   const [userSettings, setUserSettings] = useState<SettingsShape | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
- 
+
   const [deviceCount, setDeviceCount] = useState(0);
   const [timeToNextPrayer, setTimeToNextPrayer] = useState<string | null>(null);
   const [nextPrayerCode, setNextPrayerCode] = useState<PrayerCode | null>(null);
   const [nextPrayerTimeDisplay, setNextPrayerTimeDisplay] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
- 
+
   useEffect(() => {
     return subscribeToAmazonAuthChanges(() => {
       setHasAmazonToken(!!getStoredAmazonToken());
     });
   }, []);
- 
+
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
- 
+
   const connectedPlatforms = useMemo(
     () => getConnectedPlatforms(onboardingData, hasAmazonToken),
     [onboardingData, hasAmazonToken]
   );
- 
+
   const prayersForDisplay: PrayerMap | null =
     todayData?.prayers12 || todayData?.prayers24 || null;
   const prayersForCountdown: PrayerMap | null =
     todayData?.prayers24 || todayData?.prayers12 || null;
   const activeTimeZone =
     todayData?.location?.timezone || userSettings?.timezone || "Etc/UTC";
- 
+
   // ── Settings + Devices ──────────────────────────────────────────────────
   useEffect(() => {
     async function loadSettingsAndDevices() {
@@ -535,7 +535,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     }
     void loadSettingsAndDevices();
   }, [hasAmazonToken]);
- 
+
   // ── Prayer Times ────────────────────────────────────────────────────────
   useEffect(() => {
     async function loadToday() {
@@ -579,7 +579,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     }
     void loadToday();
   }, [hasAmazonToken]);
- 
+
   // Background: cache current + next month while online for ~60 days of
   // exact offline coverage (calendar + forward-dated logic).
   useEffect(() => {
@@ -587,7 +587,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       void prefetchUpcomingMonths();
     }
   }, [hasAmazonToken]);
- 
+
   // ── Countdown ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (!prayersForCountdown) {
@@ -597,7 +597,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       setProgress(0);
       return;
     }
- 
+
     const updateCountdown = () => {
       const nowParts = getNowInTimeZone(activeTimeZone);
       if (!nowParts) {
@@ -607,14 +607,14 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         setProgress(0);
         return;
       }
- 
+
       const nowSeconds = nowParts.hour * 3600 + nowParts.minute * 60 + nowParts.second;
       const entries = COUNTDOWN_PRAYERS.map((code) => {
         const raw = prayersForCountdown[code];
         const seconds = raw ? parsePrayerTimeToSeconds(raw) : null;
         return seconds != null ? { code, seconds } : null;
       }).filter((item): item is { code: PrayerCode; seconds: number } => item !== null);
- 
+
       if (entries.length === 0) {
         setTimeToNextPrayer(null);
         setNextPrayerCode(null);
@@ -622,11 +622,11 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
         setProgress(0);
         return;
       }
- 
+
       let nextIdx = entries.findIndex((entry) => entry.seconds > nowSeconds);
       let nextEntry: { code: PrayerCode; seconds: number };
       let prevEntry: { code: PrayerCode; seconds: number } | null;
- 
+
       if (nextIdx === -1) {
         nextEntry = { ...entries[0], seconds: entries[0].seconds + 24 * 3600 };
         prevEntry = entries[entries.length - 1];
@@ -640,27 +640,27 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           };
         }
       }
- 
+
       const adjustedNowSeconds =
         prevEntry && prevEntry.seconds > nowSeconds
           ? nowSeconds + 24 * 3600
           : nowSeconds;
- 
+
       setNextPrayerCode(nextEntry.code);
       setNextPrayerTimeDisplay(
         prayersForDisplay?.[nextEntry.code] ||
           prayersForCountdown[nextEntry.code] ||
           null
       );
- 
+
       const diffMs = Math.max(0, (nextEntry.seconds - adjustedNowSeconds) * 1000);
       setTimeToNextPrayer(formatDiff(diffMs));
- 
+
       if (!prevEntry) {
         setProgress(0);
         return;
       }
- 
+
       const total = nextEntry.seconds - prevEntry.seconds;
       const elapsed = adjustedNowSeconds - prevEntry.seconds;
       const pct =
@@ -669,12 +669,12 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           : 0;
       setProgress(pct);
     };
- 
+
     updateCountdown();
     const interval = window.setInterval(updateCountdown, 1000);
     return () => window.clearInterval(interval);
   }, [prayersForCountdown, prayersForDisplay, activeTimeZone]);
- 
+
   // ── Derived values ──────────────────────────────────────────────────────
   const quietHours = useMemo<QuietHours | null>(() => {
     const configs = Array.isArray(userSettings?.prayerConfigs)
@@ -688,7 +688,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       to: firstQuiet.quietTo || "07:00",
     };
   }, [userSettings?.prayerConfigs]);
- 
+
   const automationOn = !!userSettings?.accountEnabled;
   const lang = getCurrentLang();
   // Native Intl Islamic (Umm al-Qura) calendar — renders "… 1448 AH" correctly.
@@ -704,7 +704,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       return null;
     }
   }, []);
- 
+
   const mosque = useMemo(() => {
     if (!userSettings?.mosqueId && !userSettings?.mosqueName) return null;
     return {
@@ -713,7 +713,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       city: userSettings.mosqueCity || null,
     };
   }, [userSettings]);
- 
+
   const locationLabel = todayData?.location?.label
     ? todayData.location.label
     : todayData?.location?.city
@@ -721,17 +721,17 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     : userSettings?.city
     ? `${userSettings.city}${userSettings.country ? `, ${userSettings.country}` : ""}`
     : "";
- 
+
   const timingSourceLabel = describeTimingSource(todayData, userSettings);
   const timingFallbackReason = todayData?.sourceDetail?.fallbackReason || null;
- 
+
   const locationCoords =
     todayData?.location?.latitude != null && todayData?.location?.longitude != null
       ? `${todayData.location.latitude.toFixed(5)}, ${todayData.location.longitude.toFixed(5)}`
       : userSettings?.latitude != null && userSettings?.longitude != null
       ? `${userSettings.latitude.toFixed(5)}, ${userSettings.longitude.toFixed(5)}`
       : null;
- 
+
   const effectiveSect = String(
     todayData?.method?.sect || userSettings?.sect || "SUNNI"
   ).toUpperCase();
@@ -745,12 +745,12 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       userSettings?.calculationMethod ||
       (effectiveSect === "SHIA" ? "jafari" : "isna")
   );
- 
+
   const hadithSect: "SUNNI" | "SHIA" =
     String(todayData?.method?.sect || userSettings?.sect || "SUNNI").toUpperCase() === "SHIA"
       ? "SHIA"
       : "SUNNI";
- 
+
   // ── Hadith ──────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -800,20 +800,20 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     void loadHadith();
     return () => { cancelled = true; };
   }, [hasAmazonToken, hadithSect]);
- 
+
   const gregorianDate = currentTime.toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
   });
- 
+
   const formattedTime = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
- 
+
   async function handleToggleAutomation() {
     if (!hasAmazonToken) {
       navigate("/settings");
@@ -840,9 +840,9 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
       alert(err instanceof Error ? err.message : "Could not update automation setting.");
     }
   }
- 
+
   const nextColors = nextPrayerCode ? PRAYER_COLORS[nextPrayerCode] : PRAYER_COLORS.fajr;
- 
+
   const SKY_GRADIENTS: Record<string, string> = {
     fajr:    "linear-gradient(165deg,#020212 0%,#0c0a2e 35%,#1e1250 70%,#2d1060 100%)",
     sunrise: "linear-gradient(165deg,#0f0520 0%,#2d1a6e 30%,#7b3f6e 60%,#c47a3a 100%)",
@@ -854,7 +854,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
   const skyGradient =
     SKY_GRADIENTS[nextPrayerCode ?? ""] ??
     "linear-gradient(165deg,#080810 0%,#0d0d28 50%,#151530 100%)";
- 
+
   const ARC_COLORS: Record<string, [string, string]> = {
     fajr:    ["#818cf8", "#a78bfa"],
     sunrise: ["#fbbf24", "#f97316"],
@@ -863,7 +863,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
     maghrib: ["#f87171", "#fb923c"],
     isha:    ["#c084fc", "#818cf8"],
   };
- 
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-950 overscroll-none">
@@ -879,13 +879,13 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           .adhan-prayer-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
         }
       `}</style>
- 
+
       {/* Ambient background glow */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl" />
         <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-teal-500/5 rounded-full blur-3xl" />
       </div>
- 
+
       {/* Sticky Header */}
       <div
         className="sticky top-0 z-20 bg-slate-950/90 backdrop-blur-md border-b border-white/5"
@@ -898,12 +898,12 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           </div>
         </div>
       </div>
- 
+
       <div
         className="relative max-w-7xl mx-auto px-4 py-6 space-y-5 md:px-6 md:py-8 md:space-y-6"
         style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}
       >
- 
+
         {/* ── Activation banner ── */}
         {onboardingData.activationPhrase && !automationOn && (
           <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
@@ -923,7 +923,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
           </div>
         )}
- 
+
         {/* ── Top status strip ── */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
@@ -948,7 +948,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
           </div>
         </div>
- 
+
         {/* ── HERO: Next Prayer ── */}
         <div className="relative overflow-hidden rounded-3xl border border-white/8 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950">
           {/* Glow orbs */}
@@ -956,15 +956,15 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
           <div className="absolute -bottom-12 -left-12 w-56 h-56 bg-teal-500/8 rounded-full blur-3xl" />
           {/* Top accent line */}
           <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/40 to-transparent" />
- 
+
           <div className="relative z-10 overflow-hidden">
- 
+
             {/* Prayer-aware sky gradient */}
             <div
               className="absolute inset-0 pointer-events-none transition-all duration-[2000ms]"
               style={{ background: skyGradient, opacity: 0.6 }}
             />
- 
+
             {/* Stars */}
             <svg
               className="absolute inset-0 w-full h-full pointer-events-none select-none"
@@ -985,7 +985,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 />
               ))}
             </svg>
- 
+
             {/* Mosque skyline silhouette */}
             <div className="absolute bottom-0 left-0 right-0 pointer-events-none select-none">
               <svg
@@ -1027,10 +1027,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 </g>
               </svg>
             </div>
- 
+
             {/* Hero content */}
             <div className="relative p-6 md:p-10 pb-20 md:pb-20">
- 
+
               {/* Date + method row */}
               <div className="flex items-start justify-between gap-4 flex-wrap mb-8">
                 <div>
@@ -1054,10 +1054,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   </span>
                 </div>
               </div>
- 
+
               {/* Main grid: arc+countdown left, clock+source+button right */}
               <div className="grid md:grid-cols-5 gap-6 md:gap-8 items-start">
- 
+
                 {/* Left: arc + countdown */}
                 <div className="md:col-span-3">
                   {loadingToday ? (
@@ -1134,7 +1134,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                           </div>
                         );
                       })()}
- 
+
                       {/* Countdown text */}
                       <div className="text-center md:text-left">
                         <p className="text-white/35 text-[10px] tracking-[0.2em] uppercase mb-2">
@@ -1146,7 +1146,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                         >
                           {timeToNextPrayer || "--:--:--"}
                         </div>
- 
+
                         {/* Prayer name pill + time */}
                         <div className="flex items-center gap-3 flex-wrap">
                           <div
@@ -1168,7 +1168,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                     </div>
                   )}
                 </div>
- 
+
                 {/* Right: clock + source + button */}
                 <div className="md:col-span-2 flex flex-col gap-3">
                   <div
@@ -1182,7 +1182,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                     <div className="text-3xl text-white tabular-nums">{formattedTime}</div>
                     <div className="text-xs text-white/30">{activeTimeZone}</div>
                   </div>
- 
+
                   <div
                     className="p-4 rounded-2xl border border-white/8 space-y-1.5"
                     style={{ background: "rgba(0,0,0,0.2)", backdropFilter: "blur(12px)" }}
@@ -1195,7 +1195,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                       <p className="text-white/20 text-xs">{locationCoords}</p>
                     )}
                   </div>
- 
+
                   <Button
                     size="lg"
                     variant="outline"
@@ -1216,7 +1216,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
           </div>
         </div>
- 
+
         {/* ── PRAYER TIMES GRID ── */}
         <div>
           <div className="flex items-center justify-between mb-4">
@@ -1230,7 +1230,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
           </div>
- 
+
           {loadingToday ? (
             <div className="adhan-prayer-grid">
               {PRAYER_ORDER.map((code) => (
@@ -1257,7 +1257,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   COUNTDOWN_PRAYERS.indexOf(code as PrayerCode) <
                     COUNTDOWN_PRAYERS.indexOf(nextPrayerCode as PrayerCode);
                 const colors = PRAYER_COLORS[code];
- 
+
                 return (
                   <div
                     key={code}
@@ -1294,18 +1294,18 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
           )}
         </div>
- 
+
         {/* ── MAIN CONTENT GRID ── */}
         <div className="grid lg:grid-cols-5 gap-5">
- 
+
           {/* Left: Hadith + Location */}
           <div className="lg:col-span-3 space-y-5">
- 
+
             {/* Hadith of the Day */}
             <div className="relative overflow-hidden rounded-2xl bg-slate-900/80 border border-white/6 p-6 md:p-8">
               <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-amber-500/30 to-transparent" />
               <div className="absolute -top-8 -right-8 w-40 h-40 bg-amber-500/5 rounded-full blur-2xl pointer-events-none" />
- 
+
               <div className="flex items-center gap-2.5 mb-5">
                 <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
                   <BookOpen className="w-4 h-4 text-amber-400" />
@@ -1315,7 +1315,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <p className="text-slate-500 text-xs">{hadithOfDay?.title || "Daily Reminder"}</p>
                 </div>
               </div>
- 
+
               {loadingHadith ? (
                 <div className="space-y-2 animate-pulse">
                   <div className="h-4 bg-slate-800 rounded w-full" />
@@ -1342,7 +1342,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 <p className="text-slate-500 text-sm">No daily reminder available.</p>
               )}
             </div>
- 
+
             {/* Location & Settings Info */}
             <div className="rounded-2xl bg-slate-900/80 border border-white/6 p-5 divide-y divide-white/5">
               <div className="flex items-center gap-3 pb-4">
@@ -1354,7 +1354,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <div className="text-white text-sm">{locationLabel || "Not available"}</div>
                 </div>
               </div>
- 
+
               <div className="flex items-center gap-3 py-4">
                 <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center flex-shrink-0">
                   <MoonStar className="w-4 h-4 text-cyan-400" />
@@ -1364,7 +1364,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <div className="text-white text-sm">{calcLabel} · {madhhabLabel}</div>
                 </div>
               </div>
- 
+
               <div className="flex items-center gap-3 py-4">
                 <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center flex-shrink-0">
                   <Clock3 className="w-4 h-4 text-amber-400" />
@@ -1374,7 +1374,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <div className="text-white text-sm">{activeTimeZone}</div>
                 </div>
               </div>
- 
+
               {quietHours && (
                 <div className="flex items-center gap-3 pt-4">
                   <div className="w-8 h-8 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center flex-shrink-0">
@@ -1386,7 +1386,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   </div>
                 </div>
               )}
- 
+
               {settingsError && (
                 <div className="mt-4 pt-4 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-amber-200 text-xs">
                   {settingsError}
@@ -1394,10 +1394,10 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
               )}
             </div>
           </div>
- 
+
           {/* Right: Mosque + Platforms */}
           <div className="lg:col-span-2 space-y-5">
- 
+
             {/* Mosque */}
             <div className="rounded-2xl bg-slate-900/80 border border-white/6 p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1415,7 +1415,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <ChevronRight className="w-3 h-3" />
                 </button>
               </div>
- 
+
               {mosque ? (
                 <div className="space-y-3">
                   <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/15">
@@ -1442,7 +1442,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <p className="text-slate-600 text-xs mt-1">Using calculation-based timings</p>
                 </div>
               )}
- 
+
               {!mosque && (
                 <Button
                   variant="outline"
@@ -1454,7 +1454,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                 </Button>
               )}
             </div>
- 
+
             {/* Connected Platforms */}
             <div className="rounded-2xl bg-slate-900/80 border border-white/6 p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1472,7 +1472,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <ChevronRight className="w-3 h-3" />
                 </button>
               </div>
- 
+
               {connectedPlatforms.length > 0 ? (
                 <div className="space-y-2 mb-4">
                   {connectedPlatforms.map((platform: string) => (
@@ -1504,7 +1504,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
                   <p className="text-slate-500 text-sm">No platforms connected</p>
                 </div>
               )}
- 
+
               <div className="flex items-center justify-between text-xs text-slate-600 px-1">
                 <span>{deviceCount} device{deviceCount === 1 ? "" : "s"} available</span>
                 {connectedPlatforms.length > 0 && (
@@ -1514,7 +1514,7 @@ export default function Dashboard({ onboardingData, user }: DashboardProps) {
             </div>
           </div>
         </div>
- 
+
         {/* Footer */}
         <div className="text-center pb-2">
           <p className="text-slate-700 text-xs">

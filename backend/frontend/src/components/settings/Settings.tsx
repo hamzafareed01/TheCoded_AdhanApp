@@ -102,7 +102,7 @@ type Device = {
   id: string;
   name: string;
 };
- 
+
 type SpeakerGroup = {
   id: string;
   name: string;
@@ -638,7 +638,7 @@ export default function Settings({
           const devicesJson = await devicesRes.json();
           setDevices(normalizeDevices(devicesJson));
         }
- 
+
         if (groupsRes.ok) {
           const groupsJson = await groupsRes.json() as { groups?: unknown[] };
           const normalized = (groupsJson.groups ?? [])
@@ -720,7 +720,7 @@ export default function Settings({
       return { ...prev, speakerGroupIds: next };
     });
   };
- 
+
   const toggleSelectedDevice = (deviceId: string, checked: boolean) => {
     setSettings((prev) => {
       if (!prev) return prev;
@@ -1107,7 +1107,7 @@ export default function Settings({
                     Sets the language for Alexa responses and prayer name display.
                   </p>
                 </div>
- 
+
                 {/* Calculation Method */}
                 <div>
                   <Label className="text-white mb-2 block text-sm font-medium">
@@ -1422,7 +1422,7 @@ export default function Settings({
                     </div>
                   </div>
                 )}
- 
+
                 <div className="mt-6 rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
                   <div className="flex items-start gap-3">
                     <div className="rounded-lg bg-emerald-500/10 p-2 mt-0.5">
@@ -1966,7 +1966,7 @@ export default function Settings({
                     </SelectContent>
                   </Select>
                 </div>
- 
+
                 {/* Info */}
                 <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
                   <p className="text-slate-400 text-xs leading-relaxed">

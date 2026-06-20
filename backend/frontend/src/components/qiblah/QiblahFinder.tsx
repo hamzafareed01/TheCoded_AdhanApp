@@ -4,7 +4,7 @@ import { Navigation } from "../shared/Navigation";
 import { Button } from "../ui/button";
 import { computeQiblah } from "../../lib/qiblah";
 import { MapPin, Volume2, Navigation as CompassIcon } from "lucide-react";
- 
+
 type QiblahResult = {
   location: { lat: number; lon: number };
   kaaba: { lat: number; lon: number };
@@ -13,7 +13,7 @@ type QiblahResult = {
   source: string;
   message: string;
 };
- 
+
 function speak(text: string) {
   try {
     const synth = window.speechSynthesis;
@@ -25,7 +25,7 @@ function speak(text: string) {
     // ignore
   }
 }
- 
+
 function getCurrentPosition(): Promise<{ lat: number; lng: number }> {
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) {
@@ -59,7 +59,7 @@ function getCurrentPosition(): Promise<{ lat: number; lng: number }> {
     );
   });
 }
- 
+
 const COMPASS_DIRECTION_LABELS: Record<string, string> = {
   N: "North",
   NE: "North East",
@@ -70,7 +70,7 @@ const COMPASS_DIRECTION_LABELS: Record<string, string> = {
   W: "West",
   NW: "North West",
 };
- 
+
 export default function QiblahFinder() {
   const [result, setResult] = useState<QiblahResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,12 +80,12 @@ export default function QiblahFinder() {
   const [lngInput, setLngInput] = useState("");
   const [autoAnnounce, setAutoAnnounce] = useState(false);
   const [showManual, setShowManual] = useState(false);
- 
+
   const canSpeak = useMemo(
     () => typeof window !== "undefined" && "speechSynthesis" in window,
     []
   );
- 
+
   const computeAndSet = (lat: number, lng: number) => {
     setError(null);
     setPermissionDenied(false);
@@ -98,7 +98,7 @@ export default function QiblahFinder() {
       );
     }
   };
- 
+
   const handleUseCurrent = async () => {
     setError(null);
     setResult(null);
@@ -122,7 +122,7 @@ export default function QiblahFinder() {
       setError(msg);
     }
   };
- 
+
   const handleUseManual = async () => {
     setError(null);
     setResult(null);
@@ -134,7 +134,7 @@ export default function QiblahFinder() {
     }
     computeAndSet(lat, lng);
   };
- 
+
   const handleAnnounce = () => {
     if (!result) return;
     const dirLabel = COMPASS_DIRECTION_LABELS[result.direction] || result.direction;
@@ -142,13 +142,13 @@ export default function QiblahFinder() {
       `Qiblah is ${Math.round(result.bearing)} degrees from true north, towards ${dirLabel}.`
     );
   };
- 
+
   const bearing = result ? result.bearing : null;
   const hasResult = bearing != null;
   const directionLabel = result
     ? COMPASS_DIRECTION_LABELS[result.direction] || result.direction
     : null;
- 
+
   return (
     <div
       className="min-h-screen bg-slate-950 overscroll-none"
@@ -163,7 +163,7 @@ export default function QiblahFinder() {
           </div>
         </div>
       </div>
- 
+
       <div
         className="max-w-7xl mx-auto px-4 py-6 md:px-6 md:py-8"
         style={{ paddingBottom: "calc(2rem + env(safe-area-inset-bottom))" }}
@@ -176,7 +176,7 @@ export default function QiblahFinder() {
             <p className="text-slate-400 mb-8 text-center text-sm">
               Direction of the Kaaba from your location
             </p>
- 
+
             {/* Error */}
             {error && (
               <div className="mb-6 p-4 rounded-2xl border border-red-900/60 bg-red-950/30 text-red-200">
@@ -190,7 +190,7 @@ export default function QiblahFinder() {
                 )}
               </div>
             )}
- 
+
             {/* Compass */}
             <div className="flex items-center justify-center mb-8">
               <div className="relative w-72 h-72 sm:w-80 sm:h-80">
@@ -209,7 +209,7 @@ export default function QiblahFinder() {
                   <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm">
                     E
                   </div>
- 
+
                   {/* Degree ticks */}
                   {[...Array(12)].map((_, i) => {
                     const angle = i * 30 - 90;
@@ -229,10 +229,10 @@ export default function QiblahFinder() {
                     );
                   })}
                 </div>
- 
+
                 {/* Inner circle */}
                 <div className="absolute inset-8 rounded-full bg-slate-800/50 border-2 border-slate-700" />
- 
+
                 {/* Qiblah arrow — rotates to the real backend bearing */}
                 {hasResult ? (
                   <div
@@ -257,12 +257,12 @@ export default function QiblahFinder() {
                     </div>
                   </div>
                 )}
- 
+
                 {/* Center dot */}
                 <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white z-10" />
               </div>
             </div>
- 
+
             {/* Result summary */}
             {hasResult && (
               <div className="mb-6 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-center">
@@ -273,7 +273,7 @@ export default function QiblahFinder() {
                 </p>
               </div>
             )}
- 
+
             {/* Primary actions */}
             <div className="space-y-3">
               <Button
@@ -284,7 +284,7 @@ export default function QiblahFinder() {
                 <MapPin className="w-4 h-4 mr-2" />
                 {loading ? "Locating…" : "Use My Current Location"}
               </Button>
- 
+
               <button
                 type="button"
                 onClick={() => setShowManual((v) => !v)}
@@ -292,7 +292,7 @@ export default function QiblahFinder() {
               >
                 {showManual ? "Hide manual entry" : "Enter coordinates manually"}
               </button>
- 
+
               {showManual && (
                 <div className="p-4 rounded-xl bg-slate-800/40 border border-slate-700 space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -320,7 +320,7 @@ export default function QiblahFinder() {
                   </Button>
                 </div>
               )}
- 
+
               {hasResult && (
                 <div className="flex items-center gap-3">
                   <Button
@@ -342,14 +342,14 @@ export default function QiblahFinder() {
                   </label>
                 </div>
               )}
- 
+
               {hasResult && !canSpeak && (
                 <p className="text-slate-500 text-xs text-center">
                   Speech is not available on this device.
                 </p>
               )}
             </div>
- 
+
             {/* Calibration instructions */}
             <div className="mt-8 p-6 bg-slate-800/50 border border-slate-700 rounded-xl">
               <h3 className="text-white mb-3 font-medium">How to use</h3>
@@ -360,7 +360,7 @@ export default function QiblahFinder() {
                 <p>4. Tap “Announce” to hear the direction read aloud.</p>
               </div>
             </div>
- 
+
             {/* Location info */}
             <div className="mt-6 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
               <div className="text-emerald-400 text-sm mb-1">Current Location</div>
