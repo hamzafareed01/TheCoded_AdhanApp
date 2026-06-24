@@ -292,6 +292,19 @@ export default function AlexaSetup() {
               )}
             </div>
 
+            {/* Device naming note — Amazon doesn't share Alexa-app names with skills */}
+            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5 flex items-start gap-3">
+              <Info className="w-5 h-5 text-cyan-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-slate-300 leading-relaxed">
+                <span className="text-slate-100 font-medium">About device names:</span>{" "}
+                Amazon doesn't share the names you set in the Alexa app with third-party
+                skills, so your Echos first appear by type (e.g. "Echo Dot"). You can give
+                them your own names under{" "}
+                <strong className="text-white">Settings → Alexa Devices</strong>, then choose
+                which ones play the Adhan.
+              </div>
+            </div>
+
             {/* Step 2 — wake phrase */}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
               <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">

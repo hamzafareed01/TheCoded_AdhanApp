@@ -706,6 +706,13 @@ export default function Step5DevicesAdhan({
                   Select which devices should announce the Adhan at prayer times.
                 </p>
               </div>
+
+              <div className="mb-4 rounded-xl border border-slate-700/50 bg-slate-800/30 px-4 py-3 text-sm text-slate-300 leading-relaxed">
+                <span className="text-slate-100 font-medium">Note:</span> Amazon
+                doesn&apos;t share the names you set in the Alexa app, so devices appear
+                by type (e.g. &quot;Echo Dot&quot;). You can give them your own names later in{" "}
+                <strong className="text-white">Settings &rarr; Alexa Devices</strong>.
+              </div>
  
               {loading ? (
                 <div className="flex items-center gap-3 p-6 rounded-xl border border-slate-700/50 bg-slate-800/30">

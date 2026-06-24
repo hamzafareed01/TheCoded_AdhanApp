@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { ArrowLeft, Save, CheckCircle2, MoonStar, BellOff, Clock } from "lucide-react";
+import { ArrowLeft, Save, CheckCircle2, MoonStar, BellOff, Clock, Pencil, Check, X } from "lucide-react";
 import {
   apiFetch,
   getStoredAmazonToken,
@@ -552,6 +552,9 @@ export default function Settings({
   const [duas, setDuas] = useState<DuaItem[]>([]);
   const [surahs, setSurahs] = useState<SurahItem[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [editingDeviceName, setEditingDeviceName] = useState("");
+  const [renamingDeviceId, setRenamingDeviceId] = useState<string | null>(null);
   const [speakerGroups, setSpeakerGroups] = useState<SpeakerGroup[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
  
@@ -719,6 +722,42 @@ export default function Settings({
         : (prev.speakerGroupIds ?? []).filter((id) => id !== groupId);
       return { ...prev, speakerGroupIds: next };
     });
+  };
+
+  const startRenameDevice = (deviceId: string, currentName: string) => {
+    setEditingDeviceId(deviceId);
+    setEditingDeviceName(currentName);
+  };
+
+  const cancelRenameDevice = () => {
+    setEditingDeviceId(null);
+    setEditingDeviceName("");
+  };
+
+  const saveRenameDevice = async (deviceId: string) => {
+    const name = editingDeviceName.trim();
+    if (!name) {
+      cancelRenameDevice();
+      return;
+    }
+    setRenamingDeviceId(deviceId);
+    try {
+      const res = await apiFetch("/api/alexa/devices", {
+        method: "POST",
+        body: JSON.stringify({ id: deviceId, name }),
+      });
+      if (res.ok) {
+        // Update the list in place with the new name.
+        setDevices((prev) =>
+          prev.map((d) => (d.id === deviceId ? { ...d, name } : d))
+        );
+      }
+    } catch {
+      /* keep old name on failure */
+    } finally {
+      setRenamingDeviceId(null);
+      cancelRenameDevice();
+    }
   };
 
   const toggleSelectedDevice = (deviceId: string, checked: boolean) => {
@@ -1348,6 +1387,13 @@ export default function Settings({
                     Select devices for Adhan announcements
                   </p>
                 </div>
+
+                <div className="mb-6 rounded-xl border border-slate-700/50 bg-slate-800/30 px-4 py-3 text-sm text-slate-300 leading-relaxed">
+                  <span className="text-slate-100 font-medium">Tip:</span> Amazon doesn't
+                  share the names you set in the Alexa app, so devices first appear by type
+                  (e.g. "Echo Dot"). Rename any device here to recognize it, then tick the
+                  ones that should play the Adhan.
+                </div>
  
                 {devices.length === 0 ? (
                   <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-6">
@@ -1360,10 +1406,13 @@ export default function Settings({
                     {devices.map((device) => {
                       const checked = (settings.selectedAlexaDeviceIds ?? []).includes(device.id);
  
+                      const isEditing = editingDeviceId === device.id;
+                      const isRenaming = renamingDeviceId === device.id;
+
                       return (
-                        <label
+                        <div
                           key={device.id}
-                          className={`flex items-center gap-4 p-5 rounded-xl border-2 cursor-pointer transition-all min-h-[72px] touch-manipulation ${
+                          className={`flex items-center gap-4 p-5 rounded-xl border-2 transition-all min-h-[72px] touch-manipulation ${
                             checked
                               ? "border-emerald-500/50 bg-emerald-500/10"
                               : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
@@ -1376,11 +1425,64 @@ export default function Settings({
                             }
                             className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
                           />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-white font-medium truncate">{device.name}</div>
-                            <div className="text-slate-400 text-sm">Selected for Adhan playback</div>
-                          </div>
-                        </label>
+
+                          {isEditing ? (
+                            <div className="flex-1 min-w-0 flex items-center gap-2">
+                              <Input
+                                value={editingDeviceName}
+                                onChange={(e) => setEditingDeviceName(e.target.value)}
+                                placeholder="Device name"
+                                autoFocus
+                                disabled={isRenaming}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") saveRenameDevice(device.id);
+                                  if (e.key === "Escape") cancelRenameDevice();
+                                }}
+                                className="h-9 bg-slate-900/60 border-slate-600 text-white"
+                              />
+                              <Button
+                                type="button"
+                                size="icon"
+                                onClick={() => saveRenameDevice(device.id)}
+                                disabled={isRenaming}
+                                className="h-9 w-9 bg-emerald-500 hover:bg-emerald-600 flex-shrink-0"
+                                aria-label="Save name"
+                              >
+                                <Check className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                onClick={cancelRenameDevice}
+                                disabled={isRenaming}
+                                className="h-9 w-9 text-slate-400 hover:text-white flex-shrink-0"
+                                aria-label="Cancel"
+                              >
+                                <X className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-white font-medium truncate">{device.name}</div>
+                                <div className="text-slate-400 text-sm">
+                                  {checked ? "Will play the Adhan" : "Not selected"}
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => startRenameDevice(device.id, device.name)}
+                                className="h-9 w-9 text-slate-400 hover:text-white flex-shrink-0"
+                                aria-label="Rename device"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       );
                     })}
                   </div>

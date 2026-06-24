@@ -257,7 +257,9 @@ const allowedOrigins = corsOriginsRaw
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
-    if (allowedOrigins.length === 0) return cb(null, true);
+    if (allowedOrigins.length === 0) {
+      return cb(new Error("CORS not configured (CORS_ORIGINS missing)"), false);
+    }
  
     const normalizedOrigin = normalizeOrigin(origin);
     if (normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) {
@@ -1307,12 +1309,16 @@ const APP_SESSION_PREFIX = "adhapp_";
 const DEFAULT_APP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
  
 function getAppSessionSecret() {
-  return String(
+  const secret =
     process.env.APP_SESSION_SECRET ||
-      process.env.ALEXA_APP_LINK_STATE_SECRET ||
-      process.env.ALEXA_OAUTH_CLIENT_SECRET ||
-      "adhannow-dev-session-secret"
-  );
+    process.env.ALEXA_APP_LINK_STATE_SECRET ||
+    process.env.ALEXA_OAUTH_CLIENT_SECRET;
+  if (!secret || String(secret).length < 16) {
+    throw new Error(
+      "APP_SESSION_SECRET is not configured (or too short). Refusing to sign sessions with a default secret."
+    );
+  }
+  return String(secret);
 }
  
 function getAppSessionTtlMs() {
