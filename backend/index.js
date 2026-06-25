@@ -45,6 +45,10 @@ const {
 const {
   triggerPrayerDoorbell,
 } = require("./services/alexaProactiveEvents");
+const {
+  handleAcceptGrant,
+  hasAsyncGrant,
+} = require("./services/alexaEventGateway");
  
 const app = express();
 app.set("trust proxy", 1);
@@ -2650,6 +2654,9 @@ app.get(
       accountLinkStatus: enablement?.data?.accountLink?.status || (status.linked ? "LINKED" : "NOT_LINKED"),
       endpointHost: enablement?.endpointHost || tokenRecord?.endpointHost || null,
       customerUserId: enablement?.data?.user?.id || tokenRecord?.customerUserId || null,
+      // True once the Smart Home AcceptGrant has run — i.e. the virtual prayer
+      // doorbell is authorized to fire proactive events at prayer time.
+      smartHomeAuthorized: await hasAsyncGrant(pool, userId),
       ...status,
     });
   })
@@ -3045,6 +3052,40 @@ app.post(
   })
 );
  
+// AcceptGrant — captures the alexa::async_event:write token the Event Gateway
+// requires for proactive DoorbellPress events. The Smart Home Lambda forwards
+// the Alexa.Authorization / AcceptGrant directive here. The user is identified
+// from the grantee token (AdhanNow-issued skill access token), NOT a header
+// bearer, so this route does not use requireAlexaSkillAuth.
+app.post(
+  "/api/alexa/smart-home/accept-grant",
+  asyncHandler(async (req, res) => {
+    const directive = req.body?.directive || req.body;
+    const name = directive?.header?.name;
+    const namespace = directive?.header?.namespace;
+
+    if (namespace !== "Alexa.Authorization" || name !== "AcceptGrant") {
+      return res.status(400).json({ error: "Expected an Alexa.Authorization AcceptGrant directive." });
+    }
+
+    const pool = await getPool();
+    await handleAcceptGrant(pool, directive);
+
+    // Amazon expects an AcceptGrant.Response on success.
+    res.json({
+      event: {
+        header: {
+          namespace: "Alexa.Authorization",
+          name: "AcceptGrant.Response",
+          messageId: crypto.randomUUID(),
+          payloadVersion: "3",
+        },
+        payload: {},
+      },
+    });
+  })
+);
+ 
 app.get(
   "/api/alexa/skill/prayer-times",
   requireAlexaSkillAuth,
@@ -3127,6 +3168,87 @@ app.post(
  
       throw err;
     }
+  })
+);
+ 
+// due-now — returns the playback plan for the prayer that is due right now.
+// Called by the custom skill Lambda on a plain LaunchRequest, which is what a
+// doorbell-triggered Alexa Routine ("open AdhanNow") produces. Picks the prayer
+// whose fire time is closest to now within a window, preferring the most recent.
+app.get(
+  "/api/alexa/skill/due-now",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool = await getPool();
+    const userId = req.skillAuth.userId;
+    const deviceId = req.query.deviceId ? String(req.query.deviceId).trim() : undefined;
+    const windowMinutes = Math.min(
+      120,
+      Math.max(5, Number(req.query.windowMinutes) || 45)
+    );
+    const now = Date.now();
+    const windowMs = windowMinutes * 60 * 1000;
+
+    // Prefer the pre-computed daily schedule (same source the doorbell fires from).
+    const today = new Date().toISOString().slice(0, 10);
+    const scheduleResult = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("date", sql.Date, today)
+      .query(`
+        SELECT prayer_name, fire_at_utc
+        FROM dbo.daily_prayer_schedule
+        WHERE user_id = @user_id AND schedule_date = @date
+      `);
+
+    let best = null;
+    for (const row of scheduleResult.recordset || []) {
+      const fireMs = new Date(row.fire_at_utc).getTime();
+      const diff = now - fireMs; // positive = prayer already passed
+      const absDiff = Math.abs(diff);
+      if (absDiff > windowMs) continue;
+      // Prefer the most recent past prayer; break ties by closeness.
+      const score = diff >= 0 ? absDiff : absDiff + windowMs;
+      if (!best || score < best.score) {
+        best = { prayerName: String(row.prayer_name).toLowerCase(), score };
+      }
+    }
+
+    // Fallback: compute today's times if the schedule cache is empty.
+    if (!best) {
+      try {
+        const { profile, prayers } = await getUserProfileAndPrayersByUserId(pool, userId);
+        const prayerData = await computePrayerTimesForProfile(profile, prayers, new Date());
+        const times24 = prayerData.prayers24 || {};
+        for (const prayer of PRAYERS) {
+          const hhmm = times24[prayer];
+          if (!hhmm) continue;
+          const [hh, mm] = hhmm.split(":").map(Number);
+          const d = new Date();
+          const fireMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hh, mm, 0);
+          const diff = now - fireMs;
+          const absDiff = Math.abs(diff);
+          if (absDiff > windowMs) continue;
+          const score = diff >= 0 ? absDiff : absDiff + windowMs;
+          if (!best || score < best.score) best = { prayerName: prayer, score };
+        }
+      } catch {
+        /* fall through to not-due */
+      }
+    }
+
+    if (!best) {
+      return res.json({ due: false });
+    }
+
+    const plan = await resolvePrayerPlaybackPlan(pool, {
+      userId,
+      prayerName: best.prayerName,
+      req,
+      deviceId,
+    });
+
+    res.json({ due: true, prayerName: best.prayerName, ...plan });
   })
 );
  

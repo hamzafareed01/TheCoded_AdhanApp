@@ -85,11 +85,15 @@ async function sendDoorbellChangeReport(amazonToken, endpointId, userId) {
 /**
  * Send doorbell trigger for a specific prayer for a user.
  * Called by the prayer scheduler at prayer time.
+ *
+ * Uses the AcceptGrant-derived async-event token (alexa::async_event:write) —
+ * the only credential Amazon's Event Gateway accepts for proactive events.
+ * The legacy Login-with-Amazon profile token does NOT work here.
  */
 async function triggerPrayerDoorbell(pool, userId) {
   try {
-    const amazonToken = await getUserAmazonToken(pool, userId);
-    await sendDoorbellChangeReport(amazonToken, VIRTUAL_DOORBELL_ID, userId);
+    const { sendDoorbellEvent } = require('./alexaEventGateway');
+    await sendDoorbellEvent(pool, userId, VIRTUAL_DOORBELL_ID);
     return { ok: true };
   } catch (err) {
     console.error(`[alexaProactiveEvents] Failed for user ${userId}:`, err.message);

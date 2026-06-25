@@ -19,13 +19,6 @@ import {
   subscribeToAmazonAuthChanges,
 } from "../../lib/api";
 
-type Template = {
-  id: string;
-  title: string;
-  routineName: string;
-  phrase: string;
-};
-
 type LinkStatus = {
   configured?: boolean;
   appLinkClientConfigured?: boolean;
@@ -34,40 +27,8 @@ type LinkStatus = {
   invocationName?: string | null;
   enablementStatus?: string | null;
   accountLinkStatus?: string | null;
+  smartHomeAuthorized?: boolean;
 };
-
-const FALLBACK_TEMPLATES: Template[] = [
-  {
-    id: "fajr",
-    title: "Fajr Adhan",
-    routineName: "Adhan Now – Fajr Adhan",
-    phrase: "open adhan now and play fajr adhan",
-  },
-  {
-    id: "dhuhr",
-    title: "Dhuhr Adhan",
-    routineName: "Adhan Now – Dhuhr Adhan",
-    phrase: "open adhan now and play dhuhr adhan",
-  },
-  {
-    id: "asr",
-    title: "Asr Adhan",
-    routineName: "Adhan Now – Asr Adhan",
-    phrase: "open adhan now and play asr adhan",
-  },
-  {
-    id: "maghrib",
-    title: "Maghrib Adhan",
-    routineName: "Adhan Now – Maghrib Adhan",
-    phrase: "open adhan now and play maghrib adhan",
-  },
-  {
-    id: "isha",
-    title: "Isha Adhan",
-    routineName: "Adhan Now – Isha Adhan",
-    phrase: "open adhan now and play isha adhan",
-  },
-];
 
 type StatusTone = "success" | "warning" | "info";
 
@@ -122,7 +83,6 @@ export default function AlexaSetup() {
     !!getStoredAmazonToken()
   );
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [templates, setTemplates] = useState<Template[]>(FALLBACK_TEMPLATES);
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -156,18 +116,7 @@ export default function AlexaSetup() {
     setLoading(true);
     setError(null);
     try {
-      const [templatesRes, statusRes] = await Promise.all([
-        apiFetch("/api/alexa/routines/templates"),
-        apiFetch("/api/alexa/account-linking/status"),
-      ]);
-
-      if (templatesRes.ok) {
-        const payload = (await templatesRes.json()) as { templates?: Template[] };
-        if (Array.isArray(payload.templates) && payload.templates.length > 0) {
-          setTemplates(payload.templates);
-        }
-      }
-
+      const statusRes = await apiFetch("/api/alexa/account-linking/status");
       if (statusRes.ok) {
         setStatus((await statusRes.json()) as LinkStatus);
       }
@@ -189,6 +138,8 @@ export default function AlexaSetup() {
   const isSkillLinked = status?.accountLinkStatus === "LINKED";
   const isEnabled = status?.enablementStatus === "ENABLED";
   const invocationName = status?.invocationName || "adhan now";
+  const isAutomationReady = !!status?.smartHomeAuthorized;
+  const launchPhrase = `open ${invocationName}`;
 
   return (
     <div
@@ -276,6 +227,11 @@ export default function AlexaSetup() {
                   tone={isEnabled ? "success" : "warning"}
                 />
                 <StatusRow
+                  label="Automatic Adhan (Prayer Doorbell)"
+                  value={isAutomationReady ? "Authorized" : "Not authorized yet"}
+                  tone={isAutomationReady ? "success" : "warning"}
+                />
+                <StatusRow
                   label="Invocation name"
                   value={`"${invocationName}"`}
                   tone="info"
@@ -334,7 +290,7 @@ export default function AlexaSetup() {
               </div>
             </div>
 
-            {/* Step 3 — routines */}
+            {/* Step 2 — enable Smart Home skill so the doorbell appears */}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
               <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
                 <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
@@ -342,69 +298,112 @@ export default function AlexaSetup() {
                 </div>
                 <div>
                   <div className="text-slate-100 font-semibold">
-                    Create Alexa Routines for automatic Adhan
+                    Enable the AdhanNow Smart Home skill
                   </div>
                   <div className="text-slate-400 text-sm">
-                    One routine per prayer — set once, plays daily
+                    This adds the virtual Prayer Doorbell that triggers Adhan
                   </div>
                 </div>
               </div>
               <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed space-y-3">
                 <ol className="list-decimal ml-4 space-y-2 text-slate-300">
-                  <li>Open the <strong className="text-white">Alexa app</strong> on your phone</li>
-                  <li>Go to <strong className="text-white">More → Routines → +</strong></li>
-                  <li>Set the trigger: choose <strong className="text-white">Schedule → At time</strong> and enter the prayer time</li>
-                  <li>Add action: tap <strong className="text-white">Add action → Alexa Says → Customized</strong></li>
-                  <li>Paste one of the phrases below</li>
-                  <li>Under <strong className="text-white">From</strong>, select your Echo device</li>
-                  <li>Save — repeat for each prayer</li>
+                  <li>Open the <strong className="text-white">Alexa app</strong> → <strong className="text-white">More → Skills &amp; Games</strong></li>
+                  <li>Search <strong className="text-white">AdhanNow</strong>, open the <strong className="text-white">Smart Home</strong> skill, and tap <strong className="text-white">Enable / Link Account</strong></li>
+                  <li>When prompted, sign in so AdhanNow is authorized to ring the doorbell</li>
+                  <li>Tap <strong className="text-white">Discover Devices</strong> — the <strong className="text-white">AdhanNow Prayer Doorbell</strong> will appear</li>
                 </ol>
+                {!isAutomationReady && (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span>
+                      Automatic Adhan shows <strong>Not authorized yet</strong> above until you
+                      finish enabling and linking this Smart Home skill. Tap{" "}
+                      <strong>Refresh status</strong> afterward.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Step 3 — one doorbell routine for all prayers */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+              <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+                <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
+                  3
+                </div>
+                <div>
+                  <div className="text-slate-100 font-semibold">
+                    Create one Prayer Doorbell routine
+                  </div>
+                  <div className="text-slate-400 text-sm">
+                    Set it once — it covers all five prayers, every day
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed space-y-3">
+                <ol className="list-decimal ml-4 space-y-2 text-slate-300">
+                  <li>In the Alexa app go to <strong className="text-white">More → Routines → +</strong></li>
+                  <li>Tap <strong className="text-white">When this happens → Smart Home</strong> and choose <strong className="text-white">AdhanNow Prayer Doorbell</strong></li>
+                  <li>Tap <strong className="text-white">Add action → Custom</strong> and paste the phrase below</li>
+                  <li>Under <strong className="text-white">Device</strong>, pick the Echo that should play the Adhan</li>
+                  <li>Save. AdhanNow rings the doorbell at each prayer time and the skill plays that prayer's Adhan</li>
+                </ol>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5 font-mono text-sm text-slate-100 select-all break-words">
+                  {launchPhrase}
+                </div>
+                <Button
+                  variant="secondary"
+                  className="w-full min-h-[44px] touch-manipulation active:opacity-80"
+                  onClick={() => copy(launchPhrase, "launch")}
+                >
+                  {copiedId === "launch" ? (
+                    <span className="inline-flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Copied
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-2">
+                      <Copy className="w-4 h-4" /> Copy phrase
+                    </span>
+                  )}
+                </Button>
                 <div className="rounded-xl border border-slate-700 bg-slate-950/40 px-4 py-3 text-xs text-slate-400 flex items-start gap-2">
                   <Info className="w-4 h-4 text-slate-300 flex-shrink-0 mt-0.5" />
                   <span>
-                    <strong className="text-slate-300">Tip:</strong> Run each routine
-                    manually once after saving to confirm it's working correctly.
+                    Want multiple rooms? Add more devices to the same routine, or duplicate
+                    it and pick a different Echo. You still only need this one trigger.
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Routine phrase templates */}
-            <div>
-              <h2 className="text-slate-100 font-semibold text-base mb-3">Routine phrases</h2>
-              <p className="text-slate-400 text-sm mb-4">
-                Copy the phrase for each prayer and paste it into the Alexa Routine action.
-              </p>
-              <div className="grid sm:grid-cols-2 gap-3">
-                {templates.map((t) => (
-                  <div
-                    key={t.id}
-                    className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4"
-                  >
-                    <div className="text-slate-100 font-medium text-sm mb-1">{t.title}</div>
-                    <div className="text-slate-500 text-xs mb-3">
-                      Routine name: <span className="text-slate-400">{t.routineName}</span>
-                    </div>
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5 font-mono text-sm text-slate-100 select-all mb-3 break-words">
-                      {t.phrase}
-                    </div>
-                    <Button
-                      variant="secondary"
-                      className="w-full min-h-[44px] touch-manipulation active:opacity-80"
-                      onClick={() => copy(t.phrase, t.id)}
-                    >
-                      {copiedId === t.id ? (
-                        <span className="inline-flex items-center gap-2">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Copied
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-2">
-                          <Copy className="w-4 h-4" /> Copy phrase
-                        </span>
-                      )}
-                    </Button>
+            {/* Step 4 — silence the doorbell chime */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+              <div className="flex items-center gap-4 px-5 py-4 border-b border-slate-800">
+                <div className="flex items-center justify-center w-8 h-8 rounded-full bg-slate-700 text-slate-300 text-sm font-bold flex-shrink-0">
+                  4
+                </div>
+                <div>
+                  <div className="text-slate-100 font-semibold">
+                    Silence the doorbell announcement
                   </div>
-                ))}
+                  <div className="text-slate-400 text-sm">
+                    So you hear only the Adhan, not a chime first
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 py-4 text-sm text-slate-300 leading-relaxed space-y-3">
+                <ol className="list-decimal ml-4 space-y-2 text-slate-300">
+                  <li>In the Alexa app go to <strong className="text-white">Devices → AdhanNow Prayer Doorbell</strong></li>
+                  <li>Open its settings and turn off <strong className="text-white">Announcements</strong> / doorbell press notifications</li>
+                </ol>
+                <div className="rounded-xl border border-slate-700 bg-slate-950/40 px-4 py-3 text-xs text-slate-400 flex items-start gap-2">
+                  <Info className="w-4 h-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                  <span>
+                    <strong className="text-slate-300">Test it:</strong> set any prayer a
+                    couple of minutes ahead in AdhanNow, then watch the chosen Echo play the
+                    Adhan automatically.
+                  </span>
+                </div>
               </div>
             </div>
 
