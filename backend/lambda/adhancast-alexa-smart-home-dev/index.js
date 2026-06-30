@@ -75,6 +75,48 @@ exports.handler = async (event) => {
   try {
     const directive = event?.directive || {};
     const header = directive.header || {};
+
+    // AcceptGrant carries its credentials at payload.grantee.token (not the
+    // endpoint scope), so it must be handled before the access-token check below.
+    // Forward the FULL directive — preserving payload.grant.code and
+    // payload.grantee.token — to the backend, which exchanges the code for the
+    // alexa::async_event:write token used to ring the prayer doorbell.
+    if (header.namespace === 'Alexa.Authorization' && header.name === 'AcceptGrant') {
+      try {
+        const data = await requestJson('POST', '/api/alexa/smart-home/accept-grant', '', { directive });
+        if (data?.event?.header?.name === 'AcceptGrant.Response') {
+          return data;
+        }
+        return {
+          event: {
+            header: {
+              namespace: 'Alexa.Authorization',
+              name: 'AcceptGrant.Response',
+              payloadVersion: '3',
+              messageId: header.messageId || `grant-${Date.now()}`,
+            },
+            payload: {},
+          },
+        };
+      } catch (err) {
+        console.error('AcceptGrant forward failed:', err);
+        return {
+          event: {
+            header: {
+              namespace: 'Alexa.Authorization',
+              name: 'ErrorResponse',
+              payloadVersion: '3',
+              messageId: header.messageId || `grant-err-${Date.now()}`,
+            },
+            payload: {
+              type: 'ACCEPT_GRANT_FAILED',
+              message: String(err?.message || 'Failed to store AcceptGrant.'),
+            },
+          },
+        };
+      }
+    }
+
     const accessToken = getAccessToken(event);
     if (!accessToken) {
       return buildErrorResponse(event, 'INVALID_AUTHORIZATION_CREDENTIAL', 'Missing smart-home access token.');

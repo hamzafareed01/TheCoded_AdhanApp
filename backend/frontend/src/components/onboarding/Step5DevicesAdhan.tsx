@@ -713,6 +713,99 @@ export default function Step5DevicesAdhan({
                 by type (e.g. &quot;Echo Dot&quot;). You can give them your own names later in{" "}
                 <strong className="text-white">Settings &rarr; Alexa Devices</strong>.
               </div>
+
+              {/* Manual steps required to make the Adhan play automatically.
+                  Amazon does not allow apps to create Alexa Routines programmatically,
+                  so the user must complete these once in the Alexa app. */}
+              <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-5">
+                <h3 className="text-white text-sm font-semibold mb-1">
+                  Make the Adhan play automatically
+                </h3>
+                <p className="text-slate-400 text-xs leading-relaxed mb-4">
+                  Amazon doesn&apos;t let apps create Alexa Routines for you, so do
+                  these three steps once in the Alexa app. After that, every prayer
+                  plays on its own.
+                </p>
+
+                <ol className="space-y-4">
+                  <li className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white text-xs font-semibold">
+                      1
+                    </span>
+                    <div className="text-sm text-slate-300 leading-relaxed">
+                      <span className="text-white font-medium">
+                        Enable the AdhanNow Smart Home skill.
+                      </span>{" "}
+                      In the Alexa app, open{" "}
+                      <strong className="text-white">
+                        More &rarr; Skills &amp; Games
+                      </strong>
+                      , search <em>AdhanNow</em>, open the{" "}
+                      <strong className="text-white">Smart Home</strong> skill, and tap{" "}
+                      <strong className="text-white">Enable</strong> (link your account
+                      if prompted).
+                    </div>
+                  </li>
+
+                  <li className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white text-xs font-semibold">
+                      2
+                    </span>
+                    <div className="text-sm text-slate-300 leading-relaxed">
+                      <span className="text-white font-medium">Discover devices.</span>{" "}
+                      Go to{" "}
+                      <strong className="text-white">
+                        Devices &rarr; + &rarr; Add Device
+                      </strong>{" "}
+                      and run{" "}
+                      <strong className="text-white">Discover devices</strong> (or say
+                      &quot;Alexa, discover devices&quot;). This adds the{" "}
+                      <strong className="text-white">AdhanNow Prayer Doorbell</strong>{" "}
+                      that triggers the Adhan.
+                    </div>
+                  </li>
+
+                  <li className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white text-xs font-semibold">
+                      3
+                    </span>
+                    <div className="text-sm text-slate-300 leading-relaxed">
+                      <span className="text-white font-medium">
+                        Create one Routine.
+                      </span>{" "}
+                      Open{" "}
+                      <strong className="text-white">
+                        More &rarr; Routines &rarr; +
+                      </strong>
+                      , then set:
+                      <ul className="mt-2 space-y-1 list-disc pl-5 text-slate-400">
+                        <li>
+                          <strong className="text-white">When this happens</strong> &rarr;{" "}
+                          <strong className="text-white">Smart Home</strong> &rarr;{" "}
+                          <strong className="text-white">
+                            AdhanNow Prayer Doorbell
+                          </strong>
+                        </li>
+                        <li>
+                          <strong className="text-white">Add action</strong> &rarr;{" "}
+                          <strong className="text-white">Skills</strong> &rarr;{" "}
+                          <strong className="text-white">open AdhanNow</strong> on the
+                          device you selected above
+                        </li>
+                      </ul>
+                      <span className="mt-2 block">
+                        Save the Routine. You only need one — it covers every prayer.
+                      </span>
+                    </div>
+                  </li>
+                </ol>
+
+                <p className="text-slate-500 text-xs leading-relaxed mt-4">
+                  Need the full walkthrough (including silencing the doorbell chime)?
+                  Open <strong className="text-slate-300">Settings &rarr; Alexa Setup</strong>{" "}
+                  any time.
+                </p>
+              </div>
  
               {loading ? (
                 <div className="flex items-center gap-3 p-6 rounded-xl border border-slate-700/50 bg-slate-800/30">
