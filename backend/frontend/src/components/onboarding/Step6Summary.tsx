@@ -8,7 +8,7 @@ import { apiFetch, getStoredAmazonToken } from "../../lib/api";
  
 type PrayerName = "fajr" | "dhuhr" | "asr" | "maghrib" | "isha";
 type AfterType = "none" | "dua" | "surah";
- 
+//Trigger commment. delete later. 
 type JsonRecord = Record<string, unknown>;
  
 type QuietHours = {
