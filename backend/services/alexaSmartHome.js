@@ -273,12 +273,14 @@ async function loadSmartHomeContext(pool, userId) {
   const devicesResult = await pool
     .request()
     .input("user_id", sql.UniqueIdentifier, userId)
-    .query(`
-      SELECT device_id, name, platform, enabled
-      FROM dbo.devices
-      WHERE user_id = @user_id
-      ORDER BY created_at DESC
-    `);
+.query(
+    `
+SELECT device_id, device_name AS name, platform, enabled
+FROM dbo.devices
+WHERE user_id = @user_id
+ORDER BY created_at DESC
+    `
+);
 
   return {
     profile: profileResult.recordset[0] || {},
