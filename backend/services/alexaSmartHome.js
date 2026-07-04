@@ -259,6 +259,11 @@ function buildStateForEndpoint(profile = {}, devices = [], endpointId) {
     return [connectivity, makeProp("Alexa.PowerController", "powerState", enabled ? "ON" : "OFF")];
   }
 
+    if (endpointId === ENDPOINT_IDS.doorbell) {
+    // Doorbell is momentary — no retrievable state. Report health only.
+    return [connectivity];
+  }
+
   const err = new Error(`Unsupported endpointId: ${endpointId}`);
   err.status = 404;
   throw err;
