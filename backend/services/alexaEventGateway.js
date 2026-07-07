@@ -186,30 +186,26 @@ async function getValidAccessToken(pool, userId) {
  * Identifies the user via the grantee token (AdhanNow-issued skill access token).
  */
 async function handleAcceptGrant(pool, directive) {
+  console.log('[AG] handleAcceptGrant entered');                                  // ← 1
   const payload = directive?.payload || {};
   const code = payload?.grant?.code;
   const granteeToken = payload?.grantee?.token;
+  console.log('[AG] code present:', !!code, '| grantee present:', !!granteeToken); // ← 2
 
-  if (!code) {
-    const err = new Error('AcceptGrant directive missing grant.code.');
-    err.status = 400;
-    throw err;
-  }
-  if (!granteeToken) {
-    const err = new Error('AcceptGrant directive missing grantee.token.');
-    err.status = 400;
-    throw err;
-  }
+  if (!code) { const e = new Error('AcceptGrant missing grant.code.'); e.status = 400; throw e; }
+  if (!granteeToken) { const e = new Error('AcceptGrant missing grantee.token.'); e.status = 400; throw e; }
 
   const { authenticateAlexaSkillAccessToken } = require('./alexaOauth');
   const auth = await authenticateAlexaSkillAccessToken(pool, granteeToken);
-  if (!auth?.userId) {
-    const err = new Error('AcceptGrant grantee token did not match a linked AdhanNow user.');
-    err.status = 401;
-    throw err;
-  }
+  console.log('[AG] grantee resolved to userId:', auth?.userId || 'NULL');        // ← 3
+
+  if (!auth?.userId) { const e = new Error('AcceptGrant grantee token did not match a linked user.'); e.status = 401; throw e; }
+
+  const creds = getMessagingCredentials();
+  console.log('[AG] messaging creds configured:', creds.configured);              // ← 4
 
   await exchangeAcceptGrantCode(pool, auth.userId, code);
+  console.log('[AG] token stored for user:', auth.userId);                        // ← 5
   return { ok: true, userId: auth.userId };
 }
 

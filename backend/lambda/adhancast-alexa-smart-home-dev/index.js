@@ -1,4 +1,4 @@
-// \adhancast-alexa-smart-home-dev\index.js
+// adhancast-alexa-smart-home-dev\index.js
 const API_BASE = String(process.env.API_BASE_URL || process.env.BACKEND_BASE_URL || '').replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 7000;
 
@@ -76,14 +76,25 @@ exports.handler = async (event) => {
     const directive = event?.directive || {};
     const header = directive.header || {};
 
+    // ── INSTRUMENTATION ──
+    console.log('[SH] directive received:', JSON.stringify({
+      namespace: header.namespace,
+      name: header.name,
+      hasGrantCode: !!directive?.payload?.grant?.code,
+      hasGranteeToken: !!directive?.payload?.grantee?.token,
+    }));
+    // ─────────────────────
     // AcceptGrant carries its credentials at payload.grantee.token (not the
     // endpoint scope), so it must be handled before the access-token check below.
     // Forward the FULL directive — preserving payload.grant.code and
     // payload.grantee.token — to the backend, which exchanges the code for the
     // alexa::async_event:write token used to ring the prayer doorbell.
     if (header.namespace === 'Alexa.Authorization' && header.name === 'AcceptGrant') {
+      console.log('[SH] AcceptGrant branch entered — forwarding to backend');   // ← ADD
       try {
         const data = await requestJson('POST', '/api/alexa/smart-home/accept-grant', '', { directive });
+        console.log('[SH] accept-grant backend responded OK');                   // ← ADD
+        // ...existing return...
         if (data?.event?.header?.name === 'AcceptGrant.Response') {
           return data;
         }
