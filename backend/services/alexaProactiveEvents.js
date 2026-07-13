@@ -97,7 +97,7 @@ async function triggerPrayerDoorbell(pool, userId) {
     return { ok: true };
   } catch (err) {
     console.error(`[alexaProactiveEvents] Failed for user ${userId}:`, err.message);
-    return { ok: false, error: err.message };
+    return { ok: false, code: err.code || null, error: err.message };
   }
 }
 

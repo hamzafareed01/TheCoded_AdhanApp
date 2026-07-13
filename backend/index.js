@@ -3190,15 +3190,17 @@ app.get(
     const windowMs = windowMinutes * 60 * 1000;
 
     // Prefer the pre-computed daily schedule (same source the doorbell fires from).
-    const today = new Date().toISOString().slice(0, 10);
+    // Query by the UTC fire window, not schedule_date — schedule_date is the
+    // user's local date and a server-UTC date filter misses near midnight.
     const scheduleResult = await pool
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
-      .input("date", sql.Date, today)
+      .input("start", sql.DateTime2, new Date(now - windowMs))
+      .input("end", sql.DateTime2, new Date(now + windowMs))
       .query(`
         SELECT prayer_name, fire_at_utc
         FROM dbo.daily_prayer_schedule
-        WHERE user_id = @user_id AND schedule_date = @date
+        WHERE user_id = @user_id AND fire_at_utc BETWEEN @start AND @end
       `);
 
     let best = null;
@@ -4705,23 +4707,12 @@ app.post(
         WHERE user_id = @user_id
       `);
 
-    // Attempt automatic routine creation via Amazon Behaviors API
+    // Amazon's Behaviors API does not allow third-party routine creation
+    // (always 404s — see alexaRoutineCreator.js). Don't call it: the doorbell +
+    // user-created routine is the supported path. Keep the manual-activation flow.
     let routineResult = null;
-    let activationRequired = false;
+    const activationRequired = true;
     let activationPhrase = process.env.ALEXA_SKILL_INVOCATION_NAME || "adhan now";
-
-    try {
-      routineResult = await createPrayerRoutines(pool, userId, prayerTimes, timezone);
-
-      if (routineResult.unsupported) {
-        // Behaviors API not available — user needs to say activation phrase once
-        activationRequired = true;
-      }
-    } catch (err) {
-      console.error("[onboarding/complete] Routine creation failed:", err.message);
-      // Non-fatal — fall back to manual activation
-      activationRequired = true;
-    }
 
     const prayerCount = routineResult?.created?.length || 0;
 
@@ -4743,6 +4734,7 @@ app.post(
 // ─── Automation: enable / disable ────────────────────────────────────────────
 app.post(
   "/api/alexa/skill/automation/enable",
+  requireAlexaSkillAuth,
   asyncHandler(async (req, res) => {
     const pool    = await getPool();
     const userId  = req.skillAuth.userId;
@@ -4772,12 +4764,37 @@ app.post(
 
   const PRAYERS = ["fajr", "dhuhr", "asr", "maghrib", "isha"];
 
+  // Convert a wall-clock time (HH:MM on the user's LOCAL date, in tz) to the
+  // correct UTC instant. Two Intl iterations converge across DST boundaries.
+  function tzWallClockToUtc(tz, y, mo /*1-12*/, d, hh, mm) {
+    const desired = Date.UTC(y, mo - 1, d, hh, mm, 0);
+    let guess = new Date(desired);
+    for (let i = 0; i < 2; i++) {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      }).formatToParts(guess);
+      const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+      const asWallUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
+      guess = new Date(guess.getTime() + (desired - asWallUtc));
+    }
+    return guess;
+  }
+
+  // The user's CURRENT local date in tz (may differ from the server's UTC date).
+  function localDateParts(tz, at = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(at);
+    const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+    return { y: get("year"), mo: get("month"), d: get("day") };
+  }
+
   // Populate daily_prayer_schedule for all active users — runs once at startup + midnight
   async function populateDailySchedule() {
     let pool;
     try {
       pool = await getPool();
-      const today = new Date().toISOString().slice(0, 10);
 
       // Get all active users with their prayer settings
       const users = await pool.request().query(`
@@ -4798,31 +4815,31 @@ app.post(
           const times24 = prayerData.prayers24 || {};
           const tz = profile.timezone || "Etc/UTC";
 
+          // Use the USER'S local date — prayer times are computed for their day,
+          // which near midnight boundaries differs from the server's UTC date.
+          const { y, mo, d } = localDateParts(tz);
+          const localDateStr = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+
           for (const prayer of PRAYERS) {
             const timeHHMM = times24[prayer];
             if (!timeHHMM) continue;
 
-            // Convert prayer time to UTC
             const [hh, mm] = timeHHMM.split(":").map(Number);
-            const local = new Date(`${today}T${String(hh).padStart(2,"0")}:${String(mm).padStart(2,"0")}:00`);
-            const formatter = new Intl.DateTimeFormat("en-US", {
-              timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
-              hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-            });
-            // Use the DB to do the timezone conversion safely
-            const utcStr = new Date(
-              Date.UTC(local.getFullYear(), local.getMonth(), local.getDate(), hh, mm, 0)
-            ).toISOString();
+            // Convert the user's local wall-clock prayer time to the true UTC instant.
+            // (Previous code stored local HH:MM as if it were UTC — hours off.)
+            const fireAtUtc = tzWallClockToUtc(tz, y, mo, d, hh, mm);
 
             await pool.request()
               .input("user_id",     sql.UniqueIdentifier, user.user_id)
-              .input("date",        sql.Date,             today)
+              .input("date",        sql.Date,             localDateStr)
               .input("prayer",      sql.NVarChar(10),     prayer)
-              .input("fire_at_utc", sql.DateTime2,        new Date(utcStr))
+              .input("fire_at_utc", sql.DateTime2,        fireAtUtc)
               .query(`
                 MERGE dbo.daily_prayer_schedule AS t
                 USING (SELECT @user_id u, @date d, @prayer p) AS s
                 ON t.user_id = s.u AND t.schedule_date = s.d AND t.prayer_name = s.p
+                WHEN MATCHED AND t.notif_sent = 0 THEN
+                  UPDATE SET fire_at_utc = @fire_at_utc
                 WHEN NOT MATCHED THEN
                   INSERT (user_id, schedule_date, prayer_name, fire_at_utc)
                   VALUES (@user_id, @date, @prayer, @fire_at_utc);
@@ -4842,8 +4859,11 @@ app.post(
     try {
       pool = await getPool();
       const now = new Date();
-      const windowStart = new Date(now.getTime() - 30000);  // 30s ago
-      const windowEnd   = new Date(now.getTime() + 30000);  // 30s ahead
+      // Catch-up window: anything due in the last 10 min and not yet sent still
+      // fires (covers deploys/restarts and cron hiccups). A slightly late Adhan
+      // beats a silently skipped one. 30s lookahead for clock skew.
+      const windowStart = new Date(now.getTime() - 10 * 60 * 1000);
+      const windowEnd   = new Date(now.getTime() + 30000);
 
       // Get due entries not yet sent
       const due = await pool.request()
@@ -4860,16 +4880,29 @@ app.post(
         `);
 
       for (const row of due.recordset || []) {
+        // Claim the row FIRST (atomic) so overlapping runs / scaled-out
+        // instances can't double-ring the doorbell for the same prayer.
+        const claim = await pool.request()
+          .input("id", sql.UniqueIdentifier, row.id)
+          .query("UPDATE dbo.daily_prayer_schedule SET notif_sent = 1 WHERE id = @id AND notif_sent = 0");
+        if (!claim.rowsAffected || claim.rowsAffected[0] === 0) continue; // someone else claimed it
+
         // Phone notifications are handled locally by the app (local-notifications)
         // Backend only triggers Alexa virtual doorbell here
-        try {
-          await triggerPrayerDoorbell(pool, row.user_id);
-        } catch { /* non-fatal */ }
+        const result = await triggerPrayerDoorbell(pool, row.user_id);
 
-        // Mark as sent
-        await pool.request()
-          .input("id", sql.UniqueIdentifier, row.id)
-          .query("UPDATE dbo.daily_prayer_schedule SET notif_sent = 1, alexa_sent = 1 WHERE id = @id");
+        if (result.ok) {
+          await pool.request()
+            .input("id", sql.UniqueIdentifier, row.id)
+            .query("UPDATE dbo.daily_prayer_schedule SET alexa_sent = 1 WHERE id = @id");
+        } else if (result.code !== "NO_ASYNC_GRANT" && result.code !== "ASYNC_GRANT_EXPIRED") {
+          // Transient failure (network, 5xx): release the claim so the next
+          // minute retries within the 10-min window. Permanent token absence
+          // stays claimed — retrying can't help until the user (re)links.
+          await pool.request()
+            .input("id", sql.UniqueIdentifier, row.id)
+            .query("UPDATE dbo.daily_prayer_schedule SET notif_sent = 0 WHERE id = @id");
+        }
       }
 
     } catch (err) {

@@ -131,7 +131,7 @@ function audioResponse({
   return textResponse(suppressSpeech ? "" : speechText, {
     card: {
       type: "Simple",
-      title: cardTitle || "AdhanCast",
+      title: cardTitle || "AdhanNow",
       content: cardText || speechText || "Playing audio.",
     },
     directives: [audioPlayDirective(audioUrl, token)],
@@ -401,25 +401,25 @@ function buildSkillErrorResponse(err, fallbackText) {
 
   if (statusCode === 401) {
     return linkAccountResponse(
-      "Please re-link your AdhanCast account in the Alexa app."
+      "Please re-link your AdhanNow account in the Alexa app."
     );
   }
 
   if (code === "AUTOMATION_DISABLED") {
     return textResponse(
-      "Adhan automation is currently turned off in your AdhanCast settings."
+      "Adhan automation is currently turned off in your AdhanNow settings."
     );
   }
 
   if (code === "DEVICE_NOT_ENABLED") {
     return textResponse(
-      "This Alexa device is not selected in your AdhanCast settings."
+      "This Alexa device is not selected in your AdhanNow settings."
     );
   }
 
   if (code === "PRAYER_DISABLED") {
     return textResponse(
-      "That prayer is currently disabled in your AdhanCast settings."
+      "That prayer is currently disabled in your AdhanNow settings."
     );
   }
 
@@ -443,7 +443,7 @@ async function handleLaunch(event) {
 
   if (!accessToken) {
     return linkAccountResponse(
-      "Please link your AdhanCast account in the Alexa app to use personalized prayer playback."
+      "Please link your AdhanNow account in the Alexa app to use personalized prayer playback."
     );
   }
 
@@ -488,7 +488,7 @@ async function handleLaunch(event) {
             `Playing ${playback.prayerLabel || prayerName} adhan.`,
           audioUrl: playback.audioUrl,
           token: primaryToken,
-          cardTitle: playback.cardTitle || "AdhanCast",
+          cardTitle: playback.cardTitle || "AdhanNow",
           cardText:
             playback.cardText ||
             `Playing ${playback.prayerLabel || prayerName} adhan.`,
@@ -501,7 +501,7 @@ async function handleLaunch(event) {
   }
 
   return textResponse(
-    "Welcome to AdhanCast. You can say play Fajr adhan, say play adhan for the next prayer, ask what time is Maghrib, or ask what is the next prayer.",
+    "Welcome to AdhanNow. You can say play Fajr adhan, say play adhan for the next prayer, ask what time is Maghrib, or ask what is the next prayer.",
     {
       shouldEndSession: false,
       reprompt: "Try saying, what is the next prayer, or play Fajr adhan.",
@@ -514,7 +514,7 @@ async function handlePlayAdhan(event) {
 
   if (!accessToken) {
     return linkAccountResponse(
-      "Please link your AdhanCast account in the Alexa app first."
+      "Please link your AdhanNow account in the Alexa app first."
     );
   }
 
@@ -553,7 +553,7 @@ async function handlePlayAdhan(event) {
         `Playing ${playback.prayerLabel || prayerName} adhan.`,
       audioUrl: playback.audioUrl,
       token: primaryToken,
-      cardTitle: playback.cardTitle || "AdhanCast",
+      cardTitle: playback.cardTitle || "AdhanNow",
       cardText:
         playback.cardText ||
         `Playing ${playback.prayerLabel || prayerName} adhan.`,
@@ -573,7 +573,7 @@ async function handleGetPrayerTimes(event) {
 
   if (!accessToken) {
     return linkAccountResponse(
-      "Please link your AdhanCast account in the Alexa app first."
+      "Please link your AdhanNow account in the Alexa app first."
     );
   }
 
@@ -618,7 +618,7 @@ async function handleGetPrayerTimes(event) {
     console.error("GetPrayerTimesIntent error:", err);
     return buildSkillErrorResponse(
       err,
-      "I could not reach your AdhanCast server right now. Please try again."
+      "I could not reach your AdhanNow server right now. Please try again."
     );
   }
 }
@@ -628,7 +628,7 @@ async function handleGetNextPrayer(event) {
 
   if (!accessToken) {
     return linkAccountResponse(
-      "Please link your AdhanCast account in the Alexa app first."
+      "Please link your AdhanNow account in the Alexa app first."
     );
   }
 
@@ -645,7 +645,7 @@ async function handleGetNextPrayer(event) {
     console.error("GetNextPrayerIntent error:", err);
     return buildSkillErrorResponse(
       err,
-      "I could not reach your AdhanCast server right now. Please try again."
+      "I could not reach your AdhanNow server right now. Please try again."
     );
   }
 }
@@ -715,7 +715,7 @@ exports.handler = async (event) => {
           return await handlePlayAdhan(event);
 
         case "AMAZON.NavigateHomeIntent":
-          return textResponse("Welcome back to AdhanCast. You can ask what is the next prayer, ask what time is Fajr, or say play Fajr adhan.", { shouldEndSession: false, reprompt: "Try saying, what is the next prayer, or play Fajr adhan." });
+          return textResponse("Welcome back to AdhanNow. You can ask what is the next prayer, ask what time is Fajr, or say play Fajr adhan.", { shouldEndSession: false, reprompt: "Try saying, what is the next prayer, or play Fajr adhan." });
 
         case "AMAZON.HelpIntent":
           return textResponse(

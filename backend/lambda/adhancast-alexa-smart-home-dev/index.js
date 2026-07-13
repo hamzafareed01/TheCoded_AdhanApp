@@ -159,7 +159,7 @@ exports.handler = async (event) => {
   } catch (err) {
     console.error('Smart Home Lambda error:', err);
     if (Number(err?.statusCode || 0) === 401) {
-      return buildErrorResponse(event, 'INVALID_AUTHORIZATION_CREDENTIAL', 'Please relink your AdhanCast account for the Smart Home skill.');
+      return buildErrorResponse(event, 'INVALID_AUTHORIZATION_CREDENTIAL', 'Please relink your AdhanNow account for the Smart Home skill.');
     }
     return buildErrorResponse(event, 'INTERNAL_ERROR', err?.message || 'Smart Home request failed.');
   }
