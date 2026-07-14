@@ -532,6 +532,14 @@ async function authenticateAlexaSkillAccessToken(pool, accessToken) {
     `);
 
   const row = result.recordset[0];
+  console.log("[OAuth] matched token row:", !!row);
+
+  if (row) {
+  console.log("[OAuth] userId:", row.user_id);
+  console.log("[OAuth] expires:", row.expires_at);
+  console.log("[OAuth] revoked:", row.revoked_at);
+}
+
   if (!row || row.revoked_at) return null;
   if (!row.expires_at || new Date(row.expires_at).getTime() <= Date.now()) return null;
 
