@@ -267,7 +267,6 @@ async function sendDoorbellEvent(pool, userId, endpointId) {
 async function hasAsyncGrant(pool, userId) {
   console.log("[EG] hasAsyncGrant checking user:", userId);
 
-  const row = await getStoredTokenRow(pool, userId);
 
   console.log("[EG] token row exists:", !!row);
 
