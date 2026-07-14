@@ -143,7 +143,6 @@ async function exchangeAcceptGrantCode(pool, userId, code) {
  * Throws an actionable error if the user has not authorized the Smart Home skill.
  */
 async function getValidAccessToken(pool, userId) {
-  const accessToken = await getValidAccessToken(pool, userId);
   const row = await getStoredTokenRow(pool, userId);
   if (!row || row.revoked_at || !row.access_token) {
     const err = new Error(
