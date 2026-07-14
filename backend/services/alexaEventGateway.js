@@ -143,6 +143,9 @@ async function exchangeAcceptGrantCode(pool, userId, code) {
  * Throws an actionable error if the user has not authorized the Smart Home skill.
  */
 async function getValidAccessToken(pool, userId) {
+  const accessToken = await getValidAccessToken(pool, userId);
+
+  console.log("[EG] access token available:", !!accessToken);
   const row = await getStoredTokenRow(pool, userId);
   if (!row || row.revoked_at || !row.access_token) {
     const err = new Error(
@@ -215,6 +218,9 @@ async function handleAcceptGrant(pool, directive) {
  * fires the user's Alexa Routine.
  */
 async function sendDoorbellEvent(pool, userId, endpointId) {
+
+  console.log("[EG] sendDoorbellEvent called");
+  console.log("[EG] target user:", userId);
   const { VIRTUAL_DOORBELL_ID } = require('./alexaProactiveEvents');
   const token = await getValidAccessToken(pool, userId);
   const endpoint = endpointId || VIRTUAL_DOORBELL_ID;
@@ -259,6 +265,17 @@ async function sendDoorbellEvent(pool, userId, endpointId) {
 }
 
 async function hasAsyncGrant(pool, userId) {
+  console.log("[EG] hasAsyncGrant checking user:", userId);
+
+  const row = await getStoredTokenRow(pool, userId);
+
+  console.log("[EG] token row exists:", !!row);
+
+  if (row) {
+    console.log("[EG] expires:", row.expires_at);
+    console.log("[EG] revoked:", row.revoked_at);
+    console.log("[EG] has access token:", !!row.access_token);
+  }
   const row = await getStoredTokenRow(pool, userId);
   return !!(row && !row.revoked_at && row.access_token);
 }
