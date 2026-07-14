@@ -144,8 +144,6 @@ async function exchangeAcceptGrantCode(pool, userId, code) {
  */
 async function getValidAccessToken(pool, userId) {
   const accessToken = await getValidAccessToken(pool, userId);
-
-  console.log("[EG] access token available:", !!accessToken);
   const row = await getStoredTokenRow(pool, userId);
   if (!row || row.revoked_at || !row.access_token) {
     const err = new Error(
@@ -265,9 +263,8 @@ async function sendDoorbellEvent(pool, userId, endpointId) {
 }
 
 async function hasAsyncGrant(pool, userId) {
+  const row = await getStoredTokenRow(pool, userId);  
   console.log("[EG] hasAsyncGrant checking user:", userId);
-
-
   console.log("[EG] token row exists:", !!row);
 
   if (row) {
@@ -275,7 +272,6 @@ async function hasAsyncGrant(pool, userId) {
     console.log("[EG] revoked:", row.revoked_at);
     console.log("[EG] has access token:", !!row.access_token);
   }
-  const row = await getStoredTokenRow(pool, userId);
   return !!(row && !row.revoked_at && row.access_token);
 }
 
