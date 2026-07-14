@@ -516,6 +516,10 @@ async function revokeAlexaAppLinkTokenForUser(pool, userId) {
 
 async function authenticateAlexaSkillAccessToken(pool, accessToken) {
   const token = normalizeText(accessToken);
+
+  console.log("[OAuth] incoming token length:", token.length);
+  console.log("[OAuth] incoming token prefix:", token.substring(0, 10));
+  console.log("[OAuth] incoming hash prefix:", hashToken(token).substring(0, 10));
   if (!token) return null;
 
   const result = await pool
