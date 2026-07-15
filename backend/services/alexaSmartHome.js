@@ -153,6 +153,35 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
     fireTvDeviceIds: JSON.stringify(fireTvTargets.map((x) => x.device_id || x.id || x.name)),
   };
 
+  // The virtual prayer doorbell is the ONLY endpoint a user needs for automatic
+  // Adhan playback — it's the routine trigger. Discovering the automation /
+  // quiet-mode / quiet-volume switches alongside it clutters the Alexa app and
+  // confuses users following the routine-setup walkthrough (four devices, only
+  // one of which they should touch). Default to doorbell-only for launch.
+  // Set DISCOVERY_DOORBELL_ONLY=false to re-expose the auxiliary switches.
+  const doorbellOnly =
+    String(process.env.DISCOVERY_DOORBELL_ONLY || "true").toLowerCase() !== "false";
+
+  // Virtual prayer doorbell — triggers user's Alexa Routine at prayer times
+  const doorbell = {
+    endpointId:       ENDPOINT_IDS.doorbell,
+    manufacturerName: "AdhanNow",
+    friendlyName:     "AdhanNow Prayer Doorbell",
+    description:      "Virtual doorbell that rings at each prayer time. Use as a trigger in Alexa Routines to play Adhan automatically.",
+    displayCategories: ["DOORBELL"],
+    cookie: { kind: "doorbell" },
+    capabilities: [
+      { type: "AlexaInterface", interface: "Alexa",                     version: "3" },
+      { type: "AlexaInterface", interface: "Alexa.DoorbellEventSource", version: "3",
+        proactivelyReported: true, properties: {} },
+      buildHealthCapability(),
+    ],
+  };
+
+  if (doorbellOnly) {
+    return [doorbell];
+  }
+
   const endpoints = [
     {
       endpointId: ENDPOINT_IDS.automation,
@@ -213,21 +242,7 @@ function buildDiscoveryEndpoints(profile = {}, devices = []) {
     });
   }
 
-  // Virtual prayer doorbell — triggers user's Alexa Routine at prayer times
-  endpoints.push({
-    endpointId:       ENDPOINT_IDS.doorbell,
-    manufacturerName: "AdhanNow",
-    friendlyName:     "AdhanNow Prayer Doorbell",
-    description:      "Virtual doorbell that rings at each prayer time. Use as a trigger in Alexa Routines to play Adhan automatically.",
-    displayCategories: ["DOORBELL"],
-    cookie: { kind: "doorbell" },
-    capabilities: [
-      { type: "AlexaInterface", interface: "Alexa",                     version: "3" },
-      { type: "AlexaInterface", interface: "Alexa.DoorbellEventSource", version: "3",
-        proactivelyReported: true, properties: {} },
-      buildHealthCapability(),
-    ],
-  });
+  endpoints.push(doorbell);
 
   return endpoints;
 }

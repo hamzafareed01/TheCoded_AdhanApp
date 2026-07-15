@@ -338,13 +338,18 @@ async function refreshAlexaAccessToken(pool, params) {
       throw err;
     }
 
-    await new sql.Request(tx)
-      .input('id', sql.UniqueIdentifier, row.id)
-      .query(`
-        UPDATE dbo.alexa_skill_tokens
-        SET revoked_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
-        WHERE id = @id
-      `);
+    // DO NOT revoke the previous token row here. Amazon's smart-home services
+    // are distributed and may keep sending the PREVIOUS access token (e.g. in
+    // ReportState directives) for several minutes after a refresh, and Amazon
+    // may also fire concurrent refresh requests with the same refresh token.
+    // Instantly revoking the old row caused:
+    //   1. ReportState 401 ("Alexa skill token is invalid or expired") ~3 min
+    //      after linking → endpoints marked unreachable → the prayer doorbell
+    //      greyed out as a routine trigger.
+    //   2. Refresh races breaking the account link entirely.
+    // Old access tokens still expire naturally via expires_at; unlink revokes
+    // everything via revokeAlexaSkillTokensForUser. Per Amazon's account
+    // linking guidance, refresh tokens should remain stable (no rotation).
 
     const tokenSet = await insertAlexaTokens(tx, {
       userId: row.user_id,
@@ -516,10 +521,6 @@ async function revokeAlexaAppLinkTokenForUser(pool, userId) {
 
 async function authenticateAlexaSkillAccessToken(pool, accessToken) {
   const token = normalizeText(accessToken);
-
-  console.log("[OAuth] incoming token length:", token.length);
-  console.log("[OAuth] incoming token prefix:", token.substring(0, 10));
-  console.log("[OAuth] incoming hash prefix:", hashToken(token).substring(0, 10));
   if (!token) return null;
 
   const result = await pool
@@ -532,14 +533,6 @@ async function authenticateAlexaSkillAccessToken(pool, accessToken) {
     `);
 
   const row = result.recordset[0];
-  console.log("[OAuth] matched token row:", !!row);
-
-  if (row) {
-  console.log("[OAuth] userId:", row.user_id);
-  console.log("[OAuth] expires:", row.expires_at);
-  console.log("[OAuth] revoked:", row.revoked_at);
-}
-
   if (!row || row.revoked_at) return null;
   if (!row.expires_at || new Date(row.expires_at).getTime() <= Date.now()) return null;
 

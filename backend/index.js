@@ -38,9 +38,6 @@ const {
   scheduleAllReminders,
   deleteAllReminders,
 } = require("./services/alexaReminders");
-const {
-  createPrayerRoutines,
-} = require("./services/alexaRoutineCreator");
 // fcmNotifications not needed — notifications handled locally by the app
 const {
   triggerPrayerDoorbell,
@@ -3253,6 +3250,165 @@ app.get(
     res.json({ due: true, prayerName: best.prayerName, ...plan });
   })
 );
+
+// ─── Delivery status (reliability visibility for the app) ────────────────────
+// Powers an in-app "Last Adhan delivered: Dhuhr, 1:14 PM ✓" line. Turns silent
+// backend failures into something the user can see and report instead of
+// churning over. Uses existing columns only: alexa_sent marks delivery, and
+// fire_at_utc is within a minute of the actual send (10 min worst-case via the
+// scheduler's catch-up window) — accurate enough for a status display.
+app.get(
+  "/api/alexa/skill/delivery-status",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.skillAuth.userId;
+
+    const last = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .query(`
+        SELECT TOP 1 prayer_name, fire_at_utc
+        FROM dbo.daily_prayer_schedule
+        WHERE user_id = @user_id AND alexa_sent = 1
+        ORDER BY fire_at_utc DESC
+      `);
+
+    // Today's + tomorrow's roster in the UTC window around now, so the app can
+    // render upcoming vs delivered without caring about the local-date boundary.
+    const roster = await pool
+      .request()
+      .input("user_id", sql.UniqueIdentifier, userId)
+      .input("start", sql.DateTime2, new Date(Date.now() - 18 * 3600 * 1000))
+      .input("end", sql.DateTime2, new Date(Date.now() + 30 * 3600 * 1000))
+      .query(`
+        SELECT prayer_name, fire_at_utc, alexa_sent
+        FROM dbo.daily_prayer_schedule
+        WHERE user_id = @user_id AND fire_at_utc BETWEEN @start AND @end
+        ORDER BY fire_at_utc
+      `);
+
+    const lastRow = last.recordset[0] || null;
+    res.json({
+      lastDelivered: lastRow
+        ? {
+            prayerName: String(lastRow.prayer_name).toLowerCase(),
+            fireAtUtc: lastRow.fire_at_utc,
+          }
+        : null,
+      upcoming: (roster.recordset || []).map((r) => ({
+        prayerName: String(r.prayer_name).toLowerCase(),
+        fireAtUtc: r.fire_at_utc,
+        delivered: !!r.alexa_sent,
+      })),
+    });
+  })
+);
+
+// ─── Test my setup — ring the doorbell on demand ─────────────────────────────
+// Backs a "Test my setup" button at the end of the routine-creation walkthrough.
+// If the user has built the routine correctly, this plays the Adhan immediately,
+// giving instant confirmation the whole chain works. Also a permanent diagnostic.
+app.post(
+  "/api/alexa/skill/test-doorbell",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.skillAuth.userId;
+
+    const { hasAsyncGrant } = require("./services/alexaEventGateway");
+    if (!(await hasAsyncGrant(pool, userId))) {
+      return res.status(409).json({
+        ok: false,
+        code: "NOT_LINKED",
+        message:
+          "Your Amazon account isn't linked yet, or the smart-home skill isn't enabled. " +
+          "Enable the AdhanNow skill and finish account linking, then try again.",
+      });
+    }
+
+    const result = await triggerPrayerDoorbell(pool, userId);
+    if (result.ok) {
+      return res.json({
+        ok: true,
+        message:
+          "Doorbell rung. If your routine is set up, the Adhan should play on your Echo now. " +
+          "If you hear a chime instead, turn off Doorbell Press Announcements for the AdhanNow Prayer device.",
+      });
+    }
+
+    // Map known failure codes to actionable guidance.
+    const code = result.code || "SEND_FAILED";
+    const status = code === "NO_ASYNC_GRANT" || code === "ASYNC_GRANT_EXPIRED" ? 409 : 502;
+    res.status(status).json({
+      ok: false,
+      code,
+      message:
+        code === "ASYNC_GRANT_EXPIRED"
+          ? "Your Amazon authorization expired. Please re-link the skill in the Alexa app."
+          : "Couldn't reach Alexa right now. Please try again in a moment.",
+      detail: result.error,
+    });
+  })
+);
+
+// ─── Account deletion (Google Play + Amazon requirement) ─────────────────────
+// Google Play requires apps that create accounts to offer an in-app deletion
+// path that purges user data. Purges every user-keyed row and revokes tokens,
+// then deletes the account. Idempotent and transactional — a partial failure
+// rolls back so the user can retry cleanly.
+app.post(
+  "/api/account/delete",
+  requireAlexaSkillAuth,
+  asyncHandler(async (req, res) => {
+    const pool   = await getPool();
+    const userId = req.skillAuth.userId;
+
+    // Ordered so child/token rows go before the parent users/user_profiles rows.
+    // All 16 tables key on user_id. Kept explicit (not a loop) so the set is
+    // auditable and adding a new table is a deliberate edit, not a silent miss.
+    const tables = [
+      "dbo.alexa_dispatch_log",
+      "dbo.alexa_smart_home_log",
+      "dbo.alexa_skill_authorization_codes",
+      "dbo.alexa_skill_tokens",
+      "dbo.alexa_event_gateway_tokens",
+      "dbo.alexa_app_link_tokens",
+      "dbo.alexa_customer_endpoints",
+      "dbo.alexa_playback_target_selections",
+      "dbo.alexa_prayer_target_selections",
+      "dbo.alexa_reminders",
+      "dbo.daily_prayer_schedule",
+      "dbo.mosque_iqamah_times",
+      "dbo.devices",
+      "dbo.schedules",
+      "dbo.prayer_configs",
+      "dbo.user_profiles",
+      "dbo.users",
+    ];
+
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    try {
+      const deleted = {};
+      for (const table of tables) {
+        const r = await new sql.Request(tx)
+          .input("user_id", sql.UniqueIdentifier, userId)
+          .query(`DELETE FROM ${table} WHERE user_id = @user_id`);
+        deleted[table] = (r.rowsAffected && r.rowsAffected[0]) || 0;
+      }
+      await tx.commit();
+      console.log(`[account/delete] purged user ${userId}:`, JSON.stringify(deleted));
+      res.json({ ok: true, deleted });
+    } catch (err) {
+      await tx.rollback().catch(() => {});
+      console.error(`[account/delete] failed for user ${userId}:`, err.message);
+      const e = new Error("Account deletion failed; no data was removed. Please try again.");
+      e.status = 500;
+      throw e;
+    }
+  })
+);
  
 // Infer a human-readable device type from the Alexa deviceId prefix.
 // All Alexa-enabled devices (Echo, Fire TV, Fire TV Stick, Fire Tablet,
@@ -4290,6 +4446,16 @@ app.post(
     if (!/^\d{2}:\d{2}$/.test(timeOfDay)) {
       return res.status(400).json({ error: "timeOfDay must be HH:MM" });
     }
+
+    // Bind via toSqlTime(): mssql's sql.Time needs a JS Date, not an "HH:MM"
+    // string (a bare string fails with "Invalid time" — the observed 500).
+    // toSqlTime also range-validates HH/MM. Same helper quiet-hours uses.
+    let timeOfDayValue;
+    try {
+      timeOfDayValue = toSqlTime(timeOfDay);
+    } catch {
+      return res.status(400).json({ error: "timeOfDay must be a valid HH:MM" });
+    }
  
     if (scheduleType !== "tilawat") {
       return res
@@ -4317,7 +4483,7 @@ app.post(
       .request()
       .input("user_id", sql.UniqueIdentifier, userId)
       .input("schedule_type", sql.NVarChar(20), scheduleType)
-      .input("time_of_day", sql.Time, timeOfDay)
+      .input("time_of_day", sql.Time, timeOfDayValue)
       .input("days_mask", sql.Int, daysMask)
       .input("enabled", sql.Bit, enabled)
       .input("device_id", sql.NVarChar(255), deviceId)
@@ -4811,39 +4977,46 @@ app.post(
       for (const user of users.recordset || []) {
         try {
           const { profile, prayers } = await getUserProfileAndPrayersByUserId(pool, user.user_id);
-          const prayerData = await computePrayerTimesForProfile(profile, prayers, new Date());
-          const times24 = prayerData.prayers24 || {};
           const tz = profile.timezone || "Etc/UTC";
 
-          // Use the USER'S local date — prayer times are computed for their day,
-          // which near midnight boundaries differs from the server's UTC date.
-          const { y, mo, d } = localDateParts(tz);
-          const localDateStr = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          // Populate the user's current local day AND the next one. Population
+          // keyed to a single UTC midnight misses upcoming prayers for users
+          // whose local date differs from the server's (e.g. UTC-10: next
+          // morning's Fajr fell in a gap). Writing two local days + running
+          // hourly (idempotent MERGE) covers every timezone.
+          for (const dayOffset of [0, 1]) {
+            const refDate = new Date(Date.now() + dayOffset * 86400000);
+            const prayerData = await computePrayerTimesForProfile(profile, prayers, refDate);
+            const times24 = prayerData.prayers24 || {};
 
-          for (const prayer of PRAYERS) {
-            const timeHHMM = times24[prayer];
-            if (!timeHHMM) continue;
+            const { y, mo, d } = localDateParts(tz, refDate);
+            const localDateStr = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 
-            const [hh, mm] = timeHHMM.split(":").map(Number);
-            // Convert the user's local wall-clock prayer time to the true UTC instant.
-            // (Previous code stored local HH:MM as if it were UTC — hours off.)
-            const fireAtUtc = tzWallClockToUtc(tz, y, mo, d, hh, mm);
+            for (const prayer of PRAYERS) {
+              const timeHHMM = times24[prayer];
+              if (!timeHHMM) continue;
 
-            await pool.request()
-              .input("user_id",     sql.UniqueIdentifier, user.user_id)
-              .input("date",        sql.Date,             localDateStr)
-              .input("prayer",      sql.NVarChar(10),     prayer)
-              .input("fire_at_utc", sql.DateTime2,        fireAtUtc)
-              .query(`
-                MERGE dbo.daily_prayer_schedule AS t
-                USING (SELECT @user_id u, @date d, @prayer p) AS s
-                ON t.user_id = s.u AND t.schedule_date = s.d AND t.prayer_name = s.p
-                WHEN MATCHED AND t.notif_sent = 0 THEN
-                  UPDATE SET fire_at_utc = @fire_at_utc
-                WHEN NOT MATCHED THEN
-                  INSERT (user_id, schedule_date, prayer_name, fire_at_utc)
-                  VALUES (@user_id, @date, @prayer, @fire_at_utc);
-              `);
+              const [hh, mm] = timeHHMM.split(":").map(Number);
+              // Convert the user's local wall-clock prayer time to the true UTC instant.
+              // (Previous code stored local HH:MM as if it were UTC — hours off.)
+              const fireAtUtc = tzWallClockToUtc(tz, y, mo, d, hh, mm);
+
+              await pool.request()
+                .input("user_id",     sql.UniqueIdentifier, user.user_id)
+                .input("date",        sql.Date,             localDateStr)
+                .input("prayer",      sql.NVarChar(10),     prayer)
+                .input("fire_at_utc", sql.DateTime2,        fireAtUtc)
+                .query(`
+                  MERGE dbo.daily_prayer_schedule AS t
+                  USING (SELECT @user_id u, @date d, @prayer p) AS s
+                  ON t.user_id = s.u AND t.schedule_date = s.d AND t.prayer_name = s.p
+                  WHEN MATCHED AND t.notif_sent = 0 THEN
+                    UPDATE SET fire_at_utc = @fire_at_utc
+                  WHEN NOT MATCHED THEN
+                    INSERT (user_id, schedule_date, prayer_name, fire_at_utc)
+                    VALUES (@user_id, @date, @prayer, @fire_at_utc);
+                `);
+            }
           }
         } catch { /* skip user on error */ }
       }
@@ -4913,8 +5086,9 @@ app.post(
   // Run every minute
   cron.schedule("* * * * *", fireNotifications);
 
-  // Populate schedule at startup and every day at midnight
-  cron.schedule("0 0 * * *", populateDailySchedule);
+  // Populate schedule hourly (idempotent MERGE) — a single midnight-UTC run
+  // leaves timezone gaps for users west of UTC. Also run 5s after startup.
+  cron.schedule("0 * * * *", populateDailySchedule);
   setTimeout(populateDailySchedule, 5000); // 5s after startup
 
   console.log("[scheduler] Prayer notification scheduler started");
